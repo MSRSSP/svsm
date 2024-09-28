@@ -2,7 +2,7 @@
 name = "svsm"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.80.0"
+rust-version = "1.76.0"
 
 [[bin]]
 name = "stage2"
@@ -43,6 +43,7 @@ test.workspace = true
 default = []
 enable-gdb = ["dep:gdbstub", "dep:gdbstub_arch"]
 mstpm = ["dep:libmstpm"]
+noverify = []
 
 [dev-dependencies]
 

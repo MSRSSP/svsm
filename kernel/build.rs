@@ -6,8 +6,8 @@
 
 fn main() {
     // Extra cfgs
-    println!("cargo::rustc-check-cfg=cfg(fuzzing)");
-    println!("cargo::rustc-check-cfg=cfg(test_in_svsm)");
+    //println!("cargo::rustc-check-cfg=cfg(fuzzing)");
+    //println!("cargo::rustc-check-cfg=cfg(test_in_svsm)");
 
     // Stage 2
     println!("cargo:rustc-link-arg-bin=stage2=-nostdlib");
@@ -39,4 +39,42 @@ fn main() {
 
     println!("cargo:rerun-if-changed=kernel/src/stage2.lds");
     println!("cargo:rerun-if-changed=kernel/src/svsm.lds");
+    println!("cargo:rerun-if-changed=build.rs");
+
+    if cfg!(feature = "noverify") {
+        println!("cargo:rustc-env=VERUS_ARGS=--no-verify");
+    } else {
+        println!("cargo:rustc-env=VERUS_ARGS=--rlimit=8000 --expand-errors --multiple-errors=5 --triggers-silent --time-expanded --no-auto-recommends-check --output-json --trace");
+    }
+
+    init_verify();
+}
+
+fn init_verify() {
+    if cfg!(feature = "noverify") {
+        println!("cargo:rustc-env=VERUS_ARGS=--no-verify");
+    } else {
+        let verus_args = [
+            "--rlimit=8000",
+            "--expand-errors",
+            "--multiple-errors=5",
+            "--triggers-silent",
+            "--time-expanded",
+            "--no-auto-recommends-check",
+            "--output-json",
+            "--trace",
+            "-Z unstable-options",
+        ];
+        println!("cargo:rustc-env=VERUS_ARGS={}", verus_args.join(" "));
+    }
+
+    let target = std::env::var("CARGO_PKG_NAME").unwrap_or_default();
+    println!("cargo:rustc-env=VERUS_TARGETS={}", target);
+    for (key, value) in std::env::vars() {
+        // You can filter or modify which ones to pass to rustc
+        println!("cargo:rustc-env={}={}", key, value);
+    }
+
+    let module_path = std::env::var("CARGO_MANIFEST_DIR").unwrap();
+    println!("cargo:rustc-env=MODULE_PATH={}", module_path);
 }
