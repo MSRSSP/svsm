@@ -1,85 +1,86 @@
 use vstd::prelude::*;
 
 verus! {
-    pub const MAX_U64: u64 = 0xffff_ffff_ffff_ffff;
-    pub const MAX_USIZE: usize = 0xffff_ffff_ffff_ffff;
-}
 
+pub const MAX_U64: u64 = 0xffff_ffff_ffff_ffff;
+
+pub const MAX_USIZE: usize = 0xffff_ffff_ffff_ffff;
+
+} // verus!
 macro_rules! bit_shl_properties {
-    ($typ:ty, $size:expr) => {
-        paste::paste! {verus!{
-            proof fn [<proof_$typ _bit_shl_monotonic_inc>](offset1: $typ, offset2: $typ)
-            requires
-                0 <= offset1 < $size,
-                0 <= offset2 < $size,
-                offset1 < offset2,
-            ensures
-                ((1 as $typ) << offset1) < ((1 as $typ) << offset2)
-            {
-                assert(((1 as $typ) << offset1) < ((1 as $typ) << offset2)) by (bit_vector)
-                requires  0 <= offset1 < $size,
-                0 <= offset2 < $size,
-                offset1 < offset2,
-            }
-
-            pub proof fn [<proof_ $typ _shl_bound>](offset: $typ) -> (ret: $typ)
-            requires 0 <= offset < $size
-            ensures
-                ret == (1 as $typ) << offset,
-                1 <= ret < 0x1000_0000_0000_0000_0000,
-            {
-                assert(((1 as $typ) << offset) >= 1) by(bit_vector)
-                requires  0 <= offset < $size;
-                (1 as $typ) << offset
-            }
-        }}
+    ($typ:ty, $size:expr, $max: expr, $pname: ident) => {
+        verus! {
+        pub proof fn $pname(offset: $typ) -> (ret: $typ)
+        requires 0 <= offset < $size
+        ensures
+            ret == (1 as $typ) << offset,
+            1 <= ret <= $max,
+        {
+            assert(((1 as $typ) << offset) >= 1) by(bit_vector)
+            requires  0 <= offset < $size;
+            assert(((1 as $typ) << offset) <= $max) by(bit_vector)
+            requires  0 <= offset < $size;
+            (1 as $typ) << offset
+        }
+        }
     };
 }
 
-bit_shl_properties! {usize, 64}
-
-verus! {
-    #[verifier(bit_vector)]
-    pub proof fn proof_usize_bitor_bound(a: usize, b: usize)
-    ensures
-        (a | b) == (b | a),
-        0 <= (a | b) <= MAX_USIZE,
-        (a | b) & b == b,
-        (a | b) > a,
-        (a | b) > b,
-        (a | b) & !b == a & !b,
-        (a | b) <= a + b
-    {}
-
-    pub proof fn proof_usize_bitor_bound_auto()
-    ensures
-        forall |a: usize, b: usize|
-            #[trigger] (a | b) == (b | a) &&
-            0 <= (a | b) <= MAX_USIZE &&
-            (a | b) & b == b &&
-            (a | b) >= a &&
-            (a | b) >= b &&
-            (a | b) & !b == a & !b &&
-            (a | b) <= a + b
-    {
-        assert forall |a: usize, b: usize|
-        (#[trigger] (a | b) == (b | a) &&
-        0 <= (a | b) <= MAX_USIZE &&
-        (a | b) & b == b &&
-        (a | b) >= a &&
-        (a | b) >= b &&
-        (a | b) & !b == a & !b &&
-        (a | b) <= a + b) by {
-            proof_usize_bitor_bound(a, b);
+macro_rules! bit_or_properties {
+    ($typ:ty, $max:expr, $sname: ident, $pname: ident, $autopname: ident) => {
+        verus! {
+        #[verifier(inline)]
+        pub open spec fn $sname(a: $typ, b: $typ, ret: $typ) -> bool {
+            &&& ret == (a | b)
+            &&& ret == (b | a)
+            &&& 0 <= ret <= $max
+            &&& ret & b == b
+            &&& ret >= a
+            &&& ret >= b
+            &&& ret & !b == a & !b
+            &&& ret <= a + b
         }
-    }
 
-    #[verifier(bit_vector)]
-    pub proof fn proof_usize_bitnot_auto()
-        ensures
-            forall |a: usize| #[trigger] !(!a) == a,
-            forall |a: usize| #[trigger] (!a) & a == 0,
-            !0u64 == 0xffffffffffffffffu64,
-            forall |a: usize| #[trigger] (!a) == sub(MAX_USIZE, a),
-    {}
+        #[verifier(bit_vector)]
+        pub proof fn $pname(a: $typ, b: $typ)
+            ensures
+                $sname(a, b, (a|b))
+        {}
+
+        pub proof fn $autopname()
+            ensures
+                forall|a: $typ, b: $typ| $sname(a, b, #[trigger](a|b)),
+        {
+            assert forall|a: $typ, b: $typ| $sname(a, b, #[trigger](a|b)) by {
+                $pname(a, b);
+            }
+        }
+        }
+    };
 }
+
+macro_rules! bit_not_properties {
+    ($typ:ty, $max:expr, $sname: ident, $autopname: ident) => {
+        verus! {
+        #[verifier(inline)]
+        pub open spec fn $sname(a: $typ, ret: $typ) -> bool {
+            &&& ret == (!a)
+            &&& ret & a == 0
+            &&& ret == sub($max, a)
+            &&& 0 <= ret <= $max
+            &&& !ret == a
+        }
+
+        #[verifier(bit_vector)]
+        pub proof fn $autopname()
+            ensures
+                forall|a: $typ| $sname(a, #[trigger](!a)),
+                !(0 as $typ) == $max,
+        {}
+        }
+    };
+}
+
+bit_shl_properties! {usize, 64, 1usize << 63usize, proof_usize_bitshl_bound}
+bit_or_properties! {usize, 0xffff_ffff_ffff_ffff, spec_usize_bitor_properties, proof_usize_bitor_properties, proof_usize_bitor_auto}
+bit_not_properties! {usize, 0xffff_ffff_ffff_ffff, spec_usize_bitnot_properties, proof_usize_bitnot_auto}

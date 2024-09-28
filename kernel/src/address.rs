@@ -43,8 +43,8 @@ const fn sign_extend(addr: InnerAddr) -> InnerAddr {
     #[cfg(all(feature = "verus_verify", verus_keep_ghost_body))]
     #[verifier::proof_block]
     {
-        vmath::bits::proof_usize_shl_bound(SIGN_BIT);
-        vmath::bits::proof_usize_bitor_bound_auto();
+        vmath::bits::proof_usize_bitshl_bound(SIGN_BIT);
+        vmath::bits::proof_usize_bitor_auto();
         vmath::bits::proof_usize_bitnot_auto();
     }
 
