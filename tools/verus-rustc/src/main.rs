@@ -30,7 +30,11 @@ fn update_imports_exports(
             let val = iter.next().unwrap().to_string();
             if let Some(name) = val.split("=").next() {
                 if verus_targets.contains(&name) {
-                    more_args.extend(["--import".to_string(), val.replace("rmeta", "vir")]);
+                    debug!("import {}", name);
+                    more_args.extend([
+                        "--import".to_string(),
+                        val.replace(".rmeta", ".vir").replace(".rlib", ".vir"),
+                    ]);
                 }
             }
         } else if item == "-C" {

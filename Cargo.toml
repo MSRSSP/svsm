@@ -14,7 +14,8 @@ members = [
     "libmstpm",
     # syscall interface definitions
     "syscall",
-    "tools/verus-rustc"
+    "vmath",
+    "vstub"
 ]
 
 
@@ -46,7 +47,12 @@ p384 = { version = "0.13.0" }
 uuid = "1.6.1"
 # Add the derive feature by default because all crates use it.
 zerocopy = { version = "0.7.32", features = ["derive"] }
-
+builtin = { path = "../verus/source/builtin" }
+builtin_macros = { path = "../verus/source/builtin_macros" }
+state_machines_macros = { path = "../verus/source/state_machines_macros" }
+vstd = { path = "../verus/source/vstd", features = ["alloc"], default-features = false }
+vmath = { path = "vmath" }
+vstub = { path = "vstub" }
 # other repos
 packit = { git = "https://github.com/coconut-svsm/packit", version = "0.1.1" }
 

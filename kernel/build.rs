@@ -41,16 +41,10 @@ fn main() {
     println!("cargo:rerun-if-changed=kernel/src/svsm.lds");
     println!("cargo:rerun-if-changed=build.rs");
 
-    if cfg!(feature = "noverify") {
-        println!("cargo:rustc-env=VERUS_ARGS=--no-verify");
-    } else {
-        println!("cargo:rustc-env=VERUS_ARGS=--rlimit=8000 --expand-errors --multiple-errors=5 --triggers-silent --time-expanded --no-auto-recommends-check --output-json --trace");
-    }
-
-    init_verify();
+    init_verify(&["vmath", "vstd"]);
 }
 
-fn init_verify() {
+fn init_verify(verus_libs: &[&str]) {
     if cfg!(feature = "noverify") {
         println!("cargo:rustc-env=VERUS_ARGS=--no-verify");
     } else {
@@ -59,9 +53,9 @@ fn init_verify() {
             "--expand-errors",
             "--multiple-errors=5",
             "--triggers-silent",
-            "--time-expanded",
             "--no-auto-recommends-check",
-            "--output-json",
+            //"--time-expanded",
+            //"--output-json",
             "--trace",
             "-Z unstable-options",
         ];
@@ -69,7 +63,9 @@ fn init_verify() {
     }
 
     let target = std::env::var("CARGO_PKG_NAME").unwrap_or_default();
-    println!("cargo:rustc-env=VERUS_TARGETS={}", target);
+    let mut targets: Vec<&str> = vec![&target];
+    targets.extend(verus_libs);
+    println!("cargo:rustc-env=VERUS_TARGETS={}", targets.join(","));
     for (key, value) in std::env::vars() {
         // You can filter or modify which ones to pass to rustc
         println!("cargo:rustc-env={}={}", key, value);
