@@ -17,7 +17,7 @@ use vstub::*;
 // The backing type to represent an address;
 type InnerAddr = usize;
 
-verus!{
+verus! {
 const SIGN_BIT: usize = 47;
 
 spec fn sign_extend_ensures(addr: InnerAddr, ret: InnerAddr, sign_bit: usize) -> bool
@@ -41,7 +41,8 @@ const fn sign_extend(addr: InnerAddr) -> InnerAddr {
     #[cfg(all(feature = "verus_verify", verus_keep_ghost_body))]
     builtin::ensures(|ret: InnerAddr| [sign_extend_ensures(addr, ret, SIGN_BIT)]);
     #[cfg(all(feature = "verus_verify", verus_keep_ghost_body))]
-    #[verifier::proof_block]{
+    #[verifier::proof_block]
+    {
         vmath::bits::proof_usize_shl_bound(SIGN_BIT);
         vmath::bits::proof_usize_bitor_bound_auto();
         vmath::bits::proof_usize_bitnot_auto();
