@@ -5,16 +5,15 @@
 // Author: Joerg Roedel <jroedel@suse.de>
 
 fn main() {
-    if cfg!(feature = "noverify") {
-        println!("cargo:rustc-env=VERUS_ARGS=--no-verify");
-    } else {
-        println!("cargo:rustc-env=VERUS_ARGS=--rlimit=8000 --expand-errors --multiple-errors=5 --triggers-silent --time-expanded --no-auto-recommends-check --output-json --trace");
-    }
-
+    assert!(cfg!(feature = "verus"));
     init_verify(&["vstd"]);
 }
 
 fn init_verify(verus_libs: &[&str]) {
+    println!("cargo:rerun-if-changed=build.rs");
+    println!("rerun-if-env-changed=VERUS");
+    println!("rerun-if-env-changed=VERUS_TARGETS");
+    println!("rerun-if-env-changed=HOME");
     if cfg!(feature = "noverify") {
         println!("cargo:rustc-env=VERUS_ARGS=--no-verify");
     } else {
@@ -24,8 +23,6 @@ fn init_verify(verus_libs: &[&str]) {
             "--multiple-errors=5",
             "--triggers-silent",
             "--no-auto-recommends-check",
-            //"--time-expanded",
-            //"--output-json",
             "--trace",
             "-Z unstable-options",
         ];

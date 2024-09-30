@@ -7,6 +7,7 @@ edition = "2021"
 
 [dependencies]
 builtin = { workspace = true }
+builtin_macros = { workspace = true }
 vstd = { workspace = true }
 paste = "1.0"
 
@@ -14,6 +15,7 @@ paste = "1.0"
 workspace = true
 
 [features]
-default = []
+default = ["verus"]
 noverify = []
+verus = []
 

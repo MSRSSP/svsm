@@ -3,44 +3,26 @@
 // Copyright (c) 2022-2023 SUSE LLC
 //
 // Author: Carlos López <carlos.lopez@suse.com>
-
 use crate::types::{PAGE_SHIFT, PAGE_SIZE};
 use core::fmt;
 use core::ops;
 use core::slice;
 
-#[cfg(feature = "verus_verify")]
-use vstd::prelude::*;
-#[cfg(not(feature = "verus_verify"))]
-use vstub::*;
+#[cfg(feature = "verus")]
+include!("address.verus.rs");
 
 // The backing type to represent an address;
 type InnerAddr = usize;
 
-verus! {
+#[cfg_attr(feature = "verus", verus::internal(verus_macro))]
 const SIGN_BIT: usize = 47;
 
-spec fn sign_extend_ensures(addr: InnerAddr, ret: InnerAddr, sign_bit: usize) -> bool
-{
-    let mask: InnerAddr = (1 as InnerAddr) << sign_bit;
-    let lower_mask: InnerAddr = (mask - 1 as InnerAddr) as InnerAddr;
-    let upper_mask: InnerAddr = !lower_mask;
-    let eq_lower = (ret & lower_mask == addr & lower_mask);
-    let externded_upper = (ret & upper_mask == upper_mask);
-    if addr & mask == mask {
-        externded_upper && eq_lower
-    } else {
-        ret == (addr & lower_mask)
-    }
-}
-}
-
 #[inline]
-#[verus::internal(verus_macro)]
+#[cfg_attr(feature = "verus", verus::internal(verus_macro))]
 const fn sign_extend(addr: InnerAddr) -> InnerAddr {
-    #[cfg(all(feature = "verus_verify", verus_keep_ghost_body))]
+    #[cfg(verus_keep_ghost_body)]
     builtin::ensures(|ret: InnerAddr| [sign_extend_ensures(addr, ret, SIGN_BIT)]);
-    #[cfg(all(feature = "verus_verify", verus_keep_ghost_body))]
+    #[cfg(verus_keep_ghost_body)]
     #[verifier::proof_block]
     {
         vmath::bits::proof_usize_bitshl_bound(SIGN_BIT);

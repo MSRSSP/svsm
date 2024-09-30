@@ -40,8 +40,9 @@ fn main() {
     println!("cargo:rerun-if-changed=kernel/src/stage2.lds");
     println!("cargo:rerun-if-changed=kernel/src/svsm.lds");
     println!("cargo:rerun-if-changed=build.rs");
-
-    init_verify(&["vmath", "vstd"]);
+    if cfg!(feature = "verus") {
+        init_verify(&["vmath", "vstd"]);
+    }
 }
 
 fn init_verify(verus_libs: &[&str]) {
@@ -54,8 +55,6 @@ fn init_verify(verus_libs: &[&str]) {
             "--multiple-errors=5",
             "--triggers-silent",
             "--no-auto-recommends-check",
-            //"--time-expanded",
-            //"--output-json",
             "--trace",
             "-Z unstable-options",
         ];

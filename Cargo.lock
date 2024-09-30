@@ -899,6 +899,7 @@ dependencies = [
  "bitflags 2.6.0",
  "bootlib",
  "builtin",
+ "builtin_macros",
  "cpuarch",
  "elf",
  "gdbstub",
@@ -1078,6 +1079,7 @@ name = "vmath"
 version = "0.1.0"
 dependencies = [
  "builtin",
+ "builtin_macros",
  "paste",
  "vstd",
 ]

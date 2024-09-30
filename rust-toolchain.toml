@@ -1,3 +1,2 @@
 [toolchain]
 channel = "nightly-2023-12-22" # to use verus in v1.78 + nightly features in v1.80
-targets = [ "x86_64-unknown-none" ]

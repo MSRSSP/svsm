@@ -7,6 +7,7 @@ pub const MAX_U64: u64 = 0xffff_ffff_ffff_ffff;
 pub const MAX_USIZE: usize = 0xffff_ffff_ffff_ffff;
 
 } // verus!
+
 macro_rules! bit_shl_properties {
     ($typ:ty, $size:expr, $max: expr, $pname: ident) => {
         verus! {

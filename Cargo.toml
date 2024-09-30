@@ -17,6 +17,7 @@ members = [
     "vmath",
     "vstub"
 ]
+exclude = ["tools/verus-rustc"]
 
 
 [workspace.dependencies]
@@ -47,14 +48,21 @@ p384 = { version = "0.13.0" }
 uuid = "1.6.1"
 # Add the derive feature by default because all crates use it.
 zerocopy = { version = "0.7.32", features = ["derive"] }
-builtin = { path = "../verus/source/builtin" }
-builtin_macros = { path = "../verus/source/builtin_macros" }
-state_machines_macros = { path = "../verus/source/state_machines_macros" }
-vstd = { path = "../verus/source/vstd", features = ["alloc"], default-features = false }
+builtin = { git = "https://github.com/verus-lang/verus" }
+builtin_macros = { git = "https://github.com/verus-lang/verus" }
+state_machines_macros = { git = "https://github.com/verus-lang/verus" }
+vstd = { git = "https://github.com/verus-lang/verus", features = ["alloc"], default-features = false }
 vmath = { path = "vmath" }
 vstub = { path = "vstub" }
 # other repos
 packit = { git = "https://github.com/coconut-svsm/packit", version = "0.1.1" }
+
+# Somehow they must use local path to build. If not, the verus_item may be named differently
+[patch."https://github.com/verus-lang/verus"]
+builtin = { path="../verus/source/builtin" }
+builtin_macros = { path="../verus/source/builtin_macros" }
+state_machines_macros = { path="../verus/source/state_machines_macros"}
+vstd = { path="../verus/source/vstd", features = ["alloc"], default-features = false }
 
 [workspace.lints.rust]
 future_incompatible = { level = "deny", priority = 127 }
@@ -87,3 +95,7 @@ suboptimal_flops = "warn"
 # TODO: fires many times, fix then enable.
 # undocumented_unsafe_blocks = "warn"
 unnecessary_box_returns = "warn"
+
+[workspace.metadata.scripts]
+vfmt = "verusfmt `find ./ -name *.verus.rs`"
+vdep = "if [ ! -d \"${VERUS_PATH}\" ]; then git clone https://github.com/verus-lang/verus ../verus; fi && cd ../verus && git fetch origin pull/1290/head:svsm git checkout svsm"

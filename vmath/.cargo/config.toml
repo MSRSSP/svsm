@@ -1,5 +1,2 @@
 [build]
-rustc = "../tools/target/x86_64-unknown-linux-gnu/release/verus-rustc"
-
-[env]
-VERUS_TARGET_PATH={ value = "../../verus/source/target-verus/release/", relative=true }
+rustc = "verus-rustc"
