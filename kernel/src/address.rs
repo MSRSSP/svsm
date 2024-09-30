@@ -3,9 +3,11 @@
 // Copyright (c) 2022-2023 SUSE LLC
 //
 // Author: Carlos López <carlos.lopez@suse.com>
+
 use crate::types::{PAGE_SHIFT, PAGE_SIZE};
 use core::fmt;
 use core::ops;
+
 use core::slice;
 
 #[cfg(feature = "verus")]
