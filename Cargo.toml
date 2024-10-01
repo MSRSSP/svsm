@@ -104,4 +104,4 @@ unnecessary_box_returns = "warn"
 [workspace.metadata.scripts]
 print_arguments = "echo $1 $2"
 vfmt = "verusfmt `find ./ -name *.verus.rs`" 
-vdep = "if [ ! -d \"${VERUS_PATH}\" ]; then git clone https://github.com/verus-lang/verus ../verus; fi && cd ../verus && git fetch origin pull/1290/head:svsm git checkout svsm"
+vdep = "if [ ! -d \"${VERUS_PATH}\" ]; then git clone https://github.com/verus-lang/verus ../verus; fi && cd ../verus && git fetch origin pull/1290/head:svsm && git checkout svsm"

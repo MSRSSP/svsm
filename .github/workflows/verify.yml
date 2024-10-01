@@ -11,7 +11,7 @@ env:
 
 jobs:
   check:
-    name: Check
+    name: Verification Check
     runs-on: self-hosted
     steps:
       - name: Checkout
