@@ -16,4 +16,4 @@ rustflags = [
 vfmt = "run-script vfmt" # Format verus codes
 v = "build --features verus"
 vdep = "run-script vdep"
-vinstall = "install --git https://github.com/microsoft/verismo --branch nosubmodules verus-rustc"
+vinstall = "install --git https://github.com/microsoft/verismo --branch remove-submodules verus-rustc"

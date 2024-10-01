@@ -1,0 +1,43 @@
+name: Rust
+
+on:
+  push:
+    branches: [ "verify" ]
+  pull_request:
+    branches: [ "verify" ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    name: Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+        with:
+          submodules: recursive
+
+      - name: Install specified rust toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+            target: x86_64-unknown-none
+            profile: minimal
+            override: true
+            components: rustfmt, rust-src, clippy
+
+      - name: Install verus-rustc
+        run: cargo vdep && cargo vinstall
+
+      - name: Build with verus
+        run: cargo v
+        working-directory: kernel
+
+      - name: Build without verifying
+        run: cargo b
+        working-directory: kernel
+
+      - name: Format rust code
+        run: verusfmt --check `find ./ -name *.verus.rs`
+
