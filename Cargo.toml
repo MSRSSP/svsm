@@ -53,14 +53,14 @@ zerocopy = { version = "0.7.32", features = ["derive"] }
 packit = { git = "https://github.com/coconut-svsm/packit", version = "0.1.1" }
 
 # Verus repos
-builtin = { git = "https://github.com/verus-lang/verus" }
-builtin_macros = { git = "https://github.com/verus-lang/verus" }
-state_machines_macros = { git = "https://github.com/verus-lang/verus" }
+builtin = { git = "https://github.com/verus-lang/verus", default-features = false }
+builtin_macros = { git = "https://github.com/verus-lang/verus", default-features = false }
+state_machines_macros = { git = "https://github.com/verus-lang/verus", default-features = false }
 vstd = { git = "https://github.com/verus-lang/verus", features = ["alloc"], default-features = false }
 
 # Verification libs
-vmath = { path = "vmath" }
-vstub = { path = "vstub" }
+vmath = { path = "vmath", default-features = false  }
+vstub = { path = "vstub", default-features = false  }
 
 # Somehow they must use local path to build. If not, the verus_item may be named differently
 [patch."https://github.com/verus-lang/verus"]
