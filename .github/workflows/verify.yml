@@ -17,6 +17,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v3
 
+      - name: Copy rusttoolchain
+        run: cp rust-toolchain.toml rust-toolchain
+
       - name: Install specified rust toolchain
         uses: actions-rs/toolchain@v1
 
