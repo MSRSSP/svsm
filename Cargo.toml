@@ -64,10 +64,10 @@ vstub = { path = "vstub", default-features = false  }
 
 # Somehow they must use local path to build. If not, the verus_item may be named differently
 [patch."https://github.com/verus-lang/verus"]
-builtin = { path="../verus/source/builtin", default-features = false }
-builtin_macros = { path="../verus/source/builtin_macros", default-features = false }
-state_machines_macros = { path="../verus/source/state_machines_macros", default-features = false }
-vstd = { path="../verus/source/vstd", features = ["alloc"],  default-features = false }
+builtin = { path="../verus/source/builtin" }
+builtin_macros = { path="../verus/source/builtin_macros" }
+state_machines_macros = { path="../verus/source/state_machines_macros" }
+vstd = { path="../verus/source/vstd", features = ["alloc"] }
 
 [workspace.lints.rust]
 future_incompatible = { level = "deny", priority = 127 }
@@ -102,6 +102,5 @@ suboptimal_flops = "warn"
 unnecessary_box_returns = "warn"
 
 [workspace.metadata.scripts]
-print_arguments = "echo $1 $2"
 vfmt = "verusfmt `find ./ -name *.verus.rs`" 
 vdep = "if [ ! -d \"${VERUS_PATH}\" ]; then git clone https://github.com/verus-lang/verus ../verus; fi && cd ../verus && git fetch origin pull/1290/head:svsm && git checkout svsm"

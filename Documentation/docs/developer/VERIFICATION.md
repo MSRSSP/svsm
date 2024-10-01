@@ -23,6 +23,7 @@ cargo vfmt
 
 ```
 cd svsm
+cargo install cargo-run-script 
 VERUS_PATH=`realpath ../verus` cargo vdep
 VERUS_PATH=`realpath ../verus` cargo vinstall
 ```

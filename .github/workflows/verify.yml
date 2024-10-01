@@ -17,8 +17,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v3
 
+      - name: Set VERUS_PATH
+        run: echo "VERUS_PATH=$(realpath ../verus)" >> $GITHUB_ENV
+
       - name: Install verus-rustc
-        run: cargo vdep && cargo vinstall
+        run: cargo install cargo-run-script && cargo vdep && cargo vinstall
 
       - name: Build with verus
         run: cargo v
