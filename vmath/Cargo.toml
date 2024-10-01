@@ -6,16 +6,15 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-builtin = { workspace = true }
-builtin_macros = { workspace = true }
-vstd = { workspace = true }
+builtin = { workspace = true, optional = true }
+builtin_macros = { workspace = true, optional = true }
+vstd = { workspace = true, optional = true }
 paste = "1.0"
 
 [lints]
 workspace = true
 
 [features]
-default = ["verus"]
+default = []
 noverify = []
-verus = []
-
+verus = ["builtin", "builtin_macros", "vstd"]

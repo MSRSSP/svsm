@@ -1,11 +1,9 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 //
-// Copyright (c) 2022-2023 SUSE LLC
 //
-// Author: Joerg Roedel <jroedel@suse.de>
+// Author: Ziqiao Zhou <ziqiaozhou@microsoft.com>
 
 fn main() {
-    assert!(cfg!(feature = "verus"));
     init_verify(&["vstd"]);
 }
 
@@ -14,7 +12,7 @@ fn init_verify(verus_libs: &[&str]) {
     println!("rerun-if-env-changed=VERUS");
     println!("rerun-if-env-changed=VERUS_TARGETS");
     println!("rerun-if-env-changed=HOME");
-    if cfg!(feature = "noverify") {
+    if cfg!(feature = "noverify") || !cfg!(feature = "verus") {
         println!("cargo:rustc-env=VERUS_ARGS=--no-verify");
     } else {
         let verus_args = [

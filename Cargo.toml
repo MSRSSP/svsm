@@ -53,7 +53,7 @@ zerocopy = { version = "0.7.32", features = ["derive"] }
 packit = { git = "https://github.com/coconut-svsm/packit", version = "0.1.1" }
 
 # Verus repos
-builtin = { git = "https://github.com/verus-lang/verus", default-features = false }
+builtin = { git = "https://github.com/verus-lang/verus", default-features = false}
 builtin_macros = { git = "https://github.com/verus-lang/verus", default-features = false }
 state_machines_macros = { git = "https://github.com/verus-lang/verus", default-features = false }
 vstd = { git = "https://github.com/verus-lang/verus", features = ["alloc"], default-features = false }
@@ -64,10 +64,10 @@ vstub = { path = "vstub", default-features = false  }
 
 # Somehow they must use local path to build. If not, the verus_item may be named differently
 [patch."https://github.com/verus-lang/verus"]
-builtin = { path="../verus/source/builtin" }
-builtin_macros = { path="../verus/source/builtin_macros" }
-state_machines_macros = { path="../verus/source/state_machines_macros"}
-vstd = { path="../verus/source/vstd", features = ["alloc"], default-features = false }
+builtin = { path="../verus/source/builtin", default-features = false }
+builtin_macros = { path="../verus/source/builtin_macros", default-features = false }
+state_machines_macros = { path="../verus/source/state_machines_macros", default-features = false }
+vstd = { path="../verus/source/vstd", features = ["alloc"],  default-features = false }
 
 [workspace.lints.rust]
 future_incompatible = { level = "deny", priority = 127 }
