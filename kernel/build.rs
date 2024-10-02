@@ -7,7 +7,6 @@
 use rustc_version::{Channel, Version};
 
 fn main() {
-
     let rust_version = rustc_version::version_meta().unwrap();
     // Check if the version is nightly and higher than 1.50.0 (you can adjust this as needed)
     let is_expected_version = rust_version.semver >= Version::new(1, 78, 0);
@@ -20,7 +19,7 @@ fn main() {
             panic!("Requires the nightly version or stable version >= 1.78.");
         }
     } else {
-    // Extra cfgs
+        // Extra cfgs
         println!("cargo::rustc-check-cfg=cfg(fuzzing)");
         println!("cargo::rustc-check-cfg=cfg(test_in_svsm)");
         println!("cargo::rustc-check-cfg=cfg(verus_keep_ghost_body)");

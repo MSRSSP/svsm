@@ -21,14 +21,14 @@ jobs:
         run: echo "VERUS_PATH=$(realpath ../verus)" >> $GITHUB_ENV
 
       - name: Install verus-rustc
-        run: cargo install cargo-run-script && cargo vdep && cargo vinstall
+        run: cargo install cargo-run-script && cargo vinstall
 
       - name: Build with verus
-        run: cargo v
+        run: source ../scripts/vactivate.sh && rustup show && cargo v
         working-directory: kernel
 
       - name: Build without verifying
-        run: cargo b
+        run: source ../scripts/vactivate.sh deactivate && rustup show && cargo b
         working-directory: kernel
 
       - name: Format rust code

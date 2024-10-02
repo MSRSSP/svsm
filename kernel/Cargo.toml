@@ -36,8 +36,8 @@ packit.workspace = true
 libmstpm = { workspace = true, optional = true }
 zerocopy.workspace = true
 
-builtin = { workspace = true, optional = true }
-builtin_macros = { workspace = true, optional = true }
+builtin = { workspace = true }
+builtin_macros = { workspace = true }
 vstd = { workspace = true, optional = true }
 vmath = { workspace = true, optional = true, features = ["noverify", "verus"]}
 vstub.workspace = true
@@ -49,7 +49,7 @@ test.workspace = true
 default = []
 enable-gdb = ["dep:gdbstub", "dep:gdbstub_arch"]
 mstpm = ["dep:libmstpm"]
-verus = ["builtin", "builtin_macros", "vstd", "vmath"]
+verus = ["vstd", "vmath"]
 noverify = ["verus"]
 
 [dev-dependencies]

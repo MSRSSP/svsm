@@ -53,9 +53,9 @@ zerocopy = { version = "0.7.32", features = ["derive"] }
 packit = { git = "https://github.com/coconut-svsm/packit", version = "0.1.1" }
 
 # Verus repos
-builtin = { git = "https://github.com/verus-lang/verus", rev ="03e31b6f9084f1d43a79ebffcba490aaeedf80f5", default-features = false }
-builtin_macros = { git = "https://github.com/verus-lang/verus", rev ="03e31b6f9084f1d43a79ebffcba490aaeedf80f5", default-features = false  }
-vstd = { git = "https://github.com/verus-lang/verus", rev ="03e31b6f9084f1d43a79ebffcba490aaeedf80f5", features = ["alloc"],default-features = false }
+builtin = { git = "https://github.com/verus-lang/verus", rev ="994fbf17070fbe599740578cb1a0816ebdb45b93", default-features = false }
+builtin_macros = { git = "https://github.com/verus-lang/verus", rev ="994fbf17070fbe599740578cb1a0816ebdb45b93", default-features = false  }
+vstd = { git = "https://github.com/verus-lang/verus", rev ="994fbf17070fbe599740578cb1a0816ebdb45b93", features = ["alloc"],default-features = false }
 
 # Verification libs
 vmath = { path = "vmath", default-features = false  }
@@ -94,5 +94,4 @@ suboptimal_flops = "warn"
 unnecessary_box_returns = "warn"
 
 [workspace.metadata.scripts]
-vfmt = "verusfmt `find ./ -name *.verus.rs`" 
-vdep = "if [ ! -d \"${VERUS_PATH}\" ]; then git clone https://github.com/verus-lang/verus ../verus; fi && cd ../verus && git fetch origin pull/1290/head:svsm && git checkout svsm"
+vfmt = "verusfmt `find ./ -name *.verus.rs`"

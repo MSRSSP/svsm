@@ -10,28 +10,27 @@ use core::ops;
 
 use core::slice;
 
-#[cfg(feature = "verus")]
-include!("address.verus.rs");
-
 // The backing type to represent an address;
 type InnerAddr = usize;
 
-#[cfg_attr(feature = "verus", verus::internal(verus_macro))]
+#[cfg_attr(feature = "verus", verifier::verify)]
 const SIGN_BIT: usize = 47;
 
+#[cfg(feature = "verus")]
+include!("address.verus.rs");
+use builtin::*;
+
 #[inline]
-#[cfg_attr(feature = "verus", verus::internal(verus_macro))]
+#[cfg_attr(feature = "verus", verifier::verify)]
 const fn sign_extend(addr: InnerAddr) -> InnerAddr {
-    #[cfg(verus_keep_ghost_body)]
-    builtin::ensures(|ret: InnerAddr| [sign_extend_ensures(addr, ret, SIGN_BIT)]);
-    #[cfg(verus_keep_ghost_body)]
-    #[verifier::proof_block]
-    {
+    requires!(true);
+    ensures!(|ret: InnerAddr| [sign_extend_ensures(addr, ret, SIGN_BIT)]);
+    proof! {
         vmath::bits::proof_usize_bitshl_bound(SIGN_BIT);
         vmath::bits::proof_usize_bitor_auto();
         vmath::bits::proof_usize_bitnot_auto();
+        assert(true);
     }
-
     let mask = 1usize << SIGN_BIT;
     if (addr & mask) == mask {
         addr | !((1usize << SIGN_BIT) - 1)
