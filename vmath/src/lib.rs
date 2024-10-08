@@ -1,8 +1,8 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //
-// Copyright (c) 2022-2023 Microsoft
+// Copyright (c) Microsoft Corporation
 //
-// Author: Ziqiao Zhou<ziqiaozhou@microsoft.com>
+// Author: Ziqiao Zhou <ziqiaozhou@microsoft.com>
 
 #![no_std]
 #![allow(unused_braces)]
