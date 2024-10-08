@@ -1,7 +1,8 @@
-// SPDX-License-Identifier: MIT OR Apache-2.0
+// SPDX-License-Identifier: MIT
 //
+// Copyright (c) 2022-2023 Microsoft
 //
-// Author: Ziqiao Zhou <ziqiaozhou@microsoft.com>
+// Author: Ziqiao Zhou<ziqiaozhou@microsoft.com>
 
 fn main() {
     init_verify(&["vstd"]);
@@ -12,9 +13,9 @@ fn init_verify(verus_libs: &[&str]) {
     println!("rerun-if-env-changed=VERUS");
     println!("rerun-if-env-changed=VERUS_TARGETS");
     println!("rerun-if-env-changed=HOME");
-    if cfg!(feature = "noverify") || !cfg!(feature = "verus") {
+    if cfg!(feature = "verus") && cfg!(feature = "noverify") {
         println!("cargo:rustc-env=VERUS_ARGS=--no-verify");
-    } else {
+    } else if cfg!(feature = "verus") {
         let verus_args = [
             "--rlimit=8000",
             "--expand-errors",

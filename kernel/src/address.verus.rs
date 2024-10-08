@@ -1,4 +1,8 @@
-use vstd::prelude::*;
+// SPDX-License-Identifier: MIT
+//
+// Copyright (c) 2022-2023 Microsoft
+//
+// Author: Ziqiao Zhou<ziqiaozhou@microsoft.com>
 verus! {
 
 spec fn sign_extend_ensures(addr: InnerAddr, ret: InnerAddr, sign_bit: usize) -> bool {
