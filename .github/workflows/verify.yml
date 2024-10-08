@@ -1,4 +1,4 @@
-name: Rust
+name: Verification
 
 on:
   push:
@@ -12,23 +12,40 @@ env:
 jobs:
   check:
     name: Verification Check
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v3
 
-      - name: Set VERUS_PATH
-        run: echo "VERUS_PATH=$(realpath ../verus)" >> $GITHUB_ENV
+      - name: fetch verus via metadata
+        run: |
+            source ./scripts/v-ci-setup.sh
+            echo "VERUS_PATH=$(echo $VERUS_PATH)" >> $GITHUB_ENV
 
-      - name: Install verus-rustc
-        run: cargo install cargo-run-script && cargo vinstall
+      - uses: Swatinem/rust-cache@v2
+        with:
+            workspaces: |
+              ${{ github.workspace }} -> target
+              ${{ env.VERUS_PATH }}/source -> target
+              ${{ env.VERUS_PATH }}/source -> target-verus
+              ${{ env.VERUS_PATH }}/tools/vargo -> target
+
+      - name: Install specified rust toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+            toolchain: nightly-2023-12-22
+            target: x86_64-unknown-none
+            profile: minimal
+
+      - name: Install verus toolchains
+        run: ./scripts/vinstall.sh
 
       - name: Build with verus
-        run: source ../scripts/vactivate.sh && rustup show && cargo v
+        run: cargo verify
         working-directory: kernel
 
       - name: Build without verifying
-        run: source ../scripts/vactivate.sh deactivate && rustup show && cargo b
+        run: cargo build
         working-directory: kernel
 
       - name: Format rust code
