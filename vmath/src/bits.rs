@@ -4,4 +4,5 @@
 //
 // Author: Ziqiao Zhou <ziqiaozhou@microsoft.com>
 
+#[cfg(feature = "verus")]
 include!("bits.verus.rs");
