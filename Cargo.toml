@@ -16,7 +16,6 @@ members = [
     "syscall",
     "vmath",
 ]
-exclude = ["tools/verus-rustc"]
 
 
 [workspace.dependencies]

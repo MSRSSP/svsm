@@ -8,7 +8,7 @@ use rustc_version::{Channel, Version};
 
 fn main() {
     let rust_version = rustc_version::version_meta().unwrap();
-    // Check if the version is nightly and higher than 1.50.0 (you can adjust this as needed)
+    // Check if the version is nightly and higher than 1.78.0
     let is_expected_version = rust_version.semver >= Version::new(1, 78, 0);
     if !is_expected_version {
         if rust_version.channel == Channel::Nightly {
@@ -83,11 +83,4 @@ fn init_verify(verus_libs: &[&str]) {
     let mut targets: Vec<&str> = vec![&target];
     targets.extend(verus_libs);
     println!("cargo:rustc-env=VERUS_TARGETS={}", targets.join(","));
-    for (key, value) in std::env::vars() {
-        // You can filter or modify which ones to pass to rustc
-        println!("cargo:rustc-env={}={}", key, value);
-    }
-
-    let module_path = std::env::var("CARGO_MANIFEST_DIR").unwrap();
-    println!("cargo:rustc-env=MODULE_PATH={}", module_path);
 }

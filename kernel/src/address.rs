@@ -30,7 +30,6 @@ const fn sign_extend(addr: InnerAddr) -> InnerAddr {
         vmath::bits::proof_usize_bitor_auto();
         vmath::bits::proof_usize_bitnot_auto();
     }
-    //vmath::bits::test_call(0);
     let mask = 1usize << SIGN_BIT;
     if (addr & mask) == mask {
         addr | !((1usize << SIGN_BIT) - 1)
