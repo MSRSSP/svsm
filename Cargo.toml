@@ -15,7 +15,6 @@ members = [
     # syscall interface definitions
     "syscall",
     "vmath",
-    "vstub"
 ]
 exclude = ["tools/verus-rustc"]
 
@@ -59,7 +58,6 @@ vstd = { git = "https://github.com/verus-lang/verus", rev ="ff7345f87e2604e4b877
 
 # Verification libs
 vmath = { path = "vmath", default-features = false  }
-vstub = { path = "vstub", default-features = false  }
 
 [workspace.lints.rust]
 future_incompatible = { level = "deny", priority = 127 }
