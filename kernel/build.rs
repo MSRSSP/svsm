@@ -59,11 +59,11 @@ fn main() {
     println!("cargo:rerun-if-changed=kernel/src/svsm.lds");
     println!("cargo:rerun-if-changed=build.rs");
     if cfg!(feature = "verus") {
-        init_verify(&["vmath", "vstd"]);
+        init_verify();
     }
 }
 
-fn init_verify(verus_libs: &[&str]) {
+fn init_verify() {
     if cfg!(feature = "noverify") {
         println!("cargo:rustc-env=VERUS_ARGS=--no-verify");
     } else {
@@ -78,9 +78,4 @@ fn init_verify(verus_libs: &[&str]) {
         ];
         println!("cargo:rustc-env=VERUS_ARGS={}", verus_args.join(" "));
     }
-
-    let target = std::env::var("CARGO_PKG_NAME").unwrap_or_default();
-    let mut targets: Vec<&str> = vec![&target];
-    targets.extend(verus_libs);
-    println!("cargo:rustc-env=VERUS_TARGETS={}", targets.join(","));
 }

@@ -6,16 +6,12 @@ To run verification, we will need to a few steps to setup the build toolchains.
 
 ## Build
 
-### Install verus-rustc for build
+### Install verification tools
 
 ```
 cd svsm
-cargo install cargo-run-script 
-VERUS_PATH=`realpath ../verus` cargo vdep
-VERUS_PATH=`realpath ../verus` cargo vinstall
+./scripts/vinstall.sh
 ```
-
-Use `VERUS_PATH=`realpath ../verus` cargo vinstall --force` if you want to reinstall.
 
 ### Build svsm with verification
 
@@ -42,7 +38,7 @@ cargo build
 
 ## Manage specification and proof codes
 
-* Minimize the annotations inside executable rust codes.
+* Minimize annotations inside executable Rust.
 * Define specification and proof code in `*.verus.rs` or in a different crates. Those codes wrapped in verus!{} macro and need verusfmt to format.
 
 ```

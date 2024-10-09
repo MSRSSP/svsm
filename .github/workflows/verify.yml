@@ -24,18 +24,18 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
-            workspaces: |
-              ${{ github.workspace }} -> target
-              ${{ env.VERUS_PATH }}/source -> target
-              ${{ env.VERUS_PATH }}/source -> target-verus
-              ${{ env.VERUS_PATH }}/tools/vargo -> target
+          cache-directories: ${{ env.VERUS_PATH }}/source/target-verus
+          workspaces: |
+            ${{ github.workspace }} -> target
+            ${{ env.VERUS_PATH }}/source -> target
+            ${{ env.VERUS_PATH }}/tools/vargo -> target
 
       - name: Install specified rust toolchain
         uses: actions-rs/toolchain@v1
         with:
-            toolchain: nightly-2023-12-22
-            target: x86_64-unknown-none
-            profile: minimal
+          toolchain: nightly-2023-12-22
+          target: x86_64-unknown-none
+          profile: minimal
 
       - name: Install verus toolchains
         run: ./scripts/vinstall.sh
