@@ -3,20 +3,6 @@ VERIFICATION
 
 To run verification, we will need to a few steps to setup the build toolchains.
 
-## NOTE
-Verus only supports a specific version of rust compiler (v1.78) and so we need to change the default rust compiler version.
-
-SVSM used v1.80 and so we need v1.78 nightly build.
-
-## Code styles
-
-`*.verus.rs` are codes wrapped in verus!{} macro and need verusfmt to format.
-
-```
-cd svsm
-cargo vfmt
-```
-
 
 ## Build
 
@@ -31,19 +17,35 @@ VERUS_PATH=`realpath ../verus` cargo vinstall
 
 Use `VERUS_PATH=`realpath ../verus` cargo vinstall --force` if you want to reinstall.
 
-### Run with verification
+### Build svsm with verification
 
 ```
 cd svsm/kernel
-cargo build --features verus
+cargo verify
 ```
 
-`cargo build` will call `rustc` for targets that are not verified and call `verus` for targets that are to be verified.
+You can pass extra verus arguments via {crate}_VERUS_ARGS to a specific crate {crate} or VERUS_ARGS to all crates.
+
+It is helpful to add extra args for debugging, for example,
+
+`svsm_VERUS_ARGS="--no-verify" cargo verify` compiles the code with verification annotation without verifying it.
+
+`svsm_VERUS_ARGS="--verify-module address" cargo verify` verify only a module in the crate svsm. NOTE: you may have verified the module but cannot build the crate.
 
 
 ### Run without verification
 
 ```
 cd svsm/kernel
-cargo build --no-default-features
+cargo build
+```
+
+## Manage specification and proof codes
+
+* Minimize the annotations inside executable rust codes.
+* Define specification and proof code in `*.verus.rs` or in a different crates. Those codes wrapped in verus!{} macro and need verusfmt to format.
+
+```
+cd svsm
+cargo vfmt
 ```

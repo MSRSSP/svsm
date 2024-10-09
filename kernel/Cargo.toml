@@ -39,16 +39,16 @@ zerocopy.workspace = true
 builtin = { workspace = true }
 builtin_macros = { workspace = true }
 vstd = { workspace = true, optional = true }
-vmath = { workspace = true, optional = true, features = ["noverify", "verus"]}
+vmath = { workspace = true, optional = true}
 
 [target."x86_64-unknown-none".dev-dependencies]
 test.workspace = true
 
 [features]
-default = []
+default = ["vmath/noverify"]
 enable-gdb = ["dep:gdbstub", "dep:gdbstub_arch"]
 mstpm = ["dep:libmstpm"]
-verus = ["vstd", "vmath"]
+verus = ["vstd", "vmath/verus"]
 noverify = ["verus"]
 
 [dev-dependencies]
