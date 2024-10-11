@@ -933,7 +933,6 @@ dependencies = [
  "test",
  "vmath",
  "vstd",
- "vstub",
  "zerocopy",
 ]
 

@@ -23,7 +23,7 @@ const SIGN_BIT: usize = 47;
 include!("address.verus.rs");
 
 #[inline]
-#[ensures(|ret: InnerAddr| [sign_extend_ensures(addr, ret, SIGN_BIT)])]
+#[ensures(|ret: InnerAddr| [sign_extend_ensures(addr, ret)])]
 const fn sign_extend(addr: InnerAddr) -> InnerAddr {
     let mask = 1usize << SIGN_BIT;
 
