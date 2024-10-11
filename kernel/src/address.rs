@@ -19,18 +19,21 @@ type InnerAddr = usize;
 #[verus_verify]
 const SIGN_BIT: usize = 47;
 
-#[cfg(feature = "verus")]
+#[cfg(verus_keep_ghost)]
 include!("address.verus.rs");
 
 #[inline]
 #[ensures(|ret: InnerAddr| [sign_extend_ensures(addr, ret, SIGN_BIT)])]
 const fn sign_extend(addr: InnerAddr) -> InnerAddr {
-    proof! {
-        vmath::bits::proof_usize_bitshl_bound(SIGN_BIT);
-        vmath::bits::proof_usize_bitor_auto();
-        vmath::bits::proof_usize_bitnot_auto();
-    }
     let mask = 1usize << SIGN_BIT;
+
+    proof! {
+        let m = (mask - 1) as u64;
+        lemma_bit_u64_shl_bound(SIGN_BIT as u64);
+        lemma_bit_u64_not_is_sub(m as u64);
+        lemma_bit_u64_set_clear_mask(addr as u64, m);
+        lemma_bit_u64_set_clear_mask(addr as u64, !m);
+    }
     if (addr & mask) == mask {
         addr | !((1usize << SIGN_BIT) - 1)
     } else {

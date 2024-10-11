@@ -20,16 +20,27 @@ cd svsm/kernel
 cargo verify
 ```
 
-You can pass extra verus arguments via {crate}_VERUS_ARGS to a specific crate {crate} or VERUS_ARGS to all crates.
-
-It is helpful to add extra args for debugging, for example,
-
-`svsm_VERUS_ARGS="--no-verify" cargo verify` compiles the code with verification annotation without verifying it.
-
-`svsm_VERUS_ARGS="--verify-module address" cargo verify` verify only a module in the crate svsm. NOTE: you may have verified the module but cannot build the crate.
+By default, it will verify all crates (except for vstd), if you do not want to
+verify other crates, use `cargo verify --features verus_no_dep_verify`.
 
 
-### Run without verification
+### Pass verus arguments for verification.
+
+It is helpful to pass extra args for verification debugging.
+
+You can pass extra verus arguments via {crate}_VERUS_ARGS to a specific crate
+{crate} or VERUS_ARGS to all crates.
+
+`svsm_VERUS_ARGS="--no-verify" cargo verify` compiles the code without verifying
+svsm crate.
+
+`svsm_VERUS_ARGS="--verify-module address" cargo verify` verify only address
+module in the crate svsm. NOTE: you may have verified the module but cannot
+build the crate.
+
+
+
+### Build without verification
 
 ```
 cd svsm/kernel

@@ -22,7 +22,6 @@ fn main() {
         // Extra cfgs
         println!("cargo::rustc-check-cfg=cfg(fuzzing)");
         println!("cargo::rustc-check-cfg=cfg(test_in_svsm)");
-        println!("cargo::rustc-check-cfg=cfg(verus_keep_ghost_body)");
         println!("cargo::rustc-check-cfg=cfg(verus_keep_ghost)");
         println!("cargo::rustc-check-cfg=cfg(RUST_BEFORE_1_78)");
     }
@@ -58,9 +57,7 @@ fn main() {
     println!("cargo:rerun-if-changed=kernel/src/stage2.lds");
     println!("cargo:rerun-if-changed=kernel/src/svsm.lds");
     println!("cargo:rerun-if-changed=build.rs");
-    if cfg!(feature = "verus") {
-        init_verify();
-    }
+    init_verify();
 }
 
 fn init_verify() {

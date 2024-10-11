@@ -4,5 +4,5 @@
 //
 // Author: Ziqiao Zhou <ziqiaozhou@microsoft.com>
 
-#[cfg(feature = "verus")]
+#[cfg(verus_keep_ghost)]
 include!("bits.verus.rs");

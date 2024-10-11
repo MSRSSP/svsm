@@ -6,6 +6,7 @@
 
 #![no_std]
 #![allow(unused_braces)]
+#![allow(unexpected_cfgs)]
 
 pub mod bits;
 pub mod layout;

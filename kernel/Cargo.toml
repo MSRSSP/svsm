@@ -45,11 +45,12 @@ vmath = { workspace = true, optional = true}
 test.workspace = true
 
 [features]
-default = ["vmath/noverify"]
+default = []
 enable-gdb = ["dep:gdbstub", "dep:gdbstub_arch"]
 mstpm = ["dep:libmstpm"]
+verus_no_dep_verify = ["verus", "vmath/noverify"]
 verus = ["vstd", "vmath/verus"]
-noverify = ["verus"]
+noverify = []
 
 [dev-dependencies]
 
