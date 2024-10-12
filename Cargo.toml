@@ -14,7 +14,8 @@ members = [
     "libmstpm",
     # syscall interface definitions
     "syscall",
-    "vmath",
+    # verification library for svsm
+    "verismo",
 ]
 
 
@@ -51,12 +52,12 @@ zerocopy = { version = "0.7.32", features = ["derive"] }
 packit = { git = "https://github.com/coconut-svsm/packit", version = "0.1.1" }
 
 # Verus repos
-builtin = { git = "https://github.com/verus-lang/verus", rev ="ff7345f87e2604e4b877c1596475e28373fce485", default-features = false }
-builtin_macros = { git = "https://github.com/verus-lang/verus", rev ="ff7345f87e2604e4b877c1596475e28373fce485", default-features = false  }
-vstd = { git = "https://github.com/verus-lang/verus", rev ="ff7345f87e2604e4b877c1596475e28373fce485", features = ["alloc"], default-features = false }
+builtin = { git = "https://github.com/verus-lang/verus", rev ="46639a70372897ae82a7487f74296b9038b3e561", default-features = false }
+builtin_macros = { git = "https://github.com/verus-lang/verus", rev ="46639a70372897ae82a7487f74296b9038b3e561", default-features = false  }
+vstd = { git = "https://github.com/verus-lang/verus", rev ="46639a70372897ae82a7487f74296b9038b3e561", features = ["alloc"], default-features = false }
 
 # Verification libs
-vmath = { path = "vmath", default-features = false  }
+verismo = { path = "verismo", default-features = false  }
 
 [workspace.lints.rust]
 future_incompatible = { level = "deny", priority = 127 }

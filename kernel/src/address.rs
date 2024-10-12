@@ -23,17 +23,12 @@ const SIGN_BIT: usize = 47;
 include!("address.verus.rs");
 
 #[inline]
+#[verus_verify]
 #[ensures(|ret: InnerAddr| [sign_extend_ensures(addr, ret)])]
 const fn sign_extend(addr: InnerAddr) -> InnerAddr {
     let mask = 1usize << SIGN_BIT;
 
-    proof! {
-        let m = (mask - 1) as u64;
-        lemma_bit_u64_shl_bound(SIGN_BIT as u64);
-        lemma_bit_u64_not_is_sub(m as u64);
-        lemma_bit_u64_set_clear_mask(addr as u64, m);
-        lemma_bit_u64_set_clear_mask(addr as u64, !m);
-    }
+    proof! {broadcast use sign_extend_proof;}
     if (addr & mask) == mask {
         addr | !((1usize << SIGN_BIT) - 1)
     } else {
@@ -213,17 +208,22 @@ impl Address for PhysAddr {}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
 #[repr(transparent)]
+#[verus_verify]
 pub struct VirtAddr(InnerAddr);
 
+#[verus_verify]
 impl VirtAddr {
     #[inline]
+    #[verus_verify]
     pub const fn null() -> Self {
+        proof! {broadcast use address_properties;}
         Self(0)
     }
 
     // const traits experimental, so for now we need this to make up
     // for the lack of VirtAddr::from() in const contexts.
     #[inline]
+    #[verus_verify]
     pub const fn new(addr: InnerAddr) -> Self {
         Self(sign_extend(addr))
     }
