@@ -2,7 +2,7 @@
 name = "svsm"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.76.0"
+rust-version = "1.77.0"
 
 [[bin]]
 name = "stage2"
@@ -46,12 +46,16 @@ vstub.workspace = true
 test.workspace = true
 
 [features]
-default = ["verus"]
+default = []
 enable-gdb = ["dep:gdbstub", "dep:gdbstub_arch"]
 mstpm = ["dep:libmstpm"]
 verus = ["builtin", "builtin_macros", "vstd", "vmath"]
+noverify = ["verus"]
 
 [dev-dependencies]
+
+[build-dependencies]
+rustc_version = "0.4"
 
 [lints]
 workspace = true

@@ -5,8 +5,8 @@
 // Author: Nicolai Stange <nstange@suse.de>
 
 #![no_std]
-#![feature(offset_of)] // stable feature in v1.80 but nightly feature in v1.78
-#![feature(inline_const)] // stable feature in v1.80 but nightly feature in v1.78
+#![cfg_attr(RUST_BEFORE_1_78, feature(offset_of))] // stable feature after v1.78 but nightly feature in v1.77
+#![cfg_attr(RUST_BEFORE_1_78, feature(inline_const))] // stable feature in v1.78 but nightly feature in v1.77
 #![cfg_attr(all(test, test_in_svsm), no_main)]
 #![cfg_attr(all(test, test_in_svsm), feature(custom_test_frameworks))]
 #![cfg_attr(all(test, test_in_svsm), test_runner(crate::testing::svsm_test_runner))]
