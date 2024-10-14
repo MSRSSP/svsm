@@ -11,6 +11,11 @@ pub open spec fn vaddr_lower_mask() -> InnerAddr {
 }
 
 #[verifier(inline)]
+spec fn check_signed(addr: InnerAddr) -> bool {
+    addr & (1usize << 47) == 1usize << 47
+}
+
+#[verifier(inline)]
 pub open spec fn vaddr_upper_mask() -> InnerAddr {
     !vaddr_lower_mask()
 }
@@ -33,11 +38,6 @@ spec fn vaddr_is_signed(addr: InnerAddr) -> bool {
 #[verifier(inline)]
 pub open spec fn vaddr_is_valid(addr: InnerAddr) -> bool {
     addr & vaddr_upper_mask() == 0
-}
-
-#[verifier(inline)]
-spec fn check_signed(addr: InnerAddr) -> bool {
-    addr & add(vaddr_lower_mask(), 1) == add(vaddr_lower_mask(), 1)
 }
 
 /// Ensures that ret is a new canonical virtual address, throwing out bits 48..64.
