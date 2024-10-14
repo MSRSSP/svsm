@@ -82,12 +82,12 @@ pub trait Address:
 
     #[inline]
     fn checked_add(&self, off: InnerAddr) -> Option<Self> {
-        self.bits().checked_add(off).map(|addr| Self::from(addr))
+        self.bits().checked_add(off).map(|addr| addr.into())
     }
 
     #[inline]
     fn checked_sub(&self, off: InnerAddr) -> Option<Self> {
-        self.bits().checked_sub(off).map(|addr| Self::from(addr))
+        self.bits().checked_sub(off).map(|addr| addr.into())
     }
 
     #[inline]
