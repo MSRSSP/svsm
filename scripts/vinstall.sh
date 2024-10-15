@@ -1,5 +1,5 @@
 #!/bin/bash
-VERISMO_REV=6881a3b
+VERISMO_REV=fd2967d
 cargo install --git https://github.com/microsoft/verismo/ --rev $VERISMO_REV cargo-v
 builtin=`cargo metadata --format-version 1 | jq -r '.packages[] | select(.name == "builtin_macros") | .targets[].src_path'`
 verus=`dirname $builtin`/../../../source/target-verus/release/verus
