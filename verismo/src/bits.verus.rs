@@ -145,14 +145,14 @@ pub open spec fn spec_bit(n: u64) -> u64
     }
 }
 
-} // verus!
-#[cfg(verus_keep_ghost)]
-#[verus::internal(spec)]
-pub fn is_pow_of_2(val: u64) -> bool {
+
+pub open spec fn is_pow_of_2(val: u64) -> bool {
     seq_macro::seq! {N in 0..63 {#(
             val == spec_bit(N) ||
         )* false
     }}
+}
+
 }
 macro_rules! bit_shl_values {
     ($typ:ty, $styp:ty, $one: expr, $pname: ident) => {
@@ -215,7 +215,7 @@ macro_rules! bit_set_clear_mask {
 
 bit_shl_values! {u64, u64, 1u64, lemma_bit_u64_shl_values}
 bit_not_properties! {u64, u64, spec_bit_u64_not_properties, lemma_bit_u64_not_is_sub}
-bit_set_clear_mask! {u64, u64, lemma_bit_u64_set_mask, lemma_bit_u64_clear_mask}
+bit_set_clear_mask! {u64, u64, lemma_bit_u64_or_mask, lemma_bit_u64_and_mask}
 
 bit_shl_values! {usize, u64, 1usize, lemma_bit_usize_shl_values}
 bit_not_properties! {usize, u64, spec_bit_usize_not_properties, lemma_bit_usize_not_is_sub}
