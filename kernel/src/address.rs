@@ -10,7 +10,6 @@ use core::ops;
 
 use core::slice;
 
-use builtin::*;
 use builtin_macros::*;
 
 // The backing type to represent an address;
@@ -23,11 +22,10 @@ include!("address.verus.rs");
 
 #[inline]
 #[verus_verify]
-#[ensures(|ret: InnerAddr| [new_vaddr_ensures(addr, ret)])]
+#[ensures(|ret: InnerAddr| [sign_extend_ensures(addr, ret)])]
 const fn sign_extend(addr: InnerAddr) -> InnerAddr {
     let mask = 1usize << SIGN_BIT;
 
-    proof! {broadcast use sign_extend_proof;}
     if (addr & mask) == mask {
         addr | !((1usize << SIGN_BIT) - 1)
     } else {
@@ -216,7 +214,6 @@ impl VirtAddr {
     #[inline]
     #[verus_verify]
     pub const fn null() -> Self {
-        proof! {lemma_inner_addr_as_vaddr(0);}
         Self(0)
     }
 
@@ -224,7 +221,7 @@ impl VirtAddr {
     // for the lack of VirtAddr::from() in const contexts.
     #[inline]
     #[verus_verify]
-    #[ensures(|ret: VirtAddr| new_vaddr_ensures(addr, ret.spec_bits()))]
+    #[ensures(|ret: VirtAddr| ret.new_ensures(addr))]
     pub const fn new(addr: InnerAddr) -> Self {
         Self(sign_extend(addr))
     }
@@ -276,10 +273,6 @@ impl VirtAddr {
     #[requires(self.const_add_requires(offset))]
     #[ensures(|ret: VirtAddr| [self.const_add_ensures(offset, ret)])]
     pub const fn const_add(&self, offset: usize) -> Self {
-        proof! {
-            broadcast use vaddr_properties;
-            lemma_inner_addr_as_vaddr(add(self.0, offset));
-        }
         VirtAddr::new(self.0 + offset)
     }
 
@@ -318,7 +311,7 @@ impl fmt::LowerHex for VirtAddr {
 impl From<InnerAddr> for VirtAddr {
     #[inline]
     #[verus_verify]
-    #[ensures(|ret: VirtAddr| new_vaddr_ensures(addr, ret.spec_bits()))]
+    #[ensures(|ret: VirtAddr| ret.new_ensures(addr))]
     fn from(addr: InnerAddr) -> Self {
         Self(sign_extend(addr))
     }
@@ -328,7 +321,7 @@ impl From<InnerAddr> for VirtAddr {
 impl From<VirtAddr> for InnerAddr {
     #[inline]
     #[verus_verify]
-    #[ensures(|ret: InnerAddr| addr.spec_bits() == ret)]
+    #[ensures(|ret: InnerAddr| addr@ == ret)]
     fn from(addr: VirtAddr) -> Self {
         addr.0
     }
@@ -346,7 +339,7 @@ impl From<u64> for VirtAddr {
 impl From<VirtAddr> for u64 {
     #[inline]
     #[verus_verify]
-    #[ensures(|ret: Self| ret == addr.spec_bits())]
+    #[ensures(|ret: Self| ret == addr@)]
     fn from(addr: VirtAddr) -> Self {
         addr.0 as u64
     }
@@ -380,10 +373,6 @@ impl ops::Sub<VirtAddr> for VirtAddr {
     #[requires(self.sub_requires(other))]
     #[ensures(|ret: InnerAddr| self.sub_ensures(other, ret))]
     fn sub(self, other: VirtAddr) -> Self::Output {
-        proof! {
-            broadcast use vaddr_properties;
-            lemma_inner_addr_as_vaddr(sub(self.0, other.0));
-        }
         sign_extend(self.0 - other.0)
     }
 }
@@ -397,10 +386,6 @@ impl ops::Sub<usize> for VirtAddr {
     #[requires(self.sub_usize_requires(other))]
     #[ensures(|ret: Self| self.sub_usize_ensures(other, ret))]
     fn sub(self, other: usize) -> Self {
-        proof! {
-            broadcast use vaddr_properties;
-            lemma_inner_addr_as_vaddr(sub(self.0, other));
-        }
         VirtAddr::from(self.0 - other)
     }
 }
@@ -413,10 +398,6 @@ impl ops::Add<InnerAddr> for VirtAddr {
     #[requires(self.const_add_requires(other))]
     #[ensures(|ret: VirtAddr| [self.const_add_ensures(other, ret)])]
     fn add(self, other: InnerAddr) -> Self {
-        proof! {
-            broadcast use vaddr_properties;
-            lemma_inner_addr_as_vaddr(add(self.0, other));
-        }
         VirtAddr::from(self.0 + other)
     }
 }

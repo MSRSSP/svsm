@@ -8,7 +8,7 @@ use vstd::prelude::*;
 verus! {
 
 #[verifier(inline)]
-pub open spec fn spec_bit(n: u64) -> u64
+pub open spec fn bit_value(n: u64) -> u64
     recommends
         n < 64,
 {
@@ -145,15 +145,14 @@ pub open spec fn spec_bit(n: u64) -> u64
     }
 }
 
-
 pub open spec fn is_pow_of_2(val: u64) -> bool {
     seq_macro::seq! {N in 0..63 {#(
-            val == spec_bit(N) ||
+            val == bit_value(N) ||
         )* false
     }}
 }
 
-}
+} // verus!
 macro_rules! bit_shl_values {
     ($typ:ty, $styp:ty, $one: expr, $pname: ident) => {
         verus! {
@@ -161,9 +160,9 @@ macro_rules! bit_shl_values {
         pub broadcast proof fn $pname(offset: $typ)
         requires 0 <= offset < $styp::BITS
         ensures
-            #[trigger]($one << offset) == spec_bit(offset as u64),
+            #[trigger]($one << offset) == bit_value(offset as u64),
         {
-            assert($one << offset == spec_bit(offset as u64)) by(bit_vector);
+            assert($one << offset == bit_value(offset as u64)) by(bit_vector);
         }
         }
     };
