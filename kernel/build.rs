@@ -65,7 +65,7 @@ fn init_verify() {
         println!("cargo:rustc-env=VERUS_ARGS=--no-verify");
     } else {
         let verus_args = [
-            "--rlimit=8000",
+            "--rlimit=8",
             "--expand-errors",
             "--multiple-errors=5",
             "--triggers-silent",

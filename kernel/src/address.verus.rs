@@ -98,6 +98,21 @@ pub open spec fn sign_extend_ensures(addr: InnerAddr, ret: InnerAddr) -> bool {
     &&& !check_signed(addr) ==> vaddr_is_valid(ret)
 }
 
+pub open spec fn pt_idx_spec(addr: usize, l: usize) -> usize
+    recommends
+        l <= 3,
+{
+    let upper = match l {
+        0usize => { addr >> 12 },
+        1usize => { addr >> 21 },
+        2usize => { addr >> 30 },
+        3usize => { addr >> 39 },
+        4usize => { addr >> 48 },
+        _ => { 0 },
+    };
+    upper % 512
+}
+
 // Define a view (@) for VirtAddr
 #[cfg(verus_keep_ghost)]
 impl View for VirtAddr {
@@ -126,6 +141,10 @@ impl VirtAddr {
 
     pub open spec fn new_ensures(self, addr: InnerAddr) -> bool {
         sign_extend_ensures(addr, self@)
+    }
+
+    pub open spec fn pgtbl_idx_ensures(&self, l: usize, ret: usize) -> bool {
+        ret == pt_idx_spec(self@, l)
     }
 
     /* Specifications for methods */

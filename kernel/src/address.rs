@@ -54,26 +54,39 @@ pub trait Address:
     }
 
     #[inline]
+    #[verus_verify]
+    #[requires(align_up_requires(from_spec(*self), PAGE_SIZE))]
+    #[ensures(|ret: Self| ret === from_spec(align_up_spec(from_spec(*self), PAGE_SIZE)))]
     fn page_align_up(&self) -> Self {
         self.align_up(PAGE_SIZE)
     }
 
     #[inline]
+    #[verus_verify]
+    #[requires(align_requires(PAGE_SIZE))]
+    #[ensures(|ret: Self| ret === from_spec(align_down_spec(from_spec(*self), PAGE_SIZE) as usize))]
     fn page_align(&self) -> Self {
         Self::from(self.bits() & !(PAGE_SIZE - 1))
     }
 
     #[inline]
+    #[verus_verify]
+    #[requires(align_requires(align))]
+    #[ensures(|ret: bool| ret == is_aligned_spec(from_spec::<_, InnerAddr>(*self), align))]
     fn is_aligned(&self, align: InnerAddr) -> bool {
         (self.bits() & (align - 1)) == 0
     }
 
     #[inline]
+    #[verus_verify]
+    #[requires(align_requires(core::mem::align_of::<T>() as usize))]
     fn is_aligned_to<T>(&self) -> bool {
-        self.is_aligned(core::mem::align_of::<T>())
+        (*self).into() & (core::mem::align_of::<T>() - 1) == 0
     }
 
     #[inline]
+    #[verus_verify]
+    #[ensures(|ret: bool| ret == is_aligned_spec(from_spec::<_, InnerAddr>(*self), PAGE_SIZE))]
     fn is_page_aligned(&self) -> bool {
         self.is_aligned(PAGE_SIZE)
     }
@@ -89,6 +102,7 @@ pub trait Address:
     }
 
     #[inline]
+    #[verus_verify]
     fn saturating_add(&self, off: InnerAddr) -> Self {
         Self::from(self.bits().saturating_add(off))
     }
@@ -99,6 +113,8 @@ pub trait Address:
     }
 
     #[inline]
+    #[verus_verify]
+    #[requires(size > 0, from_spec::<_, InnerAddr>(*self) + size < usize::MAX)]
     fn crosses_page(&self, size: usize) -> bool {
         let start = self.bits();
         let x1 = start / PAGE_SIZE;
@@ -227,6 +243,9 @@ impl VirtAddr {
     }
 
     /// Returns the index into page-table pages of given levels.
+    #[verus_verify]
+    #[requires(L <= 3)]
+    #[ensures(|ret: usize| self.pgtbl_idx_ensures(L, ret))]
     pub const fn to_pgtbl_idx<const L: usize>(&self) -> usize {
         (self.0 >> (12 + L * 9)) & 0x1ffusize
     }
