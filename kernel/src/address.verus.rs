@@ -134,33 +134,43 @@ impl VirtAddr {
     // If the address is invalid, it will not exceed usize::max;
     pub open spec fn const_add_requires(&self, offset: usize) -> bool {
         &&& self.is_canonical_vaddr()
-        &&& self.valid_access() ==> self@ + offset <= VADDR_LOWER_MASK
-        &&& self@ + offset < usize::MAX
+        &&& self@ + offset <= usize::MAX
+        &&& self.valid_access() ==> (self@ + offset <= VADDR_LOWER_MASK || offset
+            == VADDR_UPPER_MASK)
     }
 
     #[inline]
     pub open spec fn const_add_ensures(&self, offset: usize, ret: VirtAddr) -> bool {
         &&& ret.is_canonical_vaddr()
-        &&& ret.valid_access() == self.valid_access()
         &&& self.valid_access() ==> (ret@ == self@ + offset)
+        &&& (offset != VADDR_UPPER_MASK) ==> ret.valid_access() == self.valid_access()
+        &&& (offset == VADDR_UPPER_MASK) ==> !ret.valid_access()
     }
 
-    /// The two address must be both valid or both invalid.
     pub open spec fn sub_requires(&self, other: Self) -> bool {
         &&& self.is_canonical_vaddr()
         &&& other.is_canonical_vaddr()
         &&& self@ >= other@
     }
 
+    /// Substract a address from another should only make sense if they are both
+    /// valid or invalid. If self is invalid while other is valid, the
+    /// sign_extend(self@-other) can be confusing, which could be
+    /// self@.lower_bits() - other.lower_bits() or self@ - other or 1usize<<47 +
+    /// self@.lower_bits() - other.lower_bits()
     pub open spec fn sub_ensures(&self, other: Self, ret: InnerAddr) -> bool {
-        let valid_sub = (self.valid_access() == other.valid_access());
-        valid_sub ==> (ret == self@ - other@)
+        let valid_sub = self.valid_access() == other.valid_access();
+        &&& valid_sub ==> ret == self@ - other@
+        &&& valid_sub ==> ret == sign_extend_spec((self@ - other@) as InnerAddr)
     }
 
+    // For a valid address, other must be smaller than self.lower_bits()
+    // Otherwise, this operation may accidentally make an invalid address valid.
+    // We may convert an invalid to valid only when other == VADDR_UPPER_MASK.
     pub open spec fn sub_usize_requires(&self, other: usize) -> bool {
         &&& self.is_canonical_vaddr()
         &&& self@ >= other
-        &&& other <= self.lower_bits()
+        &&& (other <= self.lower_bits() || other == VADDR_UPPER_MASK)
     }
 
     pub open spec fn sub_usize_ensures(&self, other: usize, ret: Self) -> bool {
