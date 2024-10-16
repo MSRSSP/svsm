@@ -28,15 +28,14 @@ verify other crates, use `cargo verify --features verus_no_dep_verify`.
 
 It is helpful to pass extra args for verification debugging.
 
-You can pass extra verus arguments via {crate}_VERUS_ARGS to a specific crate
+You can pass extra verus arguments via {crate}_{lib/bin}_VERUS_ARGS to a specific crate
 {crate} or VERUS_ARGS to all crates.
 
-`svsm_VERUS_ARGS="--no-verify" cargo verify` compiles the code without verifying
+`svsm_lib_VERUS_ARGS="--no-verify" cargo verify` compiles the code without verifying
 svsm crate.
 
-`svsm_VERUS_ARGS="--verify-module address" cargo verify` verify only address
-module in the crate svsm. NOTE: you may have verified the module but cannot
-build the crate.
+`svsm_lib_VERUS_ARGS="--verify-module address" cargo verify` verify only address
+module in the crate svsm.
 
 
 
