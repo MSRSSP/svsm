@@ -9,4 +9,5 @@
 #![allow(unexpected_cfgs)]
 
 pub mod bits;
+pub mod convert;
 pub mod layout;

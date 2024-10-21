@@ -237,6 +237,11 @@ pub open spec fn is_pow_of_2(val: u64) -> bool {
     }}
 }
 
+#[verifier(inline)]
+pub open spec fn pow2_to_bits(val: u64) -> u64 {
+    choose|ret: u64| (1u64 << ret) == val && 0 <= ret < 64
+}
+
 } // verus!
 #[rustfmt::skip]
 macro_rules! bit_shl_values {
@@ -350,3 +355,33 @@ bit_shl_values! {usize, u64, 1usize, lemma_bit_usize_shl_values}
 bit_not_properties! {usize, u64, spec_bit_usize_not_properties, lemma_bit_usize_not_is_sub}
 bit_set_clear_mask! {usize, u64, lemma_bit_usize_or_mask, lemma_bit_usize_and_mask}
 bit_and_mask_is_mod! {usize, lemma_bit_usize_and_mask_is_mod}
+
+verus! {
+
+pub broadcast proof fn lemma_pow2_eq_bit_value(n: nat)
+    requires
+        n < u64::BITS,
+    ensures
+        bit_value(n as u64) == #[trigger] pow2(n),
+    decreases n,
+{
+    vstd::arithmetic::power2::lemma2_to64();
+    if n > 0 {
+        vstd::arithmetic::power2::lemma_pow2_unfold(n);
+    }
+    if n > 32 {
+        lemma_pow2_eq_bit_value((n - 1) as nat);
+    }
+}
+
+pub broadcast proof fn lemma_bit_usize_shr_is_div(v: usize, n: usize)
+    requires
+        n < usize::BITS,
+    ensures
+        (#[trigger] (v >> n)) == v as int / bit_value(n as u64) as int,
+{
+    vstd::bits::lemma_u64_shr_is_div(v as u64, n as u64);
+    lemma_pow2_eq_bit_value(n as nat);
+}
+
+} // verus!

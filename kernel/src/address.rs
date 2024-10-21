@@ -12,13 +12,14 @@ use core::slice;
 
 use builtin_macros::*;
 
+#[cfg(verus_keep_ghost)]
+include!("address.verus.rs");
+
 // The backing type to represent an address;
 type InnerAddr = usize;
 
 #[verus_verify]
 const SIGN_BIT: usize = 47;
-
-include!("address.verus.rs");
 
 #[inline]
 #[verus_verify]
@@ -33,22 +34,30 @@ const fn sign_extend(addr: InnerAddr) -> InnerAddr {
     }
 }
 
+#[verus_verify]
 pub trait Address:
     Copy + From<InnerAddr> + Into<InnerAddr> + PartialEq + Eq + PartialOrd + Ord
 {
     // Transform the address into its inner representation for easier
     /// arithmetic manipulation
     #[inline]
+    #[verus_verify]
+    #[ensures(|ret: InnerAddr| ret === from_spec(*self))]
     fn bits(&self) -> InnerAddr {
         (*self).into()
     }
 
     #[inline]
+    #[verus_verify]
+    #[ensures(|ret: bool| ret == (from_spec(*self) === 0usize))]
     fn is_null(&self) -> bool {
         self.bits() == 0
     }
 
     #[inline]
+    #[verus_verify]
+    #[requires(align_up_requires(from_spec(*self), align))]
+    #[ensures(|ret: Self| ret === from_spec(align_up_spec(from_spec(*self), align)))]
     fn align_up(&self, align: InnerAddr) -> Self {
         Self::from((self.bits() + (align - 1)) & !(align - 1))
     }
@@ -58,7 +67,7 @@ pub trait Address:
     #[requires(align_up_requires(from_spec(*self), PAGE_SIZE))]
     #[ensures(|ret: Self| ret === from_spec(align_up_spec(from_spec(*self), PAGE_SIZE)))]
     fn page_align_up(&self) -> Self {
-        self.align_up(PAGE_SIZE)
+        Self::from((self.bits() + (PAGE_SIZE - 1)) & !(PAGE_SIZE - 1))
     }
 
     #[inline]
@@ -72,7 +81,7 @@ pub trait Address:
     #[inline]
     #[verus_verify]
     #[requires(align_requires(align))]
-    #[ensures(|ret: bool| ret == is_aligned_spec(from_spec::<_, InnerAddr>(*self), align))]
+    #[ensures(|ret: bool| ret == is_aligned_spec(from_spec(*self), align))]
     fn is_aligned(&self, align: InnerAddr) -> bool {
         (self.bits() & (align - 1)) == 0
     }
@@ -86,19 +95,21 @@ pub trait Address:
 
     #[inline]
     #[verus_verify]
-    #[ensures(|ret: bool| ret == is_aligned_spec(from_spec::<_, InnerAddr>(*self), PAGE_SIZE))]
+    #[ensures(|ret: bool| ret == is_aligned_spec(from_spec(*self), PAGE_SIZE))]
     fn is_page_aligned(&self) -> bool {
-        self.is_aligned(PAGE_SIZE)
+        (self.bits() & (PAGE_SIZE - 1)) == 0
     }
 
     #[inline]
+    #[verus_verify]
     fn checked_add(&self, off: InnerAddr) -> Option<Self> {
-        self.bits().checked_add(off).map(|addr| addr.into())
+        self.bits().checked_add(off).map(|addr| Self::from(addr))
     }
 
     #[inline]
+    #[verus_verify]
     fn checked_sub(&self, off: InnerAddr) -> Option<Self> {
-        self.bits().checked_sub(off).map(|addr| addr.into())
+        self.bits().checked_sub(off).map(|addr| Self::from(addr))
     }
 
     #[inline]
@@ -108,13 +119,15 @@ pub trait Address:
     }
 
     #[inline]
+    #[verus_verify]
     fn page_offset(&self) -> usize {
         self.bits() & (PAGE_SIZE - 1)
     }
 
     #[inline]
     #[verus_verify]
-    #[requires(size > 0, from_spec::<_, InnerAddr>(*self) + size < usize::MAX)]
+    #[requires(size > 0, from_spec::<_, InnerAddr>(*self) + size <= InnerAddr::MAX)]
+    #[ensures(|ret: bool | ret == crosses_page_spec(*self, size))]
     fn crosses_page(&self, size: usize) -> bool {
         let start = self.bits();
         let x1 = start / PAGE_SIZE;
@@ -123,6 +136,8 @@ pub trait Address:
     }
 
     #[inline]
+    #[verus_verify]
+    #[ensures(|ret: InnerAddr| ret == pfn_spec(from_spec(*self)))]
     fn pfn(&self) -> InnerAddr {
         self.bits() >> PAGE_SHIFT
     }
@@ -130,7 +145,6 @@ pub trait Address:
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
 #[repr(transparent)]
-#[verus_verify]
 pub struct PhysAddr(InnerAddr);
 
 impl PhysAddr {
@@ -244,7 +258,7 @@ impl VirtAddr {
 
     /// Returns the index into page-table pages of given levels.
     #[verus_verify]
-    #[requires(L <= 3)]
+    #[requires(L <= 5)]
     #[ensures(|ret: usize| self.pgtbl_idx_ensures(L, ret))]
     pub const fn to_pgtbl_idx<const L: usize>(&self) -> usize {
         (self.0 >> (12 + L * 9)) & 0x1ffusize
@@ -292,6 +306,7 @@ impl VirtAddr {
     #[requires(self.const_add_requires(offset))]
     #[ensures(|ret: VirtAddr| [self.const_add_ensures(offset, ret)])]
     pub const fn const_add(&self, offset: usize) -> Self {
+        proof! {use_type_invariant(self);}
         VirtAddr::new(self.0 + offset)
     }
 
@@ -348,6 +363,8 @@ impl From<VirtAddr> for InnerAddr {
 
 impl From<u64> for VirtAddr {
     #[inline]
+    #[verus_verify(external_body)]
+    #[ensures(|ret: Self| ret.new_ensures(addr as usize))]
     fn from(addr: u64) -> Self {
         let addr: usize = addr.try_into().unwrap();
         VirtAddr::from(addr)
@@ -368,18 +385,16 @@ impl From<VirtAddr> for u64 {
 impl<T> From<*const T> for VirtAddr {
     #[inline]
     #[verus_verify]
-    #[requires(vaddr_is_valid(ptr as usize))]
     fn from(ptr: *const T) -> Self {
-        Self(ptr as InnerAddr)
+        Self::from(ptr as InnerAddr)
     }
 }
 
 #[verus_verify]
 impl<T> From<*mut T> for VirtAddr {
     #[verus_verify]
-    #[requires(vaddr_is_valid(ptr as usize))]
     fn from(ptr: *mut T) -> Self {
-        Self(ptr as InnerAddr)
+        Self::from(ptr as InnerAddr)
     }
 }
 
@@ -392,6 +407,10 @@ impl ops::Sub<VirtAddr> for VirtAddr {
     #[requires(self.sub_requires(other))]
     #[ensures(|ret: InnerAddr| self.sub_ensures(other, ret))]
     fn sub(self, other: VirtAddr) -> Self::Output {
+        proof! {
+            use_type_invariant(&self);
+            use_type_invariant(&other);
+        }
         sign_extend(self.0 - other.0)
     }
 }
@@ -405,6 +424,7 @@ impl ops::Sub<usize> for VirtAddr {
     #[requires(self.sub_usize_requires(other))]
     #[ensures(|ret: Self| self.sub_usize_ensures(other, ret))]
     fn sub(self, other: usize) -> Self {
+        proof! {use_type_invariant(self);}
         VirtAddr::from(self.0 - other)
     }
 }
@@ -417,6 +437,7 @@ impl ops::Add<InnerAddr> for VirtAddr {
     #[requires(self.const_add_requires(other))]
     #[ensures(|ret: VirtAddr| [self.const_add_ensures(other, ret)])]
     fn add(self, other: InnerAddr) -> Self {
+        proof! {use_type_invariant(self);}
         VirtAddr::from(self.0 + other)
     }
 }

@@ -13,6 +13,25 @@ pub trait FromSpec<T>: Sized {
     spec fn from_spec(v: T) -> Self;
 }
 
+macro_rules! def_primitive_from{
+    ($toty: ty, $($fromty: ty),*) => {
+        $(verus!{
+            impl FromSpec<$fromty> for $toty {
+            open spec fn from_spec(v: $fromty) -> Self {
+                v as $toty
+            }
+        }})*
+    }
+}
+
+def_primitive_from!{u16, u8, u16}
+
+def_primitive_from!{u32, u8, u16, u32}
+
+def_primitive_from!{u64, u8, u16, u32, usize}
+
+def_primitive_from!{usize, u8, u16, u32, usize}
+
 pub broadcast proof fn axiom_from_spec<T, U: FromSpec<T>>(v: T)
     ensures
         (#[trigger] from_spec::<T, U>(v)) === U::from_spec(v),
@@ -21,6 +40,7 @@ pub broadcast proof fn axiom_from_spec<T, U: FromSpec<T>>(v: T)
 }
 
 #[verifier::external_trait_specification]
+#[verifier::when_used_as_spec(from_spec)]
 pub trait ExInto<T>: Sized {
     type ExternalTraitSpecificationFor: core::convert::Into<T>;
 
