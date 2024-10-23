@@ -102,8 +102,11 @@ pub trait Address:
 
     #[inline]
     #[verus_verify]
+    #[ensures(|ret: Option<Self>| ret === checked_add_spec(*self, off))]
     fn checked_add(&self, off: InnerAddr) -> Option<Self> {
-        self.bits().checked_add(off).map(|addr| addr.into())
+        verus_exec_expr! {
+            self.bits().checked_add(off).map(|addr| -> (ret: Self) ensures ret === from_spec(addr) {addr.into()})
+        }
     }
 
     #[inline]
@@ -445,9 +448,11 @@ impl Address for VirtAddr {
     #[inline]
     #[verus_verify]
     fn checked_add(&self, off: InnerAddr) -> Option<Self> {
+        verus_exec_expr! {
         self.bits()
             .checked_add(off)
-            .map(|addr| sign_extend(addr).into())
+            .map(|addr| -> (ret: Self) ensures ret === from_spec(sign_extend_spec(addr)) {sign_extend(addr).into()})
+        }
     }
 
     #[inline]

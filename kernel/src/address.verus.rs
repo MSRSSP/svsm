@@ -109,6 +109,15 @@ pub open spec fn crosses_page_spec<T: Into<InnerAddr>>(addr: T, size: InnerAddr)
     pfn_spec(inner) != pfn_spec((inner + size - 1) as InnerAddr)
 }
 
+pub open spec fn checked_add_spec<A>(addr: A, off: InnerAddr) -> Option<A> {
+    let new = from_spec::<_, InnerAddr>(addr) + off;
+    if new <= InnerAddr::MAX {
+        Some(from_spec(new as InnerAddr))
+    } else {
+        None
+    }
+}
+
 // Define a view (@) for VirtAddr
 #[cfg(verus_keep_ghost)]
 impl View for VirtAddr {
