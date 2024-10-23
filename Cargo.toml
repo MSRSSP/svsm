@@ -14,8 +14,9 @@ members = [
     "libmstpm",
     # syscall interface definitions
     "syscall",
-    # verification library for svsm
-    "verify_proof", "verify_external",
+    # verification libraries for svsm
+    "verify_proof",
+    "verify_external",
 ]
 
 
@@ -53,7 +54,7 @@ packit = { git = "https://github.com/coconut-svsm/packit", version = "0.1.1" }
 
 # Verus repos
 builtin = { git = "https://github.com/verus-lang/verus", rev ="be86b1d7", default-features = false }
-builtin_macros = { git = "https://github.com/verus-lang/verus", rev ="be86b1d7", default-features = false  }
+builtin_macros = { git = "https://github.com/verus-lang/verus", rev ="be86b1d7", default-features = false }
 vstd = { git = "https://github.com/verus-lang/verus", rev ="be86b1d7", features = ["alloc"], default-features = false }
 
 # Verification libs
