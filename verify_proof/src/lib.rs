@@ -7,7 +7,12 @@
 #![no_std]
 #![allow(unused_braces)]
 #![allow(unexpected_cfgs)]
+use builtin_macros::*;
 
 pub mod bits;
-pub mod convert;
-pub mod layout;
+
+verus! {
+
+global size_of usize == 8;
+
+}

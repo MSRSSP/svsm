@@ -22,8 +22,7 @@ cd svsm/kernel
 cargo verify
 ```
 
-By default, it will verify all crates (except for vstd), if you want to skip
-verifying other crates, use `cargo verify --features verus_no_dep_verify`.
+By default, it only verifies the current crate.
 
 
 ### Pass verus arguments for verification.
@@ -64,11 +63,18 @@ similar to Dafny, F*, and Coq. To get started, be sure to read the [Verus
 Tutorial](https://verus-lang.github.io/verus/guide/overview.html)
 
 
-### Guidelines
+### Development Guidelines
 
 * Minimize annotations inside executable Rust.
-* Define specification and proof code in `*.verus.rs` or in a different crates.
-  Those codes wrapped in verus!{} macro and need verusfmt to format.
+* For a module `x`, define code-related specification and proof in `x.verus.rs` .
+* Codes wrapped in verus!{} macro could be formatted via verusfmt.
+  ./script/vfmt.sh triggers verusfmt for `*.verus.rs`
+* Use external specification and proofs from
+  [vstd](https://verus-lang.github.io/verus/verusdoc/vstd/) when possible.
+* When verifying with functions/structs/traits from external crates, define
+  specifications in `verify_external/` if `vstd` does not provide.
+* Expensive and reusable proofs are stored in `verify_proof/` if `vstd` does not
+  provide.
 
 ```
 cd svsm

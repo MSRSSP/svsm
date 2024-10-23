@@ -4,10 +4,11 @@
 //
 // Author: Ziqiao Zhou <ziqiaozhou@microsoft.com>
 use vstd::prelude::*;
-
 verus! {
 
-pub open spec fn from_spec<T1, T2>(v: T1) -> T2;
+pub broadcast group convert_group {
+    axiom_from_spec,
+}
 
 pub trait FromSpec<T>: Sized {
     spec fn from_spec(v: T) -> Self;
@@ -32,15 +33,21 @@ def_primitive_from!{u64, u8, u16, u32, usize}
 
 def_primitive_from!{usize, u8, u16, u32, usize}
 
+pub open spec fn from_spec<T1, T2>(v: T1) -> T2;
+
+#[verifier(inline)]
+pub open spec fn default_into_spec<T, U: From<T>>(v: T) -> U {
+    from_spec(v)
+}
+
+#[verifier(external_body)]
 pub broadcast proof fn axiom_from_spec<T, U: FromSpec<T>>(v: T)
     ensures
-        (#[trigger] from_spec::<T, U>(v)) === U::from_spec(v),
+        #[trigger] from_spec::<T, U>(v) === U::from_spec(v),
 {
-    admit();
 }
 
 #[verifier::external_trait_specification]
-#[verifier::when_used_as_spec(from_spec)]
 pub trait ExInto<T>: Sized {
     type ExternalTraitSpecificationFor: core::convert::Into<T>;
 
@@ -61,41 +68,12 @@ pub trait ExFrom<T>: Sized {
 }
 
 #[verifier::external_fn_specification]
-pub fn ex_map<T, U, F: FnOnce(T) -> U>(a: Option<T>, f: F) -> (ret: Option<U>)
-    requires
-        a.is_some() ==> call_requires(f, (a.unwrap(),)),
+#[verifier::when_used_as_spec(default_into_spec)]
+pub fn ex_into<T, U: From<T>>(a: T) -> (ret: U)
     ensures
-        ret.is_some() ==> a.is_some(),
-        ret.is_some() ==> call_ensures(f, (a.unwrap(),), ret.unwrap()),
+        ret === from_spec(a),
 {
-    a.map(f)
-}
-
-pub broadcast group group_convert_axioms {
-    axiom_from_spec,
+    a.into()
 }
 
 } // verus!
-macro_rules! num_specs {
-    ($uN:ty) => {
-        verus! {
-        pub open spec fn saturating_add(x: $uN, y: $uN) -> $uN {
-            if x + y > <$uN>::MAX {
-                <$uN>::MAX
-            } else {
-                (x + y) as $uN
-            }
-        }
-
-        #[verifier::external_fn_specification]
-        #[verifier::when_used_as_spec(saturating_add)]
-        pub fn ex_saturating_add(x: $uN, y: $uN) -> (res: $uN)
-            ensures res == saturating_add(x, y)
-        {
-            x.saturating_add(y)
-        }
-        }
-    };
-}
-
-num_specs! {usize}

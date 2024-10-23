@@ -7,7 +7,7 @@ use super::*;
 
 verus! {
 
-broadcast use verismo::bits::lemma_bit_usize_shl_values;
+broadcast use verify_proof::bits::lemma_bit_usize_shl_values;
 
 #[verifier(inline)]
 pub spec const VADDR_MAX_BITS: nat = 48;
@@ -77,7 +77,7 @@ pub broadcast proof fn lemma_inner_addr_as_vaddr(bits: InnerAddr)
         VADDR_UPPER_MASK > VADDR_LOWER_MASK,
 {
     broadcast use sign_extend_proof;
-    broadcast use verismo::bits::lemma_bit_usize_shl_values;
+    broadcast use verify_proof::bits::lemma_bit_usize_shl_values;
 
     assert(top_all_ones(bits) == (bits >= VADDR_UPPER_MASK)) by (bit_vector);
     assert(top_all_zeros(bits) == (bits <= VADDR_LOWER_MASK)) by (bit_vector);
@@ -93,13 +93,13 @@ pub broadcast proof fn reveal_pfn(addr: usize)
         #[trigger] pfn_spec(addr) == addr / PAGE_SIZE,
         pfn_spec(addr) == addr >> PAGE_SHIFT,
 {
-    broadcast use verismo::bits::lemma_bit_usize_shl_values;
+    broadcast use verify_proof::bits::lemma_bit_usize_shl_values;
 
-    verismo::bits::lemma_bit_usize_shr_is_div(addr, PAGE_SHIFT);
+    verify_proof::bits::lemma_bit_usize_shr_is_div(addr, PAGE_SHIFT);
 }
 
 pub open spec fn align_requires(align: InnerAddr) -> bool {
-    &&& verismo::bits::is_pow_of_2(align as u64)
+    &&& verify_proof::bits::is_pow_of_2(align as u64)
 }
 
 pub open spec fn _align_up_requires(bits: InnerAddr, align: InnerAddr) -> bool {
@@ -125,12 +125,12 @@ pub open spec fn align_down_spec(val: InnerAddr, align: InnerAddr) -> int {
 }
 
 broadcast group align_proof {
-    verismo::bits::lemma_bit_usize_not_is_sub,
-    verismo::bits::lemma_bit_usize_shl_values,
-    verismo::bits::lemma_bit_u64_shl_values,
+    verify_proof::bits::lemma_bit_usize_not_is_sub,
+    verify_proof::bits::lemma_bit_usize_shl_values,
+    verify_proof::bits::lemma_bit_u64_shl_values,
     vstd::bits::lemma_u64_pow2_no_overflow,
-    verismo::bits::lemma_bit_usize_and_mask,
-    verismo::bits::lemma_bit_usize_and_mask_is_mod,
+    verify_proof::bits::lemma_bit_usize_and_mask,
+    verify_proof::bits::lemma_bit_usize_and_mask_is_mod,
 }
 
 pub broadcast proof fn proof_align_up(x: usize, align: usize)

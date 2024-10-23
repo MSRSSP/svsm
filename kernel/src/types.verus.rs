@@ -6,7 +6,7 @@
 verus! {
 
 pub broadcast group group_types_proof {
-    verismo::bits::lemma_bit_usize_shl_values,
+    verify_proof::bits::lemma_bit_usize_shl_values,
 }
 
 broadcast use group_types_proof;

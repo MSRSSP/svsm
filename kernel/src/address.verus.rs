@@ -6,20 +6,20 @@
 verus! {
 
 use vstd::prelude::*;
-use verismo::convert::{FromSpec, from_spec, axiom_from_spec};
+use verify_external::convert::{FromSpec, from_spec, axiom_from_spec};
 
 pub broadcast group sign_extend_proof {
-    verismo::bits::lemma_bit_usize_not_is_sub,
-    verismo::bits::lemma_bit_usize_shl_values,
-    verismo::bits::lemma_bit_usize_or_mask,
-    verismo::bits::lemma_bit_usize_and_mask,
+    verify_proof::bits::lemma_bit_usize_not_is_sub,
+    verify_proof::bits::lemma_bit_usize_shl_values,
+    verify_proof::bits::lemma_bit_usize_or_mask,
+    verify_proof::bits::lemma_bit_usize_and_mask,
     lemma_check_sign_bit,
 }
 
 pub broadcast group address_align_proof {
     crate::types::group_types_proof,
     axiom_from_spec,
-    verismo::bits::lemma_bit_usize_and_mask_is_mod,
+    verify_proof::bits::lemma_bit_usize_and_mask_is_mod,
     address_spec::proof_align_up,
     address_spec::lemma_align_down,
 }
@@ -28,7 +28,7 @@ broadcast group vaddr_impl_proof {
     sign_extend_proof,
     address_spec::lemma_inner_addr_as_vaddr,
     address_spec::lemma_upper_address_has_sign_bit,
-    verismo::bits::lemma_bit_usize_and_mask_is_mod,
+    verify_proof::bits::lemma_bit_usize_and_mask_is_mod,
     address_align_proof,
     address_spec::reveal_pfn,
 }

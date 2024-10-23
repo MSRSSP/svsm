@@ -70,6 +70,7 @@ fn init_verify() {
             "--multiple-errors=5",
             "--triggers-silent",
             "--no-auto-recommends-check",
+            "--trace",
             "-Z unstable-options",
         ];
         println!("cargo:rustc-env=VERUS_ARGS={}", verus_args.join(" "));

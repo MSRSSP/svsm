@@ -940,7 +940,8 @@ dependencies = [
  "rustc_version",
  "syscall",
  "test",
- "verismo",
+ "verify_external",
+ "verify_proof",
  "vstd",
  "zerocopy 0.8.7",
 ]
@@ -1098,7 +1099,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8c5f0a0af699448548ad1a2fbf920fb4bee257eae39953ba95cb84891a0446a"
 
 [[package]]
-name = "verismo"
+name = "verify_external"
+version = "0.1.0"
+dependencies = [
+ "builtin",
+ "builtin_macros",
+ "vstd",
+]
+
+[[package]]
+name = "verify_proof"
 version = "0.1.0"
 dependencies = [
  "builtin",

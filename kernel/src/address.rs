@@ -103,13 +103,13 @@ pub trait Address:
     #[inline]
     #[verus_verify]
     fn checked_add(&self, off: InnerAddr) -> Option<Self> {
-        self.bits().checked_add(off).map(|addr| Self::from(addr))
+        self.bits().checked_add(off).map(|addr| addr.into())
     }
 
     #[inline]
     #[verus_verify]
     fn checked_sub(&self, off: InnerAddr) -> Option<Self> {
-        self.bits().checked_sub(off).map(|addr| Self::from(addr))
+        self.bits().checked_sub(off).map(|addr| addr.into())
     }
 
     #[inline]
@@ -442,8 +442,10 @@ impl ops::Add<InnerAddr> for VirtAddr {
     }
 }
 
+#[verus_verify]
 impl Address for VirtAddr {
     #[inline]
+    #[verus_verify]
     fn checked_add(&self, off: InnerAddr) -> Option<Self> {
         self.bits()
             .checked_add(off)
@@ -451,6 +453,7 @@ impl Address for VirtAddr {
     }
 
     #[inline]
+    #[verus_verify]
     fn checked_sub(&self, off: InnerAddr) -> Option<Self> {
         self.bits()
             .checked_sub(off)

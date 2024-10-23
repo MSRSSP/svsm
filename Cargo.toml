@@ -15,7 +15,7 @@ members = [
     # syscall interface definitions
     "syscall",
     # verification library for svsm
-    "verismo",
+    "verify_proof", "verify_external",
 ]
 
 
@@ -57,7 +57,8 @@ builtin_macros = { git = "https://github.com/verus-lang/verus", rev ="be86b1d7",
 vstd = { git = "https://github.com/verus-lang/verus", rev ="be86b1d7", features = ["alloc"], default-features = false }
 
 # Verification libs
-verismo = { path = "verismo", default-features = false  }
+verify_proof = { path = "verify_proof", default-features = false  }
+verify_external = { path = "verify_external", default-features = false  }
 
 [workspace.lints.rust]
 future_incompatible = { level = "deny", priority = 127 }
