@@ -42,7 +42,7 @@ mod address_spec { include!("address_inner.verus.rs");  }
 #[cfg(verus_keep_ghost)]
 use address_spec::*;
 
-pub open spec fn is_valid_addr(addr: usize) -> bool {
+pub open spec fn is_valid_addr(addr: InnerAddr) -> bool {
     addr <= VADDR_LOWER_MASK || addr >= VADDR_UPPER_MASK
 }
 
@@ -64,15 +64,28 @@ pub open spec fn sign_extend_ensures(addr: InnerAddr, ret: InnerAddr) -> bool {
     &&& !check_sign_bit(addr) ==> top_all_zeros(ret)
 }
 
-pub open spec fn align_up_ensures(val: InnerAddr, align: InnerAddr, ret: InnerAddr) -> bool {
-    let r = val % align;
-    &&& ret % align == 0
-    &&& ret >= val
-    &&& ret == align_up_spec(val, align)
+pub open spec fn addr_align_up<A>(addr: A, align: InnerAddr) -> A {
+    from_spec(align_up_spec(from_spec(addr), align))
+}
+
+pub open spec fn addr_page_align_up<A>(addr: A) -> A {
+    from_spec(align_up_spec(from_spec(addr), PAGE_SIZE))
+}
+
+pub open spec fn addr_page_align_down<A>(addr: A) -> A {
+    from_spec(align_down_spec(from_spec(addr), PAGE_SIZE) as usize)
 }
 
 pub open spec fn is_aligned_spec(val: InnerAddr, align: InnerAddr) -> bool {
     val % align == 0
+}
+
+pub open spec fn addr_is_aligned_spec<A>(addr: A, align: InnerAddr) -> bool {
+    is_aligned_spec(from_spec(addr), align)
+}
+
+pub open spec fn addr_is_page_aligned_spec<A>(addr: A) -> bool {
+    is_aligned_spec(from_spec(addr), PAGE_SIZE)
 }
 
 pub open spec fn pt_idx_spec(addr: usize, l: usize) -> usize
@@ -132,7 +145,7 @@ impl VirtAddr {
     }
 
     // Virtual memory offset indicating the distance from 0
-    pub closed spec fn offset(&self) -> int {
+    pub open spec fn offset(&self) -> int {
         if self.is_low() {
             self@ as int
         } else {
@@ -148,7 +161,7 @@ impl VirtAddr {
         ret == pt_idx_spec(self@, l)
     }
 
-    pub open spec fn pfn_spec(&self) -> usize {
+    pub open spec fn pfn_spec(&self) -> InnerAddr {
         pfn_spec(self@)
     }
 
@@ -160,22 +173,19 @@ impl VirtAddr {
         self.offset() + offset < VADDR_RANGE_SIZE
     }
 
-    // if the address value >= 1<<47, the address should be a high memory address.
     pub open spec fn const_add_ensures(&self, offset: usize, ret: VirtAddr) -> bool {
         &&& self.offset() + offset == ret.offset()
     }
 
+    // The current implementation assumes they are both high or low address.
     pub open spec fn sub_requires(&self, other: Self) -> bool {
         &&& self@ >= other@
         &&& other.is_high() || self.is_low()
     }
 
-    /// Substract a address from another should only make sense if they are both
-    /// high or low addresses.
-    ///
-    /// self.is_high() && other.is_low() ==> ret == self@ - VADDR_UPPER_MASK + VADDR_LOWER_MASK - other@ + 1
+    // ret is the size of availabe virtual memory between the two addresses.
     pub open spec fn sub_ensures(&self, other: Self, ret: InnerAddr) -> bool {
-        (other.is_high() || self.is_low()) ==> ret == self@ - other@
+        &&& ret == self.offset() - other.offset()
     }
 
     pub open spec fn sub_usize_requires(&self, other: usize) -> bool {
@@ -183,7 +193,7 @@ impl VirtAddr {
     }
 
     pub open spec fn sub_usize_ensures(&self, other: usize, ret: Self) -> bool {
-        self.offset() - other == ret.offset()
+        ret.offset() == self.offset() - other
     }
 }
 

@@ -23,10 +23,9 @@ const SIGN_BIT: usize = 47;
 
 #[inline]
 #[verus_verify]
-#[ensures(|ret: InnerAddr| [sign_extend_ensures(addr, ret)])]
+#[ensures(|ret: InnerAddr| sign_extend_ensures(addr, ret))]
 const fn sign_extend(addr: InnerAddr) -> InnerAddr {
     let mask = 1usize << SIGN_BIT;
-
     if (addr & mask) == mask {
         addr | !((1usize << SIGN_BIT) - 1)
     } else {
@@ -57,7 +56,7 @@ pub trait Address:
     #[inline]
     #[verus_verify]
     #[requires(align_up_requires(from_spec(*self), align))]
-    #[ensures(|ret: Self| ret === from_spec(align_up_spec(from_spec(*self), align)))]
+    #[ensures(|ret: Self| ret === addr_align_up(*self, align))]
     fn align_up(&self, align: InnerAddr) -> Self {
         Self::from((self.bits() + (align - 1)) & !(align - 1))
     }
@@ -65,15 +64,15 @@ pub trait Address:
     #[inline]
     #[verus_verify]
     #[requires(align_up_requires(from_spec(*self), PAGE_SIZE))]
-    #[ensures(|ret: Self| ret === from_spec(align_up_spec(from_spec(*self), PAGE_SIZE)))]
+    #[ensures(|ret: Self| ret === addr_page_align_up(*self))]
     fn page_align_up(&self) -> Self {
-        Self::from((self.bits() + (PAGE_SIZE - 1)) & !(PAGE_SIZE - 1))
+        self.align_up(PAGE_SIZE)
     }
 
     #[inline]
     #[verus_verify]
     #[requires(align_requires(PAGE_SIZE))]
-    #[ensures(|ret: Self| ret === from_spec(align_down_spec(from_spec(*self), PAGE_SIZE) as usize))]
+    #[ensures(|ret: Self| ret === addr_page_align_down(*self))]
     fn page_align(&self) -> Self {
         Self::from(self.bits() & !(PAGE_SIZE - 1))
     }
@@ -81,23 +80,24 @@ pub trait Address:
     #[inline]
     #[verus_verify]
     #[requires(align_requires(align))]
-    #[ensures(|ret: bool| ret == is_aligned_spec(from_spec(*self), align))]
+    #[ensures(|ret: bool| ret == addr_is_aligned_spec(*self, align))]
     fn is_aligned(&self, align: InnerAddr) -> bool {
         (self.bits() & (align - 1)) == 0
     }
 
     #[inline]
-    #[verus_verify]
-    #[requires(align_requires(core::mem::align_of::<T>() as usize))]
+    #[verus_verify(external_body)]
+    #[requires(align_requires(core::mem::align_of::<T>()))]
+    #[ensures(|ret: bool| ret == addr_is_aligned_spec(*self, core::mem::align_of::<T>()))]
     fn is_aligned_to<T>(&self) -> bool {
-        (*self).into() & (core::mem::align_of::<T>() - 1) == 0
+        self.is_aligned(core::mem::align_of::<T>())
     }
 
     #[inline]
     #[verus_verify]
-    #[ensures(|ret: bool| ret == is_aligned_spec(from_spec(*self), PAGE_SIZE))]
+    #[ensures(|ret: bool| ret == addr_is_page_aligned_spec(*self))]
     fn is_page_aligned(&self) -> bool {
-        (self.bits() & (PAGE_SIZE - 1)) == 0
+        self.is_aligned(PAGE_SIZE)
     }
 
     #[inline]
@@ -126,7 +126,10 @@ pub trait Address:
 
     #[inline]
     #[verus_verify]
-    #[requires(size > 0, from_spec::<_, InnerAddr>(*self) + size <= InnerAddr::MAX)]
+    #[requires(
+        size > 0,
+        from_spec::<_, InnerAddr>(*self) + size <= InnerAddr::MAX
+    )]
     #[ensures(|ret: bool | ret == crosses_page_spec(*self, size))]
     fn crosses_page(&self, size: usize) -> bool {
         let start = self.bits();
@@ -304,7 +307,7 @@ impl VirtAddr {
 
     #[verus_verify]
     #[requires(self.const_add_requires(offset))]
-    #[ensures(|ret: VirtAddr| [self.const_add_ensures(offset, ret)])]
+    #[ensures(|ret: VirtAddr| self.const_add_ensures(offset, ret))]
     pub const fn const_add(&self, offset: usize) -> Self {
         proof! {use_type_invariant(self);}
         VirtAddr::new(self.0 + offset)
@@ -407,10 +410,6 @@ impl ops::Sub<VirtAddr> for VirtAddr {
     #[requires(self.sub_requires(other))]
     #[ensures(|ret: InnerAddr| self.sub_ensures(other, ret))]
     fn sub(self, other: VirtAddr) -> Self::Output {
-        proof! {
-            use_type_invariant(&self);
-            use_type_invariant(&other);
-        }
         sign_extend(self.0 - other.0)
     }
 }
@@ -424,7 +423,6 @@ impl ops::Sub<usize> for VirtAddr {
     #[requires(self.sub_usize_requires(other))]
     #[ensures(|ret: Self| self.sub_usize_ensures(other, ret))]
     fn sub(self, other: usize) -> Self {
-        proof! {use_type_invariant(self);}
         VirtAddr::from(self.0 - other)
     }
 }
@@ -435,7 +433,7 @@ impl ops::Add<InnerAddr> for VirtAddr {
 
     #[verus_verify]
     #[requires(self.const_add_requires(other))]
-    #[ensures(|ret: VirtAddr| [self.const_add_ensures(other, ret)])]
+    #[ensures(|ret: VirtAddr| self.const_add_ensures(other, ret))]
     fn add(self, other: InnerAddr) -> Self {
         proof! {use_type_invariant(self);}
         VirtAddr::from(self.0 + other)
