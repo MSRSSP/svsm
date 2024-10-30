@@ -1,9 +1,7 @@
 name: Verification
 
-on:
-  workflow_dispatch:
-  pull_request:
-    branches: [ "verify" ]
+# Only allow manual triggering of the workflow
+on: workflow_dispatch
 
 env:
   CARGO_TERM_COLOR: always
