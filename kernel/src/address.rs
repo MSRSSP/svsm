@@ -169,17 +169,21 @@ pub trait Address:
     }
 }
 
+#[verus_verify]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
 #[repr(transparent)]
 pub struct PhysAddr(InnerAddr);
 
+#[verus_verify]
 impl PhysAddr {
     #[inline]
+    #[verus_spec(ret => ensures ret@ == p)]
     pub const fn new(p: InnerAddr) -> Self {
         Self(p)
     }
 
     #[inline]
+    #[verus_spec(ret => ensures ret@ == 0)]
     pub const fn null() -> Self {
         Self(0)
     }
@@ -268,7 +272,7 @@ pub struct VirtAddr(InnerAddr);
 #[verus_verify]
 impl VirtAddr {
     #[inline]
-    #[verus_verify]
+    #[verus_spec(ret => ensures ret@ == 0)]
     pub const fn null() -> Self {
         Self(0)
     }

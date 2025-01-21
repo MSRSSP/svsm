@@ -19,7 +19,13 @@ use core::{cmp, ptr, slice};
 #[cfg(any(test, fuzzing))]
 use crate::locking::LockGuard;
 
+use builtin_macros::*;
+
+#[cfg(verus_keep_ghost_body)]
+include!("alloc.verus.rs");
+
 /// Represents possible errors that can occur during memory allocation.
+#[verus_verify]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AllocError {
     /// The provided page type is invalid.
@@ -197,6 +203,7 @@ impl PageStorageType {
 }
 
 /// Struct representing information about a free memory page.
+#[verus_verify]
 #[derive(Clone, Copy, Debug)]
 struct FreeInfo {
     /// Index of the next free page.
@@ -222,6 +229,7 @@ impl FreeInfo {
 }
 
 /// Struct representing information about an allocated memory page.
+#[verus_verify]
 #[derive(Clone, Copy, Debug)]
 struct AllocatedInfo {
     order: usize,
@@ -241,6 +249,7 @@ impl AllocatedInfo {
 }
 
 /// Struct representing information about a slab memory page.
+#[verus_verify]
 #[derive(Clone, Copy, Debug)]
 struct SlabPageInfo {
     item_size: u64,
@@ -260,6 +269,7 @@ impl SlabPageInfo {
 }
 
 /// Struct representing information about a compound memory page.
+#[verus_verify]
 #[derive(Clone, Copy, Debug)]
 struct CompoundInfo {
     order: usize,
@@ -279,6 +289,7 @@ impl CompoundInfo {
 }
 
 /// Struct representing information about a reserved memory page.
+#[verus_verify]
 #[derive(Clone, Copy, Debug)]
 struct ReservedInfo;
 
@@ -295,6 +306,7 @@ impl ReservedInfo {
 }
 
 /// Struct representing information about a file memory page.
+#[verus_verify]
 #[derive(Clone, Copy, Debug)]
 struct FileInfo {
     /// Reference count of the file page.
@@ -321,6 +333,7 @@ impl FileInfo {
 
 /// Enum representing different types of page information.
 #[derive(Clone, Copy, Debug)]
+#[verus_verify]
 enum PageInfo {
     Free(FreeInfo),
     Allocated(AllocatedInfo),
@@ -369,6 +382,7 @@ pub struct MemInfo {
 
 /// Memory region with its physical/virtual addresses, page count, as well
 /// as other details.
+#[verus_verify]
 #[derive(Debug, Default)]
 struct MemoryRegion {
     start_phys: PhysAddr,
@@ -377,11 +391,21 @@ struct MemoryRegion {
     nr_pages: [usize; MAX_ORDER],
     next_page: [usize; MAX_ORDER],
     free_pages: [usize; MAX_ORDER],
+    #[cfg(verus_keep_ghost_body)]
+    perms: Tracked<MemoryRegionPerms<MAX_ORDER>>,
 }
 
+#[verus_verify]
 impl MemoryRegion {
     /// Creates a new [`MemoryRegion`] with default values.
+    #[verus_spec(ret => ensures true)]
     const fn new() -> Self {
+        verus_stmts! {
+            let mut perms = tracked_exec_arbirary();
+            proof {
+                *perms.borrow_mut() = MemoryRegionPerms::tracked_new();
+            }
+        }
         Self {
             start_phys: PhysAddr::null(),
             start_virt: VirtAddr::null(),
@@ -389,6 +413,8 @@ impl MemoryRegion {
             nr_pages: [0; MAX_ORDER],
             next_page: [0; MAX_ORDER],
             free_pages: [0; MAX_ORDER],
+            #[cfg(verus_keep_ghost_body)]
+            perms,
         }
     }
 
@@ -553,6 +579,10 @@ impl MemoryRegion {
     }
 
     /// Refills the free page list for a given order.
+    #[verus_verify(external_body)]
+    #[verus_spec(ret =>
+        ensures (*old(self))@.ensures_has_free_pages(self@, ret.is_ok(), order as int)
+    )]
     fn refill_page_list(&mut self, order: usize) -> Result<(), AllocError> {
         let next_page = *self
             .next_page
@@ -1197,6 +1227,7 @@ pub fn memory_info() -> MemInfo {
 
 /// Represents a slab memory page, used for efficient allocation of
 /// fixed-size objects.
+#[verus_verify]
 #[derive(Debug, Default)]
 struct SlabPage<const N: u16> {
     vaddr: VirtAddr,

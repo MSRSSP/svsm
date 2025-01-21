@@ -227,4 +227,14 @@ impl FromSpec<VirtAddr> for u64 {
     }
 }
 
+// Define a view (@) for VirtAddr
+#[cfg(verus_keep_ghost)]
+impl View for PhysAddr {
+    type V = InnerAddr;
+
+    closed spec fn view(&self) -> InnerAddr {
+        self.0
+    }
+}
+
 } // verus!
