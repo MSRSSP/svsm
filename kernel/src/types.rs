@@ -8,6 +8,8 @@ use crate::error::SvsmError;
 use crate::sev::vmsa::VMPL_MAX;
 
 use builtin_macros::*;
+
+#[cfg(verus_keep_ghost_body)]
 include!("types.verus.rs");
 
 verus! {
