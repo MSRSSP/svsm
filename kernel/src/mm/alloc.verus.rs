@@ -6,6 +6,8 @@ use vstd::raw_ptr::PointsToRaw;
 use verify_proof::tracked_exec_arbirary;
 use verify_external::convert::FromSpec;
 
+include!("alloc.proof.verus.rs");
+
 pub broadcast group alloc_proof {
     crate::address::sign_extend_proof,
     crate::types::lemma_page_size,
@@ -229,7 +231,9 @@ impl<const N: usize> MemoryRegionPerms<N> {
 
     spec fn wf_reserved_init(&self) -> bool {
         let reserved = self.reserved;
-        forall|pfn| 0 <= pfn < self.page_count ==> (#[trigger] reserved[pfn]).opt_value().is_init()
+        forall|pfn|
+            #![trigger reserved[pfn]]
+            0 <= pfn < self.page_count ==> self.spec_page_info(pfn).is_some()
     }
 
     spec fn wf_item(&self, order: int, i: int) -> bool {
@@ -238,7 +242,7 @@ impl<const N: usize> MemoryRegionPerms<N> {
         let perm = self.avail[(order, i)];
         let info = self.get_free_info(pfn);
         let vaddr = self.get_virt(pfn);
-        &&& pfn > 0
+        &&& 0 < pfn < self.page_count
         &&& perm.order == order
         &&& perm.vaddr == vaddr
         &&& info.is_some()
@@ -248,6 +252,11 @@ impl<const N: usize> MemoryRegionPerms<N> {
             info.unwrap().next_page == 0
         }
         &&& info.unwrap().order == order
+    }
+
+    spec fn wf_next(&self, order: int) -> bool {
+        let i = self.next[order].len() - 1;
+        self.wf_item(order, i)
     }
 
     spec fn spec_page_count(&self) -> int {
@@ -264,7 +273,8 @@ impl<const N: usize> MemoryRegionPerms<N> {
 
     spec fn wf_info(&self) -> bool {
         let next = self.next;
-        &&& forall|order, i| 0 <= order < N && 0 <= i < next[order].len() ==> self.wf_item(order, i)
+        &&& forall|order, i|
+            0 <= order < N && 0 <= i < next[order].len() ==> #[trigger] self.wf_item(order, i)
         &&& self.wf_reserved()
     }
 
@@ -380,19 +390,12 @@ impl MemoryRegion {
     }
 
     // well-formed in public interfaces
-    pub closed spec fn wf_func_boundary(&self) -> bool {
+    pub closed spec fn wf_after_init(&self) -> bool {
         let perms = self@;
         &&& self.wf()
         &&& perms.next_pages() =~= self.next_page@
         &&& perms.wf_reserved_init()
         &&& perms.free_page_counts() =~= self.free_pages@
-    }
-
-    // well-formed in public interfaces
-    pub closed spec fn wf_after_init(&self) -> bool {
-        let perms = self@;
-        &&& self.wf()
-        &&& perms.next_pages() =~= self.next_page@
     }
 
     pub closed spec fn ensures_get_next_page(
@@ -407,13 +410,18 @@ impl MemoryRegion {
         let new_tmp = new_self.tmp_perms@.to_seq();
         let perm = new_tmp.last();
         let vaddr = new_perms.get_virt(ret.unwrap() as int);
-        &&& self.wf_func_boundary()
+        &&& self.wf_after_init()
         &&& ret.is_ok() ==> {
             &&& perm.order == order
             &&& perm.vaddr == vaddr
             &&& new_tmp =~= tmp.push(perm)
         }
         &&& ret.is_err() ==> perms === new_perms
+    }
+
+    pub closed spec fn ens_read_page_info(self, pfn: usize, ret: PageInfo) -> bool {
+        &&& self@.spec_page_info(pfn as int).is_some()
+        &&& self@.spec_page_info(pfn as int).unwrap() === ret
     }
 }
 

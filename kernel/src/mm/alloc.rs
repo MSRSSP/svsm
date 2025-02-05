@@ -354,8 +354,10 @@ enum PageInfo {
     Reserved(ReservedInfo),
 }
 
+#[verus_verify]
 impl PageInfo {
     /// Converts [`PageInfo`] into a [`PageStorageType`].
+    #[verus_verify(external_body)]
     fn to_mem(self) -> PageStorageType {
         match self {
             Self::Free(fi) => fi.encode(),
@@ -370,7 +372,7 @@ impl PageInfo {
     /// Converts a [`PageStorageType`] into [`PageInfo`].
     #[verus_verify(external_body)]
     #[verus_spec(
-        returns Self::spec_decode(mem),
+        returns Self::spec_decode(mem).unwrap(),
         opens_invariants none
         no_unwind when Self::spec_decode(mem).is_some()
     )]
@@ -483,7 +485,7 @@ impl MemoryRegion {
     /// The permission-protected access replaces the unsafe page_info_ptr()
     #[verus_spec(ret =>
         requires
-            self.wf_func_boundary(),
+            self.wf_after_init(),
             pfn < self.page_count,
         ensures
             Some(*ret) == self@.spec_page_storage_type(pfn as int)
@@ -505,6 +507,7 @@ impl MemoryRegion {
     ///
     /// Panics if the page frame number is invalid.
     #[verus_spec(
+        ensures pfn < self.page_count
         no_unwind when pfn < self.page_count
     )]
     fn check_pfn(&self, pfn: usize) {
@@ -530,11 +533,12 @@ impl MemoryRegion {
     }
 
     /// Reads page information for a given page frame number.
-    #[verus_verify(external_body)]
     #[verus_spec(ret =>
+        requires
+            self.wf_after_init(),
+            pfn < self.page_count, // self.check_pfn(pfn) is not necessary.
         ensures
-            self@.spec_page_info(pfn as int).is_some(),
-            self@.spec_page_info(pfn as int).unwrap() === ret,
+            self.ens_read_page_info(pfn, ret),
     )]
     fn read_page_info(&self, pfn: usize) -> PageInfo {
         self.check_pfn(pfn);
@@ -558,17 +562,17 @@ impl MemoryRegion {
     }
 
     /// Gets the next available page frame number for a given order.
-    #[verus_verify]
     #[verus_spec(ret =>
         requires
             order < MAX_ORDER,
-            old(self).wf_func_boundary(),
+            old(self).wf_after_init(),
         ensures
             old(self).ensures_get_next_page(order as int, &*self, ret),
     )]
     fn get_next_page(&mut self, order: usize) -> Result<usize, AllocError> {
         proof! {
             use_type_invariant(&*self);
+            broadcast use lemma_wf_next_page_info;
         }
         let pfn = self.next_page[order];
 
@@ -586,8 +590,7 @@ impl MemoryRegion {
 
         self.next_page[order] = fi.next_page;
         proof! {
-            let order = order as int;
-            let tracked perm = self.perms.borrow_mut().tracked_pop_next_perm(order, pfn as int);
+            let tracked perm = self.perms.borrow_mut().tracked_pop_next_perm(order as int, pfn as int);
             self.tmp_perms.borrow_mut().tracked_push(perm);
         }
 
