@@ -18,11 +18,15 @@
 // Add spec for convert traits
 pub mod convert;
 
-use builtin_macros::*;
+// Add spec for ops traits
+pub mod ops;
+
+use vstd::prelude::*;
 
 verus! {
-#[cfg_attr(verus_keep_ghost, verifier::broadcast_use_by_default_when_this_crate_is_imported)]
+#[verifier::broadcast_use_by_default_when_this_crate_is_imported]
 pub broadcast group external_axiom {
-    convert::convert_group
+    convert::convert_group,
+    ops::ops_def_group,
 }
 }

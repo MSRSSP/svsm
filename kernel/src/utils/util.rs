@@ -8,6 +8,16 @@ use crate::address::{Address, VirtAddr};
 use crate::types::PAGE_SIZE;
 use core::ops::{Add, BitAnd, Not, Sub};
 
+use vstd::prelude::*;
+#[cfg(feature = "verus")] include!("util.verus.rs");
+
+#[verus_spec(ret =>
+    requires
+        impl_align_up_requires((addr, align)),
+    ensures
+        impl_align_up_ensures((addr, align), ret),
+)]
+#[cfg_attr(feature = "verus", verifier::when_used_as_spec(align_up_spec))]
 pub fn align_up<T>(addr: T, align: T) -> T
 where
     T: Add<Output = T> + Sub<Output = T> + BitAnd<Output = T> + Not<Output = T> + From<u8> + Copy,
@@ -16,6 +26,12 @@ where
     (addr + mask) & !mask
 }
 
+#[verus_spec(ret =>
+    requires
+        impl_align_down_requires((addr, align)),
+    ensures
+        impl_align_down_ensures((addr, align), ret),
+)]
 pub fn align_down<T>(addr: T, align: T) -> T
 where
     T: Sub<Output = T> + Not<Output = T> + BitAnd<Output = T> + From<u8> + Copy,
@@ -23,6 +39,12 @@ where
     addr & !(align - T::from(1u8))
 }
 
+#[verus_spec(ret =>
+    requires
+        impl_is_aligned_requires((addr, align)),
+    ensures
+        impl_is_aligned_ensures((addr, align), ret)
+)]
 pub fn is_aligned<T>(addr: T, align: T) -> bool
 where
     T: Sub<Output = T> + BitAnd<Output = T> + PartialEq + From<u8>,

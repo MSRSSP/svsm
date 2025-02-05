@@ -7,7 +7,7 @@
 use crate::error::SvsmError;
 use crate::sev::vmsa::VMPL_MAX;
 
-use builtin_macros::*;
+use vstd::prelude::*;
 include!("types.verus.rs");
 
 verus! {

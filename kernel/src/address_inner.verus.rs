@@ -98,78 +98,61 @@ pub broadcast proof fn reveal_pfn(addr: usize)
     verify_proof::bits::lemma_bit_usize_shr_is_div(addr, PAGE_SHIFT);
 }
 
-pub open spec fn align_requires(align: InnerAddr) -> bool {
-    &&& verify_proof::bits::is_pow_of_2(align as u64)
-}
+proof fn _lemma_align_up_requires(addr: usize, align: usize)
+    requires
+        addr + align - 1 <= usize::MAX,
+        align > 0,
+    ensures
+        impl_align_up_requires((addr, align)),
+{
+    assert forall|mask: usize| #[trigger]
+        verify_external::ops::spec_sub_ensures(align, 1usize, mask) implies spec_add_requires::<
+        usize,
+        usize,
+    >(addr, mask) by {
+        broadcast use verify_external::ops::axiom_add_requires, verify_external::ops::axiom_sub;
 
-pub open spec fn _align_up_requires(bits: InnerAddr, align: InnerAddr) -> bool {
-    &&& align_requires(align)
-    &&& bits + (align - 1) <= InnerAddr::MAX
-}
-
-pub open spec fn align_up_requires(bits: InnerAddr, align: InnerAddr) -> bool {
-    &&& _align_up_requires(bits, align)
-}
-
-pub open spec fn align_up_spec(val: InnerAddr, align: InnerAddr) -> InnerAddr {
-    let r = val % align;
-    &&& if r == 0 {
-        val
-    } else {
-        (val - r + align) as InnerAddr
+        assert(mask == align - 1);
+        assert((addr + mask) as usize == addr + mask);
+        assert(spec_add_requires::<usize, usize>(addr, mask));
+        //verify_external::ops::axiom_add_requires(addr, mask);
     }
 }
 
-pub open spec fn align_down_spec(val: InnerAddr, align: InnerAddr) -> int {
-    val - val % align
-}
-
-broadcast group align_proof {
-    verify_proof::bits::lemma_bit_usize_not_is_sub,
-    verify_proof::bits::lemma_bit_usize_shl_values,
-    verify_proof::bits::lemma_bit_u64_shl_values,
-    vstd::bits::lemma_u64_pow2_no_overflow,
-    verify_proof::bits::lemma_bit_usize_and_mask,
-    verify_proof::bits::lemma_bit_usize_and_mask_is_mod,
-}
-
-pub broadcast proof fn proof_align_up(x: usize, align: usize)
+verus!{
+    proof fn _lemma_align_up_requires2(addr: usize, align: usize)
     requires
-        align_up_requires(x, align),
+        addr + align - 1 <= usize::MAX,
+        align > 0,
     ensures
-        #[trigger] add(x, sub(align, 1)) & !sub(align, 1) == align_up_spec(x, align),
-{
-    broadcast use align_proof;
+        true
+    {
+        assert forall |mask: usize|
+            #[trigger] verify_external::ops::spec_sub_ensures(align, 1usize, mask)
+        implies
+            spec_add_requires::<usize, usize>(addr, mask)
+        by {
+            broadcast use verify_external::ops::axiom_add_requires, verify_external::ops::axiom_sub;
+            assert(verify_external::ops::spec_sub_ensures(align, 1usize, mask));
+            assert(mask == align - 1);
+            assert((addr + mask) as usize == addr + mask);
 
-    let mask = (align - 1) as usize;
-    let y = (x + mask) as usize;
-    assert(y & !mask == sub(y, y & mask));
-
-    if x % align == 0 {
-        assert((x + (align - 1)) % (align as int) == align - 1) by (nonlinear_arith)
-            requires
-                x % align == 0,
-                align > 0,
-        ;
-    } else {
-        assert((x + (align - 1)) % (align as int) == (x % align - 1) as int) by (nonlinear_arith)
-            requires
-                x % align != 0,
-                align > 0,
-        ;
+            assert(spec_add_requires::<usize, usize>(addr, mask));
+            //verify_external::ops::axiom_add_requires(addr, mask);
+        }
     }
 }
 
-pub broadcast proof fn lemma_align_down(x: usize, align: usize)
-    requires
-        align_requires(align),
-    ensures
-        #[trigger] (x & !((align - 1) as usize)) == align_down_spec(x, align),
-{
-    broadcast use align_proof;
+use verify_external::ops::spec_add_requires;
 
-    let mask: usize = sub(align, 1);
-    assert(x == (x & !mask) + (x & mask));
+pub proof fn lemma_align_up_requires(addr: usize, align: usize)
+    requires
+        addr + align - 1 <= InnerAddr::MAX,
+        align > 0,
+    ensures
+        #[trigger] impl_align_up_requires((addr, align)),
+{
+    _lemma_align_up_requires(addr, align);
 }
 
 } // verus!
