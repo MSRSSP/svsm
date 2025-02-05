@@ -5,15 +5,9 @@
 // Author: Ziqiao Zhou <ziqiaozhou@microsoft.com>
 verus! {
 
-use verify_external::convert::{FromSpec, from_spec, axiom_from_spec};
+use verify_external::convert::{FromSpec, from_spec};
 use verify_external::ops::{SpecAddOp, SpecSubOp};
-use crate::utils::util::{
-    IntegerAligned,
-    proof_align_up,
-    impl_align_up_requires,
-    align_down_spec,
-    align_up_spec,
-};
+use crate::utils::util::{proof_align_up, align_down_spec, align_up_spec};
 
 pub broadcast group sign_extend_proof {
     verify_proof::bits::lemma_bit_usize_not_is_sub,
@@ -25,8 +19,6 @@ pub broadcast group sign_extend_proof {
 
 pub broadcast group address_align_proof {
     crate::types::group_types_proof,
-    axiom_from_spec,
-    verify_proof::bits::lemma_bit_usize_and_mask_is_mod,
     verify_proof::bits::lemma_bit_usize_and_mask_is_mod,
 }
 
@@ -37,7 +29,6 @@ broadcast group vaddr_impl_proof {
     verify_proof::bits::lemma_bit_usize_and_mask_is_mod,
     address_align_proof,
     address_spec::reveal_pfn,
-    proof_align_up,
 }
 
 broadcast use vaddr_impl_proof;

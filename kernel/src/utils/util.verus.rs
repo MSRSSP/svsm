@@ -1,6 +1,7 @@
 pub use util_align_down::lemma_align_down;
 pub use util_align_up::lemma_align_up;
 use verify_external::convert::*;
+use verify_external::external_axiom;
 use verify_external::ops::*;
 
 verus! {
@@ -51,7 +52,7 @@ broadcast group align_proof {
     verify_proof::bits::lemma_bit_usize_and_mask_is_mod,
 }
 
-pub open spec fn impl_align_down_requires<T>(args: (T, T)) -> bool where
+pub open spec fn align_down_requires<T>(args: (T, T)) -> bool where
     T: Sub<Output = T> + BitAnd<Output = T>,
  {
     let (val, align) = args;
@@ -61,60 +62,46 @@ pub open spec fn impl_align_down_requires<T>(args: (T, T)) -> bool where
 }
 
 #[verifier(inline)]
-pub open spec fn _impl_align_down_ensures<T>(val: T, align: T, ret: T, mask: T, unmask: T) -> bool {
+pub open spec fn _align_down_ens<T>(val: T, align: T, ret: T, mask: T, unmask: T) -> bool {
     &&& spec_sub_ensures(align, from_spec::<_, T>(1u8), mask)
     &&& #[trigger] spec_not_ensures(mask, unmask)
     &&& spec_bitand_ensures(val, unmask, ret)
 }
 
-pub open spec fn impl_align_down_ensures<T>(args: (T, T), ret: T) -> bool {
+pub open spec fn align_down_ens<T>(args: (T, T), ret: T) -> bool {
     let (val, align) = args;
-    exists|mask: T, unmask: T| _impl_align_down_ensures(val, align, ret, mask, unmask)
+    exists|mask: T, unmask: T| _align_down_ens(val, align, ret, mask, unmask)
 }
 
-pub open spec fn impl_align_down_choose<T>(args: (T, T), ret: T) -> (T, T) {
-    let (val, align) = args;
-    choose|mask: T, unmask: T| _impl_align_down_ensures(val, align, ret, mask, unmask)
-}
-
-pub open spec fn impl_align_up_requires<T>(args: (T, T)) -> bool where
+pub open spec fn align_up_requires<T>(args: (T, T)) -> bool where
     T: Sub<Output = T> + BitAnd<Output = T> + Add<Output = T>,
  {
     let (val, align) = args;
     let one = from_spec::<_, T>(1u8);
-    &&& impl_align_down_requires(args)
+    &&& align_down_requires(args)
     &&& forall|mask: T| #[trigger]
         spec_sub_ensures(align, one, mask) ==> spec_add_requires(val, mask)
 }
 
 #[verifier(inline)]
-pub open spec fn _impl_align_up_ensures<T>(
-    val: T,
-    align: T,
-    ret: T,
-    mask: T,
-    unmask: T,
-    valaddmask: T,
-) -> bool {
+pub open spec fn _align_up_ens<T>(val: T, align: T, ret: T, mask: T, unmask: T, tmpval: T) -> bool {
     &&& spec_sub_ensures(align, from_spec::<_, T>(1u8), mask)
     &&& #[trigger] spec_not_ensures(mask, unmask)
-    &&& spec_add_ensures(val, mask, valaddmask)
-    &&& #[trigger] spec_bitand_ensures(valaddmask, unmask, ret)
+    &&& spec_add_ensures(val, mask, tmpval)
+    &&& #[trigger] spec_bitand_ensures(tmpval, unmask, ret)
 }
 
-pub open spec fn impl_align_up_ensures<T>(args: (T, T), ret: T) -> bool {
+pub open spec fn align_up_ens<T>(args: (T, T), ret: T) -> bool {
     let (val, align) = args;
-    exists|mask: T, unmask: T, valaddmask: T|
-        _impl_align_up_ensures(val, align, ret, mask, unmask, valaddmask)
+    exists|mask: T, unmask: T, tmpval: T| _align_up_ens(val, align, ret, mask, unmask, tmpval)
 }
 
 pub open spec fn impl_align_up_choose<T>(args: (T, T), ret: T) -> (T, T, T) {
     let (val, align) = args;
-    choose|mask: T, unmask: T, valaddmask: T|
-        _impl_align_up_ensures(val, align, ret, mask, unmask, valaddmask)
+    choose|mask: T, unmask: T, tmpval: T| _align_up_ens(val, align, ret, mask, unmask, tmpval)
 }
 
-pub open spec fn impl_is_aligned_requires<T>(args: (T, T)) -> bool where
+pub open spec fn is_aligned_requires<T>(args: (T, T)) -> bool where
     T: Sub<Output = T> + BitAnd<Output = T> + PartialEq,
  {
     let (val, align) = args;
@@ -126,53 +113,27 @@ pub open spec fn impl_is_aligned_requires<T>(args: (T, T)) -> bool where
 }
 
 #[verifier(inline)]
-pub open spec fn _impl_is_aligned_ensures<T>(
-    val: T,
-    align: T,
-    ret: bool,
-    mask: T,
-    b: T,
-) -> bool where T: Sub<Output = T> + BitAnd<Output = T> + PartialEq + From<u8> {
+pub open spec fn _is_aligned_ens<T>(val: T, align: T, ret: bool, mask: T, b: T) -> bool where
+    T: Sub<Output = T> + BitAnd<Output = T> + PartialEq + From<u8>,
+ {
     &&& spec_sub_ensures(align, from_spec::<_, T>(1u8), mask)
     &&& #[trigger] spec_bitand_ensures(val, mask, b)
     &&& spec_partial_eq_ensures(&b, &from_spec::<_, T>(0u8), ret)
 }
 
-pub open spec fn impl_is_aligned_ensures<T>(args: (T, T), ret: bool) -> bool where
+pub open spec fn is_aligned_ens<T>(args: (T, T), ret: bool) -> bool where
     T: Sub<Output = T> + BitAnd<Output = T> + PartialEq + From<u8>,
  {
     let (val, align) = args;
     exists|mask: T, b: T|
         #![trigger spec_bitand_ensures(val, mask, b)]
-        { _impl_is_aligned_ensures(val, align, ret, mask, b) }
-}
-
-pub proof fn impl_is_aligned_choose<T>(val: T, align: T, ret: bool) -> (mask_b: (T, T)) where
-    T: Sub<Output = T> + BitAnd<Output = T> + PartialEq + From<u8>,
-
-    requires
-        impl_is_aligned_ensures((val, align), ret),
-    ensures
-        _impl_is_aligned_ensures(val, align, ret, mask_b.0, mask_b.1),
-{
-    choose|mask: T, b: T|
-        #![trigger spec_bitand_ensures(val, mask, b)]
-        _impl_is_aligned_ensures(val, align, ret, mask, b)
+        { _is_aligned_ens(val, align, ret, mask, b) }
 }
 
 pub open spec fn spec_is_aligned<T>(addr: T, align: T) -> bool where
     T: Sub<Output = T> + BitAnd<Output = T> + PartialEq + From<u8>,
  {
     from_spec::<_, u64>(addr) % from_spec::<_, u64>(align) == 0
-}
-
-pub open spec fn align_up_ensures<T>(val: T, align: T, ret: T) -> bool {
-    forall|a: T, s: T, n: T|
-        {
-            &&& spec_add_ensures(val, s, a)
-            &&& spec_sub_ensures(align, from_spec::<_, T>(1u8), s)
-            &&& #[trigger] spec_not_ensures(s, n)
-        } ==> #[trigger] spec_bitand_ensures(a, n, ret)
 }
 
 pub trait TT: Sized + FromSpec<u8> {
@@ -193,8 +154,8 @@ pub trait IntegerAligned: Add<Output = Self> + Sub<Output = Self> + BitAnd<Outpu
         requires
             from_spec::<Self, u64>(align) > 0,
             verify_proof::bits::is_pow_of_2(from_spec::<_, u64>(align) as u64),
-            impl_is_aligned_requires((val, align)),
-            impl_is_aligned_ensures((val, align), ret),
+            is_aligned_requires((val, align)),
+            is_aligned_ens((val, align), ret),
         ensures
             ret == spec_is_aligned(val, align),
     ;
@@ -203,8 +164,8 @@ pub trait IntegerAligned: Add<Output = Self> + Sub<Output = Self> + BitAnd<Outpu
         requires
             from_spec::<Self, u64>(align) > 0,
             verify_proof::bits::is_pow_of_2(from_spec::<_, u64>(align) as u64),
-            impl_align_down_requires((val, align)),
-            impl_align_down_ensures((val, align), ret),
+            align_down_requires((val, align)),
+            align_down_ens((val, align), ret),
         ensures
             ret == align_down_spec(val, align),
     ;
@@ -213,44 +174,23 @@ pub trait IntegerAligned: Add<Output = Self> + Sub<Output = Self> + BitAnd<Outpu
         requires
             from_spec::<Self, u64>(align) > 0,
             verify_proof::bits::is_pow_of_2(from_spec::<_, u64>(align) as u64),
-            impl_align_up_ensures((val, align), ret),
-            impl_align_up_requires((val, align)),
+            align_up_ens((val, align), ret),
+            align_up_requires((val, align)),
         ensures
             ret == align_up_spec(val, align),
     ;
 }
 
-/*pub trait IntegerAlignedProofs: IntegerAligned {
-    proof fn proof_align_up(val: Self, align: Self)
-        requires
-            from_spec::<Self, u64>(align) > 0,
-            verify_proof::bits::is_pow_of_2(from_spec::<_, u64>(align) as u64),
-            #[trigger] impl_align_up_requires((val, align)),
-        ensures
-            forall|ret| #[trigger]
-                impl_align_up_ensures((val, align), ret) ==> ret === align_up_spec(val, align);
-
-    proof fn proof_align_down(val: Self, align: Self)
-        requires
-            from_spec::<Self, u64>(align) > 0,
-            verify_proof::bits::is_pow_of_2(from_spec::<_, u64>(align) as u64),
-            #[trigger] impl_align_down_requires((val, align)),
-        ensures
-            forall|ret| #[trigger]
-                impl_align_down_ensures((val, align), ret) ==> ret === align_down_spec(val, align);
-}
-*/
-
 pub broadcast proof fn proof_align_down<T: IntegerAligned>(val: T, align: T)
     requires
         from_spec::<T, u64>(align) > 0,
         verify_proof::bits::is_pow_of_2(from_spec::<_, u64>(align) as u64),
-        #[trigger] impl_align_down_requires((val, align)),
+        #[trigger] align_down_requires((val, align)),
     ensures
         forall|ret| #[trigger]
-            impl_align_down_ensures((val, align), ret) ==> ret === align_down_spec(val, align),
+            align_down_ens((val, align), ret) ==> ret === align_down_spec(val, align),
 {
-    assert forall|ret: T| #[trigger] impl_align_down_ensures((val, align), ret) implies ret
+    assert forall|ret: T| #[trigger] align_down_ens((val, align), ret) implies ret
         === align_down_spec(val, align) by { T::lemma_align_down(val, align, ret) }
 }
 
@@ -258,14 +198,16 @@ pub broadcast proof fn proof_align_up<T: IntegerAligned>(val: T, align: T)
     requires
         from_spec::<T, u64>(align) > 0,
         verify_proof::bits::is_pow_of_2(from_spec::<_, u64>(align) as u64),
-        impl_align_up_requires((val, align)),
+        align_up_requires((val, align)),
     ensures
-        #![trigger impl_align_up_requires((val, align))]
+        #![trigger align_up_requires((val, align))]
         forall|ret| #[trigger]
-            impl_align_up_ensures((val, align), ret) ==> ret === align_up_spec(val, align),
+            align_up_ens((val, align), ret) ==> ret === align_up_spec(val, align),
 {
-    assert forall|ret: T| #[trigger] impl_align_up_ensures((val, align), ret) implies ret
-        === align_up_spec(val, align) by {
+    assert forall|ret: T| #[trigger] align_up_ens((val, align), ret) implies ret === align_up_spec(
+        val,
+        align,
+    ) by {
         T::lemma_align_up(val, align, ret);
     }
 }
