@@ -154,8 +154,9 @@ impl<const N: usize> MemoryRegionPerms<N> {
         Seq::new(N as nat, |i| self.next_page(i) as usize)
     }
 
-    pub closed spec fn free_page_counts(&self) -> Seq<usize> {
-        Seq::new(N as nat, |i| self.next[i].len() as usize)
+    #[verifier(inline)]
+    spec fn free_page_counts(&self) -> Seq<nat> {
+        Seq::new(N as nat, |i| self.next[i].len())
     }
 
     closed spec fn next_pages_after_remove(&self, order: int) -> Seq<usize> {
@@ -289,6 +290,7 @@ impl<const N: usize> MemoryRegionPerms<N> {
         &&& self.wf_dom()
         &&& self.wf_info()
         &&& self.wf_page_count()
+        &&& self.wf_reserved_init()
     }
 
     proof fn lemma_new_is_empty(max_order: int)
@@ -331,17 +333,6 @@ impl<const N: usize> MemoryRegionPerms<N> {
         ret
     }
 
-    spec fn ensures_has_free_pages(&self, new: Self, ret: bool, order: int) -> bool {
-        // No available if no slot >= order
-        &&& !ret ==> forall|i| order <= i < N ==> (#[trigger] self.next[i]).len() == 0
-        &&& !ret ==> *self === new
-        &&& if self.next[order].len() > 0 {
-            *self === new && ret
-        } else {
-            ret == (new.next[order].len() > 0)
-        }
-    }
-
     proof fn tracked_pop_next_perm(tracked &mut self, order: int, pfn: int) -> (tracked ret:
         RawMemPermWithAddrOrder)
         requires
@@ -357,6 +348,14 @@ impl<const N: usize> MemoryRegionPerms<N> {
             self.reserved === old(self).reserved,
             self.next_page(order) == old(self).next_next_page(order),
             self.next_page(order) == old(self).get_free_info(pfn).unwrap().next_page,
+            self.next_pages() =~= old(self).next_pages().update(
+                order,
+                self.next_page(order) as usize,
+            ),
+            self.free_page_counts() =~~= old(self).free_page_counts().update(
+                order,
+                (old(self).free_page_counts()[order] - 1) as nat,
+            ),
     {
         let vaddr = self.get_virt(pfn);
         let last_idx = self.next[order].len() - 1;
@@ -369,6 +368,7 @@ impl<const N: usize> MemoryRegionPerms<N> {
         assert forall|o, i| 0 <= o < N && 0 <= i < next[o].len() implies self.wf_item(o, i) by {
             assert(old_self.wf_item(o, i));
         }
+        assert(self.free_page_counts()[order] == self.next[order].len());
         assert(self.wf());
         perm
     }
@@ -394,8 +394,7 @@ impl MemoryRegion {
         let perms = self@;
         &&& self.wf()
         &&& perms.next_pages() =~= self.next_page@
-        &&& perms.wf_reserved_init()
-        &&& perms.free_page_counts() =~= self.free_pages@
+        &&& perms.free_page_counts() =~= Seq::new(MAX_ORDER as nat, |i| self.free_pages[i] as nat)
     }
 
     pub closed spec fn ensures_get_next_page(
@@ -411,10 +410,12 @@ impl MemoryRegion {
         let perm = new_tmp.last();
         let vaddr = new_perms.get_virt(ret.unwrap() as int);
         &&& self.wf_after_init()
+        &&& ret.is_err() == (self.next_page[order] == 0)
         &&& ret.is_ok() ==> {
             &&& perm.order == order
             &&& perm.vaddr == vaddr
             &&& new_tmp =~= tmp.push(perm)
+            &&& ret.unwrap() == self.next_page[order]
         }
         &&& ret.is_err() ==> perms === new_perms
     }
@@ -422,6 +423,24 @@ impl MemoryRegion {
     pub closed spec fn ens_read_page_info(self, pfn: usize, ret: PageInfo) -> bool {
         &&& self@.spec_page_info(pfn as int).is_some()
         &&& self@.spec_page_info(pfn as int).unwrap() === ret
+    }
+
+    pub closed spec fn spec_alloc_fails(&self, order: int) -> bool {
+        forall|i| #![trigger self.next_page[i]] order <= i < MAX_ORDER ==> self.next_page[i] == 0
+    }
+
+    pub closed spec fn ens_has_free_pages_pages(&self, new: Self, ret: bool, order: int) -> bool {
+        let perms = self@;
+        let new_perms = new@;
+        // No available if no slot >= order
+        let valid_order = (0 <= order < MAX_ORDER);
+        if self.spec_alloc_fails(order) || !valid_order {
+            &&& *self === new
+            &&& !ret
+        } else {
+            &&& ret
+            &&& new_perms.next[order].len() > 0
+        }
     }
 }
 

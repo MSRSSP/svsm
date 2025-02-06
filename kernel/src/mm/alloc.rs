@@ -568,6 +568,7 @@ impl MemoryRegion {
             old(self).wf_after_init(),
         ensures
             old(self).ensures_get_next_page(order as int, &*self, ret),
+            self.wf_after_init(),
     )]
     fn get_next_page(&mut self, order: usize) -> Result<usize, AllocError> {
         proof! {
@@ -582,6 +583,7 @@ impl MemoryRegion {
 
         let pg = self.read_page_info(pfn);
         let PageInfo::Free(fi) = pg else {
+            proof!{assert(false); }// prove it is unreachable
             panic!(
                 "Unexpected page type in MemoryRegion::get_next_page() {:?}",
                 pg
@@ -623,7 +625,10 @@ impl MemoryRegion {
 
     /// Splits a page into two pages of the next lower order.
     #[verus_verify(external_body)]
-    #[verus_spec(ret => ensures true)]
+    #[verus_spec(ret => 
+        requires old(self).wf_after_init()
+        ensures self.wf_after_init()
+    )]
     fn split_page(&mut self, pfn: usize, order: usize) -> Result<(), AllocError> {
         if !(1..MAX_ORDER).contains(&order) {
             return Err(AllocError::InvalidPageOrder(order));
@@ -647,20 +652,29 @@ impl MemoryRegion {
     }
 
     /// Refills the free page list for a given order.
-    #[verus_verify(external_body)]
     #[verus_spec(ret =>
-        ensures (*old(self))@.ensures_has_free_pages(self@, ret.is_ok(), order as int)
+        requires
+            old(self).wf_after_init(),
+        ensures 
+            old(self).ens_has_free_pages_pages(*self, ret.is_ok(), order as int),
+            self.wf_after_init(),
     )]
     fn refill_page_list(&mut self, order: usize) -> Result<(), AllocError> {
-        if order > MAX_ORDER {
+        proof!{
+            broadcast use lemma_wf_next_page_info;
+        }
+        if order >= MAX_ORDER {
             return Err(AllocError::InvalidPageOrder(order));
         }
         let next_page = self.next_page[order];
         if next_page != 0 {
             return Ok(());
         }
-
+        proof!{
+            assert(self@.next[order as int].len() == 0);
+        }
         self.refill_page_list(order + 1)?;
+        
         let pfn = self.get_next_page(order + 1)?;
         self.split_page(pfn, order + 1)
     }
