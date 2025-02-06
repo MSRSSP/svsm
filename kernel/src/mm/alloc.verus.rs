@@ -5,6 +5,8 @@ use vstd::simple_pptr::PointsTo;
 use vstd::raw_ptr::PointsToRaw;
 use verify_proof::tracked_exec_arbirary;
 use verify_external::convert::FromSpec;
+use verify_proof::bits::lemma_bit_usize_shl_values;
+use vstd::*;
 
 include!("alloc.proof.verus.rs");
 
@@ -26,13 +28,15 @@ type ReservedMapType = Map<int, TypedMemPerm<PageStorageType>>;
 
 struct RangedMap<T> {
     pub map: Map<int, T>,
-    pub ghost size: nat,
+    pub ghost size: int,
 }
 
 impl<T> RangedMap<T> {
     #[verifier::type_invariant]
-    spec fn wf(&self) -> bool {
-        forall|i| 0 <= i < self.size ==> self.map.dom().contains(i)
+    #[verifier(inline)]
+    pub open spec fn wf(&self) -> bool {
+        &&& self.size >= 0
+        &&& forall|i| 0 <= i < self.size ==> self.map.dom().contains(i)
     }
 
     pub closed spec fn last(&self) -> T {
@@ -40,7 +44,7 @@ impl<T> RangedMap<T> {
     }
 
     pub closed spec fn to_seq(&self) -> Seq<T> {
-        Seq::new(self.size, |i| self.map[i])
+        Seq::new(self.size as nat, |i| self.map[i])
     }
 
     proof fn tracked_push(tracked &mut self, tracked v: T)
@@ -50,6 +54,21 @@ impl<T> RangedMap<T> {
         use_type_invariant(&*self);
         self.map.tracked_insert(self.size as int, v);
         self.size = self.size + 1;
+    }
+
+    proof fn tracked_pop(tracked &mut self) -> (tracked ret: T)
+        requires
+            old(self).size > 0,
+        ensures
+            ret === old(self).last(),
+            self.to_seq().len() == old(self).to_seq().len() - 1,
+            self.to_seq() =~= old(self).to_seq().take(old(self).to_seq().len() - 1),
+    {
+        use_type_invariant(&*self);
+        let oldmap = self.map;
+        self.size = self.size - 1;
+        assert(oldmap =~= self.map);
+        self.map.tracked_remove(self.size as int)
     }
 }
 
@@ -230,13 +249,6 @@ impl<const N: usize> MemoryRegionPerms<N> {
         }
     }
 
-    spec fn wf_reserved_init(&self) -> bool {
-        let reserved = self.reserved;
-        forall|pfn|
-            #![trigger reserved[pfn]]
-            0 <= pfn < self.page_count ==> self.spec_page_info(pfn).is_some()
-    }
-
     spec fn wf_item(&self, order: int, i: int) -> bool {
         let next = self.next[order];
         let pfn = next[i] as int;
@@ -264,12 +276,19 @@ impl<const N: usize> MemoryRegionPerms<N> {
         spec_page_count(self.next, N as int)
     }
 
-    spec fn wf_reserved(&self) -> bool {
+    spec fn spec_pfn_info_addr(&self, pfn: int) -> VirtAddr {
         let reserved_unit_size = size_of::<PageStorageType>();
 
-        forall|pfn|
-            0 <= pfn < self.page_count ==> (#[trigger] self.reserved[pfn]).addr()
-                == VirtAddr::from_spec((self.start_virt@ + (pfn * reserved_unit_size)) as usize)@
+        VirtAddr::from_spec((self.start_virt@ + (pfn * reserved_unit_size)) as usize)
+    }
+
+    spec fn wf_reserved(&self) -> bool {
+        let reserved = self.reserved;
+        &&& forall|pfn: int|
+            #![trigger reserved[pfn]]
+            0 <= pfn < self.page_count ==> (reserved[pfn].addr() == self.spec_pfn_info_addr(pfn)@
+                && self.spec_page_info(pfn).is_some())
+        &&& reserved.dom() =~= set_int_range(0, self.page_count as int)
     }
 
     spec fn wf_info(&self) -> bool {
@@ -286,11 +305,21 @@ impl<const N: usize> MemoryRegionPerms<N> {
             - self.start_virt().offset())
     }
 
+    proof fn lemma_wf_pfn(&self, pfn: int)
+        requires
+            self.wf_page_count(),
+            pfn < self.page_count,
+        ensures
+            pfn * PAGE_SIZE < crate::address::VADDR_RANGE_SIZE - self.start_virt().offset(),
+            pfn * size_of::<PageStorageType>() < crate::address::VADDR_RANGE_SIZE
+                - self.start_virt().offset(),
+    {
+    }
+
     pub closed spec fn wf(&self) -> bool {
         &&& self.wf_dom()
         &&& self.wf_info()
         &&& self.wf_page_count()
-        &&& self.wf_reserved_init()
     }
 
     proof fn lemma_new_is_empty(max_order: int)
@@ -372,6 +401,11 @@ impl<const N: usize> MemoryRegionPerms<N> {
         assert(self.wf());
         perm
     }
+
+    spec fn marked_free(&self, pfn: int, order: usize, next_pfn: usize) -> bool {
+        let pi = self.spec_page_info(pfn);
+        pi === Some(PageInfo::Free(FreeInfo { next_page: next_pfn, order }))
+    }
 }
 
 impl MemoryRegion {
@@ -379,22 +413,27 @@ impl MemoryRegion {
         self.perms@
     }
 
-    #[verifier::type_invariant]
-    pub closed spec fn wf(&self) -> bool {
+    pub closed spec fn wf_params(&self) -> bool {
         let perms = self@;
-        &&& perms.wf()
+        &&& perms.wf_page_count()
         &&& perms.start_phys() == self.start_phys@
         &&& perms.start_virt() === self.start_virt
         &&& perms.page_count() == self.page_count
         &&& perms.next_pages().len() == MAX_ORDER
     }
 
-    // well-formed in public interfaces
     pub closed spec fn wf_after_init(&self) -> bool {
         let perms = self@;
-        &&& self.wf()
+        &&& perms.wf()
+        &&& self.wf_params()
         &&& perms.next_pages() =~= self.next_page@
         &&& perms.free_page_counts() =~= Seq::new(MAX_ORDER as nat, |i| self.free_pages[i] as nat)
+        &&& perms.wf_reserved()
+    }
+
+    pub closed spec fn wf_reserved(&self) -> bool {
+        &&& self@.wf_reserved()
+        &&& self.wf_params()
     }
 
     pub closed spec fn ensures_get_next_page(
@@ -429,9 +468,13 @@ impl MemoryRegion {
         forall|i| #![trigger self.next_page[i]] order <= i < MAX_ORDER ==> self.next_page[i] == 0
     }
 
-    pub closed spec fn ens_has_free_pages_pages(&self, new: Self, ret: bool, order: int) -> bool {
-        let perms = self@;
-        let new_perms = new@;
+    pub closed spec fn valid_pfn_order(&self, pfn: usize, order: usize) -> bool {
+        &&& pfn < self.page_count
+        &&& order < MAX_ORDER
+    }
+
+    pub closed spec fn ens_has_free_pages(&self, new: Self, ret: bool, order: int) -> bool {
+        let new_free_perms = new@.next;
         // No available if no slot >= order
         let valid_order = (0 <= order < MAX_ORDER);
         if self.spec_alloc_fails(order) || !valid_order {
@@ -439,8 +482,94 @@ impl MemoryRegion {
             &&& !ret
         } else {
             &&& ret
-            &&& new_perms.next[order].len() > 0
+            &&& new_free_perms[order].len() > 0
         }
+    }
+
+    pub closed spec fn req_tmp_perm(&self, pfn: usize, order: usize) -> bool {
+        let perm = self.tmp_perms@.last();
+        let vaddr = self@.get_virt(pfn as int);
+        &&& perm.vaddr == vaddr
+        &&& perm.order == order
+    }
+
+    pub closed spec fn ens_split_page_ok(&self, new: Self, pfn: usize, order: usize) -> bool {
+        let free_perms = self@.next;
+        let new_free_perms = new@.next;
+        let tmp = self.tmp_perms@.to_seq();
+        let new_tmp = new.tmp_perms@.to_seq();
+        let rhs_pfn = (pfn + (1usize << order) / 2) as usize;
+        let new_order = order - 1;
+        let p = free_perms[new_order];
+        let newp = p.push(pfn).push(rhs_pfn);
+        &&& new_free_perms =~= free_perms.update(new_order, newp)
+        &&& new_tmp =~= tmp.take(tmp.len() - 1)
+    }
+
+    pub closed spec fn req_write_page_info(&self, pfn: usize) -> bool {
+        self.wf_reserved()
+    }
+
+    pub closed spec fn ens_write_page_info(&self, new: Self, pfn: usize, pi: PageInfo) -> bool {
+        &&& self.only_update_reserved(new)
+        &&& new@.reserved =~~= self@.reserved.insert(pfn as int, new@.reserved[pfn as int])
+        &&& new@.spec_page_info(pfn as int) === Some(pi)
+        &&& new.wf_reserved()
+    }
+
+    pub closed spec fn req_mark_compound_page(&self, pfn: usize, order: usize) -> bool {
+        &&& self.wf_reserved()
+        &&& self.valid_pfn_order(pfn, order)
+    }
+
+    pub closed spec fn ens_mark_compound_page(&self, new: Self, pfn: usize, n: usize) -> bool {
+        let pfn = pfn as int;
+        &&& self.only_update_reserved(new)
+        &&& new@.reserved =~~= self@.reserved.union_prefer_right(
+            Map::new(|i| pfn < i < pfn + n, |i| new@.reserved[i]),
+        )
+        &&& new@.reserved[pfn] === self@.reserved[pfn]
+        &&& new.wf_reserved()
+    }
+
+    pub closed spec fn req_init_compound_page(
+        &self,
+        pfn: usize,
+        order: usize,
+        next_pfn: usize,
+    ) -> bool {
+        &&& self.valid_pfn_order(pfn, order)
+        &&& self.wf_reserved()
+    }
+
+    spec fn only_update_reserved(&self, new: Self) -> bool {
+        let MemoryRegionPerms { avail, next, reserved, .. } = self@;
+        let tmp = self.tmp_perms@.to_seq();
+        let new_tmp = new.tmp_perms@.to_seq();
+        &&& tmp === new_tmp
+        &&& new@.avail === avail
+        &&& new@.next === next
+        &&& new@.params() === self@.params()
+    }
+
+    pub closed spec fn ens_init_compound_page(
+        &self,
+        new: Self,
+        pfn: usize,
+        order: usize,
+        next_pfn: usize,
+    ) -> bool {
+        let n = 1usize << order;
+        let pfn = pfn as int;
+        //let c_changes = Map::new(|i|  pfn < i < pfn + n, |i|new@.reserved[i]);
+        let changes = Map::new(|i| pfn <= i < pfn + n, |i| new@.reserved[i]);
+        //&&& n > 0
+        //&&& new@.reserved =~~= self@.reserved.insert(pfn, new@.reserved[pfn]).union_prefer_right(c_changes)
+        //&&& !c_changes.dom().contains(pfn)
+        &&& self.only_update_reserved(new)
+        &&& new@.reserved =~~= self@.reserved.union_prefer_right(changes)
+        &&& new@.marked_free(pfn, order, next_pfn)
+        &&& new.wf_reserved()
     }
 }
 

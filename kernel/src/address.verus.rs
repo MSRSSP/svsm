@@ -139,7 +139,8 @@ impl VirtAddr {
     /// and from FFFF8000'00000000 through FFFFFFFF'FFFFFFFF.
     #[verifier::type_invariant]
     pub open spec fn is_canonical(&self) -> bool {
-        self.is_low() || self.is_high()
+        &&& self.is_low() || self.is_high()
+        &&& self.offset() < VADDR_RANGE_SIZE
     }
 
     /// Property:
