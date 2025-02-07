@@ -134,12 +134,35 @@ impl View for VirtAddr {
     }
 }
 
+#[verifier(inline)]
+pub open spec fn spec_is_vaddr_low(v: int) -> bool {
+    v <= VADDR_LOWER_MASK
+}
+
+#[verifier(inline)]
+pub open spec fn spec_is_vaddr_high(v: int) -> bool {
+    v >= VADDR_UPPER_MASK
+}
+
+pub open spec fn spec_is_vaddr(v: int) -> bool {
+    spec_is_vaddr_high(v) || spec_is_vaddr_low(v)
+}
+
+#[verifier(inline)]
+pub open spec fn spec_vaddr_offset(vaddr: int) -> int {
+    if spec_is_vaddr_low(vaddr) {
+        vaddr
+    } else {
+        vaddr - VADDR_UPPER_MASK + VADDR_LOWER_MASK + 1
+    }
+}
+
 impl VirtAddr {
     /// Canonical form addresses run from 0 through 00007FFF'FFFFFFFF,
     /// and from FFFF8000'00000000 through FFFFFFFF'FFFFFFFF.
     #[verifier::type_invariant]
     pub open spec fn is_canonical(&self) -> bool {
-        &&& self.is_low() || self.is_high()
+        &&& spec_is_vaddr(self@ as int)
         &&& self.offset() < VADDR_RANGE_SIZE
     }
 
@@ -152,21 +175,23 @@ impl VirtAddr {
     {
     }
 
+    pub proof fn lemma_wf(v: InnerAddr)
+        ensures
+            (#[trigger] VirtAddr::from_spec(v)).is_canonical(),
+    {
+    }
+
     pub open spec fn is_low(&self) -> bool {
-        self@ <= VADDR_LOWER_MASK
+        spec_is_vaddr_low(self@ as int)
     }
 
     pub open spec fn is_high(&self) -> bool {
-        self@ >= VADDR_UPPER_MASK
+        spec_is_vaddr_high(self@ as int)
     }
 
     // Virtual memory offset indicating the distance from 0
     pub open spec fn offset(&self) -> int {
-        if self.is_low() {
-            self@ as int
-        } else {
-            self@ - VADDR_UPPER_MASK + VADDR_LOWER_MASK + 1
-        }
+        spec_vaddr_offset(self@ as int)
     }
 
     pub open spec fn new_ensures(self, addr: InnerAddr) -> bool {
