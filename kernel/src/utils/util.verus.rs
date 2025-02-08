@@ -1,10 +1,12 @@
+verus! {
+
 pub use util_align_down::lemma_align_down;
 pub use util_align_up::lemma_align_up;
 use verify_external::convert::*;
 use verify_external::external_axiom;
 use verify_external::ops::*;
-
-verus! {
+use vstd::std_specs::cmp::SpecPartialEqOp;
+use vstd::std_specs::cmp::spec_partial_eq;
 
 pub open spec fn align_requires(align: u64) -> bool {
     &&& verify_proof::bits::is_pow_of_2(align)
@@ -118,7 +120,7 @@ pub open spec fn _is_aligned_ens<T>(val: T, align: T, ret: bool, mask: T, b: T) 
  {
     &&& spec_sub_ensures(align, from_spec::<_, T>(1u8), mask)
     &&& #[trigger] spec_bitand_ensures(val, mask, b)
-    &&& spec_partial_eq_ensures(&b, &from_spec::<_, T>(0u8), ret)
+    &&& ret == spec_partial_eq(&b, &from_spec::<_, T>(0u8))
 }
 
 pub open spec fn is_aligned_ens<T>(args: (T, T), ret: bool) -> bool where

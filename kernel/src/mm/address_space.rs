@@ -8,6 +8,9 @@ use crate::address::{PhysAddr, VirtAddr};
 use crate::mm::pagetable::{PageFrame, PageTable};
 use crate::utils::immut_after_init::ImmutAfterInitCell;
 
+#[cfg(verus_keep_ghost)]
+include!("address_space.verus.rs");
+
 #[derive(Debug, Copy, Clone)]
 #[cfg_attr(not(any(test, target_os = "none")), expect(dead_code))]
 pub struct FixedAddressMappingRange {

@@ -8,6 +8,7 @@ verus! {
 use verify_external::convert::{FromSpec, from_spec};
 use verify_external::ops::{SpecAddOp, SpecSubOp};
 use crate::utils::util::{proof_align_up, align_down_spec, align_up_spec};
+use verify_external::hw_spec::SpecVAddrImpl;
 
 pub broadcast group sign_extend_proof {
     verify_proof::bits::lemma_bit_usize_not_is_sub,
@@ -144,9 +145,16 @@ pub open spec fn spec_is_vaddr_high(v: int) -> bool {
     v >= VADDR_UPPER_MASK
 }
 
+// A relaxed address spec that support usize::MAX + 1
 pub open spec fn spec_is_vaddr(v: int) -> bool {
     spec_is_vaddr_high(v) || spec_is_vaddr_low(v)
 }
+
+pub proof fn lemma_vaddr_upper_mask()
+ensures
+    VADDR_UPPER_MASK == 0xFFFF8000_00000000,
+    VADDR_LOWER_MASK == 0x7fff_ffff_ffff,
+{}
 
 #[verifier(inline)]
 pub open spec fn spec_vaddr_offset(vaddr: int) -> int {
@@ -157,13 +165,38 @@ pub open spec fn spec_vaddr_offset(vaddr: int) -> int {
     }
 }
 
+impl SpecVAddrImpl for VirtAddr {
+    #[verifier(inline)]
+    open spec fn spec_int_addr(&self) -> Option<int> {
+        Some(self@ as int)
+    }
+    #[verifier(inline)]
+    open spec fn spec_valid_size(&self, size: nat) -> bool {
+        self.is_canonical() && self.offset() + size <= VADDR_RANGE_SIZE
+    }
+
+    open spec fn spec_valid_size_for_ptr(&self, size: nat) -> bool {
+        &&& self.spec_valid_size(size)
+        &&& self.is_low() ==> self.offset() + size <= VADDR_LOWER_MASK
+    }
+
+    #[verifier(inline)]
+    open spec fn region_to_dom(&self, size: nat) -> Set<int>
+    {
+        Set::new(
+            |v: int| v <= usize::MAX && spec_is_vaddr(v)
+            && self.offset() <= spec_vaddr_offset(v) <  self.offset() + size
+        )
+    }
+}
+
 impl VirtAddr {
     /// Canonical form addresses run from 0 through 00007FFF'FFFFFFFF,
     /// and from FFFF8000'00000000 through FFFFFFFF'FFFFFFFF.
     #[verifier::type_invariant]
     pub open spec fn is_canonical(&self) -> bool {
         &&& spec_is_vaddr(self@ as int)
-        &&& self.offset() < VADDR_RANGE_SIZE
+        &&& self.offset() <= VADDR_RANGE_SIZE
     }
 
     /// Property:
@@ -178,6 +211,8 @@ impl VirtAddr {
     pub proof fn lemma_wf(v: InnerAddr)
         ensures
             (#[trigger] VirtAddr::from_spec(v)).is_canonical(),
+            0 <= v < VADDR_RANGE_SIZE ==> VirtAddr::from_spec(v).offset() == v,
+            v >= VADDR_UPPER_MASK ==> VirtAddr::from_spec(v)@ == v,
     {
     }
 

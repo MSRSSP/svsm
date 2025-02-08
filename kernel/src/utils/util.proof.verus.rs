@@ -118,10 +118,11 @@ verus! {
 
 mod util_integer_align {
     use super::*;
+    use vstd::group_vstd_default;
 
     impl IntegerAligned for u64 {
         proof fn lemma_is_aligned(val: u64, align: u64, ret: bool) {
-            broadcast use align_proof, external_axiom;
+            broadcast use align_proof, external_axiom, group_vstd_default;
 
             assert(ret == (val & sub(align, 1) == 0));
         }

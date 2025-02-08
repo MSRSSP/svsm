@@ -21,7 +21,7 @@ use crate::locking::LockGuard;
 
 use vstd::prelude::*;
 
-#[cfg(feature = "verus")]
+#[cfg(verus_keep_ghost)]
 include!("alloc.verus.rs");
 
 /// Represents possible errors that can occur during memory allocation.
@@ -415,9 +415,9 @@ struct MemoryRegion {
     next_page: [usize; MAX_ORDER],
     free_pages: [usize; MAX_ORDER],
     #[cfg(verus_keep_ghost_body)]
-    perms: Tracked<MemoryRegionPerms<MAX_ORDER>>,
+    perms: Tracked<MemoryRegionTracked<VirtAddr, MAX_ORDER>>,
     #[cfg(verus_keep_ghost_body)]
-    tmp_perms: Tracked<RangedMap<RawMemPermWithAddrOrder>>, // (vaddr, order) -> perm
+    tmp_perms: Tracked<MapSeq<RawMemPermWithAddrSize<VirtAddr>>>, // (vaddr, order) -> perm
 }
 
 #[verus_verify]
@@ -430,8 +430,8 @@ impl MemoryRegion {
             let mut tmp_perms = tracked_exec_arbirary();
         }
         proof! {
-            *perms.borrow_mut() = MemoryRegionPerms::tracked_new();
-            *tmp_perms.borrow_mut() = RangedMap{map: Map::tracked_empty(), size: 0};
+            *perms.borrow_mut() = MemoryRegionTracked::tracked_new();
+            *tmp_perms.borrow_mut() = MapSeq{map: Map::tracked_empty(), size: 0};
         }
         Self {
             start_phys: PhysAddr::null(),
@@ -490,7 +490,7 @@ impl MemoryRegion {
             pfn < self.page_count,
             self.wf_params(),
         ensures
-            ret.addr() == self@.spec_pfn_info_addr(pfn as int)@,
+            ret.addr() == self.spec_page_info_addr(pfn as int)@,
     )]
     fn page_info_pptr(&self, pfn: usize) -> vstd::simple_pptr::PPtr<PageStorageType> {
         let offset = pfn * size_of::<PageStorageType>();
@@ -510,6 +510,8 @@ impl MemoryRegion {
     fn get_page_storage_type(&self, pfn: usize) -> &PageStorageType {
         verus_exec_stmts! {
             assert(self@.reserved.dom().contains(pfn as int));
+            assert(self@.reserved[pfn as int].addr() == self@.spec_page_info_addr(pfn as int)@);
+            assert(self@.reserved[pfn as int].addr() == self.spec_page_info_addr(pfn as int)@);
             let perm = Tracked(self.perms.borrow().reserved.tracked_borrow(pfn as int));
         }
         self.page_info_pptr(pfn).borrow(perm)
@@ -594,7 +596,7 @@ impl MemoryRegion {
             order < MAX_ORDER,
             old(self).wf_after_init(),
         ensures
-            old(self).ensures_get_next_page(order as int, &*self, ret),
+            old(self).ensures_get_next_page(&*self, order, ret),
             self.wf_after_init(),
     )]
     fn get_next_page(&mut self, order: usize) -> Result<usize, AllocError> {
@@ -618,7 +620,7 @@ impl MemoryRegion {
         self.next_page[order] = fi.next_page;
         proof! {
             assert(self@.wf());
-            let tracked perm = self.perms.borrow_mut().tracked_pop_next_perm(order as int, pfn as int);
+            let tracked perm = self.perms.borrow_mut().tracked_pop_next(order as int, pfn as int);
             self.tmp_perms.borrow_mut().tracked_push(perm);
         }
         self.free_pages[order] -= 1;
@@ -661,20 +663,26 @@ impl MemoryRegion {
     }
 
     /// Splits a page into two pages of the next lower order.
-    #[verus_verify(external_body)]
     #[verus_spec(ret =>
         requires
-            order < MAX_ORDER,
-            old(self).wf_after_init(),
-            old(self).req_tmp_perm(pfn, order),
+            old(self).req_split_page(pfn, order),
         ensures
-            self.wf_after_init(),
             old(self).ens_split_page_ok(*self, pfn, order),
             ret.is_ok(),
     )]
     fn split_page(&mut self, pfn: usize, order: usize) -> Result<(), AllocError> {
+        // (1..(MAX_ORDER - 1)).contains(&order)?
+        proof!{
+            broadcast use alloc_basic_axiom;
+        }
+        let ret = (1..MAX_ORDER).contains(&order);
+        proof!{
+            assert(ret == (vstd::std_specs::cmp::spec_ge(&order, &1usize) && vstd::std_specs::cmp::spec_lt(&order, &MAX_ORDER)));
+        }
         if !(1..MAX_ORDER).contains(&order) {
-            proof! {assert(false);} // proved unreacheable
+            proof!{
+                assert(!(vstd::std_specs::cmp::spec_ge(&order, &1usize) && vstd::std_specs::cmp::spec_lt(&order, &MAX_ORDER)));
+            }
             return Err(AllocError::InvalidPageOrder(order));
         }
 
@@ -684,11 +692,21 @@ impl MemoryRegion {
 
         proof! {
             let tracked p = self.tmp_perms.borrow_mut().tracked_pop();
-            let vaddr1 = self@.get_virt(pfn1 as int);
-            let vaddr2 = self@.get_virt(pfn2 as int);
-            let tracked (p1, p2) = p.perm.split(set_int_range(vaddr1@ as int, vaddr2@ as int));
-            let tracked p1 = RawMemPermWithAddrOrder{vaddr: vaddr1, order: new_order as int, perm: p1};
-            let tracked p2 = RawMemPermWithAddrOrder{vaddr: vaddr2, order: new_order as int, perm: p2};
+            let vaddr1 = self.lemma_get_virt(pfn1 as int);
+            let vaddr2 = self.lemma_get_virt(pfn2 as int);
+            assert(p.wf_vaddr_order(vaddr1, order));
+
+            let vaddr1 = vaddr1;
+            let pfn3 = pfn + (1usize << order);
+            assert( 1usize << order == (1usize << new_order) * 2) by(bit_vector)
+            requires new_order == order - 1 && 1 <= order < 32;
+            let n = 1usize << order;
+            let new_size = 1usize << new_order;
+            assert(pfn2 == pfn1 + (1usize << order) / 2);
+            //lemma_vaddr_range_sub_of(vaddr1, vaddr2, vaddr1, end);
+            let tracked perms = p.perm.split(vaddr1.region_to_dom(new_size as nat));
+            let tracked p1 = RawMemPermWithAddrSize{vaddr: vaddr1, size: new_size as nat, perm: perms.0};
+            let tracked p2 = RawMemPermWithAddrSize{vaddr: vaddr2, size: new_size as nat, perm: perms.1};
             self.tmp_perms.borrow_mut().tracked_push(p2);
             self.tmp_perms.borrow_mut().tracked_push(p1);
         }

@@ -3,7 +3,6 @@
 // Copyright (c) Microsoft Corporation
 //
 // Author: Ziqiao Zhou <ziqiaozhou@microsoft.com>
-
 fn main() {
     init_verify();
 }

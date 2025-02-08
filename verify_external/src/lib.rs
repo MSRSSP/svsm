@@ -14,12 +14,15 @@
 #![no_std]
 #![allow(unused_braces)]
 #![allow(unexpected_cfgs)]
+#![feature(new_range_api)]
 
 // Add spec for convert traits
 pub mod convert;
 
 // Add spec for ops traits
 pub mod ops;
+
+pub mod hw_spec;
 
 use vstd::prelude::*;
 

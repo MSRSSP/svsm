@@ -9,7 +9,6 @@ pub broadcast group ops_def_group {
     axiom_sub,
     axiom_bitand_requires,
     axiom_bitand,
-    axiom_partial_eq,
     axiom_not,
 }
 }
@@ -261,63 +260,6 @@ def_uop_axioms!(SpecNotOp, spec_not_ensures, !, [
 ]);
 
 verus! {
-pub trait SpecPartialEqOp<T: ?Sized> {
-    spec fn spec_partial_eq_ensures(lsh: &Self, rhs: &T, ret: bool) -> bool;
-}
-
-pub open spec fn spec_partial_eq_ensures<T1: ?Sized, T2: ?Sized>(v1: &T1, rhs: &T2, ret: bool) -> bool;
-
-pub broadcast proof fn axiom_partial_eq<T1: ?Sized + SpecPartialEqOp<T2>, T2: ?Sized>(v: &T1, rhs: &T2, ret: bool)
-ensures
-    T1::spec_partial_eq_ensures(v, rhs, ret) == #[trigger]spec_partial_eq_ensures(v, rhs, ret)
-{
-    admit()
-}
-
-#[verifier::external_trait_specification]
-pub trait ExPartialEq<Rhs> where Rhs: ?Sized {
-    type ExternalTraitSpecificationFor: core::cmp::PartialEq<Rhs>;
-
-    // Required method
-    fn eq(&self, other: &Rhs) -> (ret: bool)
-    ensures
-        self::spec_partial_eq_ensures(self, other, ret);
-
-    // Provided method
-    fn ne(&self, other: &Rhs) -> (ret: bool)
-    ensures
-        self::spec_partial_eq_ensures(self, other, !ret);
-}
-}
-
-macro_rules! def_partial_eq_for{
-    ($($ty: ty)*) => {verus!{
-        $(
-            impl SpecPartialEqOp<$ty> for $ty {
-                open spec fn spec_partial_eq_ensures(lhs: &$ty, rhs: &$ty, ret: bool) -> bool {
-                    (*lhs == *rhs) == ret
-                }
-            }
-        )*
-    }}
-}
-def_partial_eq_for!(
-    usize u8 u16 u32 u64 u128
-    isize i8 i16 i32 i64 i128
-);
-
-verus! {
-    pub proof fn test(v1: usize, v2: usize)
-    requires v1 > v2,
-    ensures
-        spec_sub_requires(v1, v2),
-        (from_spec::<_, u32>(1u8) == 1u32)
-    {
-        broadcast use crate::external_axiom;
-    }
-}
-
-verus! {
     proof fn _lemma_align_up_requires(addr: usize, align: usize)
     requires
         addr + align - 1 <= usize::MAX,
@@ -339,84 +281,4 @@ verus! {
             //crate::ops::axiom_add_requires(addr, mask);
         }
     }
-}
-
-use crate::convert::*;
-verus! {
-pub open spec fn align_requires(align: u64) -> bool {
-    true
-}
-
-
-pub open spec fn impl_is_aligned_requires<T>(args: (T, T)) -> bool where
- {
-    let (val, align) = args;
-    let one = from_spec::<_, T>(1u8);
-    &&& spec_sub_requires(align, one)
-    &&& forall|mask: T| #[trigger]
-        spec_sub_ensures(align, one, mask) ==> spec_bitand_requires(val, mask)
-}
-
-#[verifier(inline)]
-pub open spec fn _impl_is_aligned_ensures<T>(
-    val: T,
-    align: T,
-    ret: bool,
-    mask: T,
-    b: T,
-) -> bool{
-    &&& spec_sub_ensures(align, from_spec::<_, T>(1u8), mask)
-    &&& #[trigger]spec_bitand_ensures(val, mask, b)
-    &&& spec_partial_eq_ensures(&b, &from_spec::<_, T>(0u8), ret)
-}
-
-pub open spec fn impl_is_aligned_ensures<T>(args: (T, T), ret: bool) -> bool
-{
-    let (val, align) = args;
-    exists|mask: T, b: T|
-        #![trigger spec_bitand_ensures(val, mask, b)]
-        { _impl_is_aligned_ensures(val, align, ret, mask, b) }
-}
-
-pub open spec fn impl_is_aligned_choose<T>(val: T, align: T, ret: bool) -> (mask_b: (T, T))
-{
-    choose|mask: T, b: T|
-        #![trigger spec_bitand_ensures(val, mask, b)]
-        _impl_is_aligned_ensures(val, align, ret, mask, b)
-}
-
-pub open spec fn spec_is_aligned<T>(addr: T, align: T) -> bool
- {
-    from_spec::<_, u64>(addr) % from_spec::<_, u64>(align) == 0
-}
-
-
-pub trait TT: Sized + FromSpec<u8> {
-    proof fn lemma_is_aligned(val: Self, align: Self, ret: bool)
-        requires
-            true
-        ensures
-            true;
-}
-
-//use crate::convert::FromSpec;
-impl TT for u32 {
-    proof fn lemma_is_aligned(val: u32, align: u32, ret: bool)
-        ensures
-            true,
-    {
-        broadcast use crate::convert::axiom_from_spec;
-        //axiom_from_spec::<_, u32>(0u8);
-        assert(from_spec::<u8, u32>(0u8) == u32::from_spec(0u8));
-    }
-}
-
-proof fn lemma_is_aligned(val: u32, align: u32, ret: bool)
-        ensures
-            true,
-    {
-        broadcast use crate::external_axiom;
-        assert(from_spec::<_, u32>(0u8) == 0);
-    }
-
 } // verus!
