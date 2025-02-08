@@ -151,17 +151,20 @@ pub open spec fn spec_is_vaddr(v: int) -> bool {
 }
 
 pub proof fn lemma_vaddr_upper_mask()
-ensures
-    VADDR_UPPER_MASK == 0xFFFF8000_00000000,
-    VADDR_LOWER_MASK == 0x7fff_ffff_ffff,
-{}
+    ensures
+        VADDR_UPPER_MASK == 0xFFFF8000_00000000,
+        VADDR_LOWER_MASK == 0x7fff_ffff_ffff,
+{
+}
 
 #[verifier(inline)]
 pub open spec fn spec_vaddr_offset(vaddr: int) -> int {
     if spec_is_vaddr_low(vaddr) {
         vaddr
-    } else {
+    } else if spec_is_vaddr_high(vaddr) {
         vaddr - VADDR_UPPER_MASK + VADDR_LOWER_MASK + 1
+    } else {
+        -1
     }
 }
 
@@ -170,6 +173,7 @@ impl SpecVAddrImpl for VirtAddr {
     open spec fn spec_int_addr(&self) -> Option<int> {
         Some(self@ as int)
     }
+
     #[verifier(inline)]
     open spec fn spec_valid_size(&self, size: nat) -> bool {
         self.is_canonical() && self.offset() + size <= VADDR_RANGE_SIZE
@@ -181,11 +185,11 @@ impl SpecVAddrImpl for VirtAddr {
     }
 
     #[verifier(inline)]
-    open spec fn region_to_dom(&self, size: nat) -> Set<int>
-    {
+    open spec fn region_to_dom(&self, size: nat) -> Set<int> {
         Set::new(
-            |v: int| v <= usize::MAX && spec_is_vaddr(v)
-            && self.offset() <= spec_vaddr_offset(v) <  self.offset() + size
+            |v: int|
+                v <= usize::MAX && spec_is_vaddr(v) && self.offset() <= spec_vaddr_offset(v)
+                    < self.offset() + size,
         )
     }
 }

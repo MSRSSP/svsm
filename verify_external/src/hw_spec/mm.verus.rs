@@ -34,7 +34,8 @@ pub trait SpecVAddrImpl {
     requires
         size2 >= size1,
     ensures
-        self.spec_valid_size_for_ptr(size2) ==> self.spec_valid_size_for_ptr(size1)
+        self.spec_valid_size_for_ptr(size2) ==> self.spec_valid_size_for_ptr(size1),
+        self.region_to_dom(size1).subset_of(self.region_to_dom(size2)),
     {}
 
     // When valid, the region_to_dom() must be a continuous dom

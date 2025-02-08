@@ -417,7 +417,7 @@ struct MemoryRegion {
     #[cfg(verus_keep_ghost_body)]
     perms: Tracked<MemoryRegionTracked<VirtAddr, MAX_ORDER>>,
     #[cfg(verus_keep_ghost_body)]
-    tmp_perms: Tracked<MapSeq<RawMemPermWithAddrSize<VirtAddr>>>, // (vaddr, order) -> perm
+    tmp_perms: Tracked<MapSeq<RangedMemPerm<VirtAddr>>>, // (vaddr, order) -> perm
 }
 
 #[verus_verify]
@@ -691,22 +691,18 @@ impl MemoryRegion {
         let pfn2 = pfn + (1usize << new_order);
 
         proof! {
-            let tracked p = self.tmp_perms.borrow_mut().tracked_pop();
             let vaddr1 = self.lemma_get_virt(pfn1 as int);
             let vaddr2 = self.lemma_get_virt(pfn2 as int);
-            assert(p.wf_vaddr_order(vaddr1, order));
-
-            let vaddr1 = vaddr1;
-            let pfn3 = pfn + (1usize << order);
-            assert( 1usize << order == (1usize << new_order) * 2) by(bit_vector)
-            requires new_order == order - 1 && 1 <= order < 32;
-            let n = 1usize << order;
-            let new_size = 1usize << new_order;
-            assert(pfn2 == pfn1 + (1usize << order) / 2);
-            //lemma_vaddr_range_sub_of(vaddr1, vaddr2, vaddr1, end);
+            let tracked p = self.tmp_perms.borrow_mut().tracked_pop();
+            /*assert( 1usize << order == (1usize << new_order) * 2) by(bit_vector)
+            requires new_order == order - 1 && 1 <= order < 32;*/
+            //broadcast use vstd::bits::lemma_u64_shl_is_mul;
+            let size = (1usize << order) * PAGE_SIZE;
+            let new_size = (1usize << new_order) * PAGE_SIZE;
+            vaddr1.lemma_valid_small_size(new_size as nat, size as nat);
             let tracked perms = p.perm.split(vaddr1.region_to_dom(new_size as nat));
-            let tracked p1 = RawMemPermWithAddrSize{vaddr: vaddr1, size: new_size as nat, perm: perms.0};
-            let tracked p2 = RawMemPermWithAddrSize{vaddr: vaddr2, size: new_size as nat, perm: perms.1};
+            let tracked p1 = RangedMemPerm{vaddr: vaddr1, size: new_size as nat, perm: perms.0};
+            let tracked p2 = RangedMemPerm{vaddr: vaddr2, size: new_size as nat, perm: perms.1};
             self.tmp_perms.borrow_mut().tracked_push(p2);
             self.tmp_perms.borrow_mut().tracked_push(p1);
         }

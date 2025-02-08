@@ -1,13 +1,13 @@
+use crate::address::{spec_is_vaddr, spec_vaddr_offset};
+use crate::mm::address_space::LinearMap;
+use verify_external::convert::FromSpec;
+use verify_external::hw_spec::{SpecMemMapTr, SpecVAddrImpl};
+use verify_proof::bits::lemma_bit_usize_shl_values;
+use verify_proof::tracked_exec_arbirary;
+use vstd::raw_ptr::PointsToRaw;
 use vstd::set_lib::set_int_range;
 use vstd::simple_pptr::PointsTo;
-use vstd::raw_ptr::PointsToRaw;
-use verify_proof::tracked_exec_arbirary;
-use verify_external::convert::FromSpec;
-use verify_proof::bits::lemma_bit_usize_shl_values;
-use crate::address::{spec_is_vaddr, spec_vaddr_offset};
 use vstd::*;
-use crate::mm::address_space::LinearMap;
-use verify_external::hw_spec::{SpecMemMapTr, SpecVAddrImpl};
 
 verus! {
 
@@ -79,22 +79,22 @@ impl<T> MapSeq<T> {
     }
 }
 
-struct RawMemPermWithAddrSize<VAdrr: SpecVAddrImpl> {
+struct RangedMemPerm<VAdrr: SpecVAddrImpl> {
     pub ghost vaddr: VAdrr,
     pub ghost size: nat,
     pub tracked perm: RawMemPerm,
 }
 
-impl<VAddr: SpecVAddrImpl> RawMemPermWithAddrSize<VAddr> {
+impl<VAddr: SpecVAddrImpl> RangedMemPerm<VAddr> {
     #[verifier::type_invariant]
     spec fn wf(&self) -> bool {
-        let RawMemPermWithAddrSize { vaddr, size, perm } = *self;
+        let RangedMemPerm { vaddr, size, perm } = *self;
         perm.dom() =~= vaddr.region_to_dom(size)
     }
 
-    spec fn wf_vaddr_order(&self, vaddr: VAddr, order: usize) -> bool {
-        let RawMemPermWithAddrSize { vaddr, size, perm } = *self;
-        perm.dom() =~= vaddr.region_to_dom((1usize << order) as nat)
+    pub open spec fn wf_vaddr_order(&self, vaddr: VAddr, order: usize) -> bool {
+        let size = ((1usize << order) * PAGE_SIZE) as nat;
+        self.perm.dom() =~= vaddr.region_to_dom(size)
     }
 }
 
@@ -110,15 +110,14 @@ pub open spec fn spec_vaddr_range(start: int, end: int) -> Set<int> {
 
 struct VirtInfo<VAddr> {
     vaddr: VAddr,
-    info_vaddr: VAddr
+    info_vaddr: VAddr,
 }
 
-tracked struct MemoryRegionTracked<VAddr: SpecVAddrImpl, const N: usize> 
-{
-    tracked avail: Map<(int, int), RawMemPermWithAddrSize<VAddr>>,  //bucket -> next_id -> perm list
+tracked struct MemoryRegionTracked<VAddr: SpecVAddrImpl, const N: usize> {
+    tracked avail: Map<(int, int), RangedMemPerm<VAddr>>,  //bucket -> next_id -> perm list
     ghost next: Seq<Seq<usize>>,  // bucket -> page_list
     tracked reserved: ReservedMapType,  //pfn -> pginfo
-    ghost pfn_to_virt: Seq<VirtInfo<VAddr>>, // pfn -> virt address
+    ghost pfn_to_virt: Seq<VirtInfo<VAddr>>,  // pfn -> virt address
 }
 
 pub trait AllocatorManagedMemory {
@@ -191,15 +190,14 @@ spec fn spec_empty_seqs(max_order: int) -> Seq<Seq<usize>> {
     Seq::new(max_order as nat, |k| Seq::empty())
 }
 
-impl<VAddr: SpecVAddrImpl, const N: usize> MemoryRegionTracked<VAddr, N>
-{
+impl<VAddr: SpecVAddrImpl, const N: usize> MemoryRegionTracked<VAddr, N> {
     proof fn tracked_new() -> (tracked ret: MemoryRegionTracked<VAddr, N>)
-    ensures
-        ret.wf(),
-        ret.avail === Map::empty(),
-        ret.reserved === Map::empty(),
-        ret.pfn_to_virt === Seq::empty()
-    decreases N,
+        ensures
+            ret.wf(),
+            ret.avail === Map::empty(),
+            ret.reserved === Map::empty(),
+            ret.pfn_to_virt === Seq::empty(),
+        decreases N,
     {
         Self::lemma_new_is_empty(N);
         let tracked ret = MemoryRegionTracked {
@@ -214,7 +212,7 @@ impl<VAddr: SpecVAddrImpl, const N: usize> MemoryRegionTracked<VAddr, N>
     }
 
     proof fn tracked_pop_next(tracked &mut self, order: int, pfn: int) -> (tracked ret:
-        RawMemPermWithAddrSize<VAddr>)
+        RangedMemPerm<VAddr>)
         requires
             0 <= order < N,
             old(self).wf(),
@@ -257,6 +255,7 @@ impl<VAddr: SpecVAddrImpl, const N: usize> MemoryRegionTracked<VAddr, N> {
     pub closed spec fn spec_page_info_addr(&self, pfn: int) -> VAddr {
         self.pfn_to_virt[pfn].info_vaddr
     }
+
     pub closed spec fn next_page(&self, i: int) -> int {
         if self.next[i].len() == 0 {
             0
@@ -381,8 +380,9 @@ impl<VAddr: SpecVAddrImpl, const N: usize> MemoryRegionTracked<VAddr, N> {
         let page_count = self.page_count();
         &&& forall|pfn: int|
             #![trigger reserved[pfn]]
-            0 <= pfn < page_count ==> (reserved[pfn].addr() == self.spec_page_info_addr(pfn).spec_int_addr().unwrap()
-                && self.spec_page_info(pfn).is_some())
+            0 <= pfn < page_count ==> (reserved[pfn].addr() == self.spec_page_info_addr(
+                pfn,
+            ).spec_int_addr().unwrap() && self.spec_page_info(pfn).is_some())
         &&& reserved.dom() =~= set_int_range(0, page_count as int)
     }
 
@@ -431,7 +431,7 @@ impl MemoryRegion {
         LinearMap {
             start_virt: self.start_virt,
             start_phys: self.start_phys@ as int,
-            size: (self.page_count * PAGE_SIZE) as nat
+            size: (self.page_count * PAGE_SIZE) as nat,
         }
     }
 
@@ -448,20 +448,10 @@ impl MemoryRegion {
         self.spec_try_get_virt(pfn).unwrap()
     }
 
-    /*
-    pub open spec fn wf_page_count(&self) -> bool {
-        let page_count = self.page_count;
-        &&& self.start_virt.is_canonical()
-        &&& self.start_virt().offset() + (page_count - 1) * PAGE_SIZE < crate::address::VADDR_RANGE_SIZE
-    }
-    */
     pub closed spec fn wf_page_count(&self) -> bool {
-        if self.page_count > 0 {
-            let pfn = self.page_count - 1;
-            self.map().to_vaddr(self.start_phys@ + pfn * PAGE_SIZE).is_some()
-        } else {
-            true
-        }
+        &&& self.start_virt.is_canonical()
+        &&& self.start_virt.offset() + self.page_count * PAGE_SIZE
+            <= crate::address::VADDR_RANGE_SIZE
     }
 
     proof fn lemma_get_virt(&self, pfn: int) -> (ret: VirtAddr)
@@ -472,9 +462,10 @@ impl MemoryRegion {
             self.spec_try_get_virt(pfn).is_some(),
             ret == self.spec_get_virt(pfn),
             ret.is_canonical(),
-            ret.offset() ==  self.start_virt.offset() + (pfn * PAGE_SIZE),
+            ret.offset() == self.start_virt.offset() + (pfn * PAGE_SIZE),
     {
         broadcast use crate::types::lemma_page_size;
+
         crate::address::lemma_vaddr_upper_mask();
         assert(self.start_virt.is_canonical());
         VirtAddr::lemma_wf((self.start_virt@ + (pfn * PAGE_SIZE)) as usize);
@@ -482,12 +473,13 @@ impl MemoryRegion {
     }
 
     closed spec fn wf_accounting(&self) -> bool {
-        &&& forall |order| 0 <= order < MAX_ORDER ==>
-            #[trigger]self.free_pages[order]  <= self.nr_pages[order] <= self.page_count / (1usize << order as usize)
+        &&& forall|order|
+            0 <= order < MAX_ORDER ==> #[trigger] self.free_pages[order] <= self.nr_pages[order]
+                <= self.page_count / (1usize << order as usize)
     }
 
     closed spec fn wf_accounting_strict(&self) -> bool {
-        &&& forall |order| self.nr_pages[order] == self.free_pages[order]
+        &&& forall|order| self.nr_pages[order] == self.free_pages[order]
     }
 
     spec fn spec_page_info_addr(&self, pfn: int) -> VirtAddr {
@@ -500,11 +492,13 @@ impl MemoryRegion {
     pub closed spec fn wf_params(&self) -> bool {
         let perms = self@;
         &&& perms.next_pages().len() == MAX_ORDER
-        &&& perms.pfn_to_virt =~= Seq::new(self.page_count as nat, 
-            |pfn| VirtInfo {
-                vaddr: self.spec_get_virt(pfn),
-                info_vaddr: self.spec_page_info_addr(pfn)
-            }
+        &&& perms.pfn_to_virt =~= Seq::new(
+            self.page_count as nat,
+            |pfn|
+                VirtInfo {
+                    vaddr: self.spec_get_virt(pfn),
+                    info_vaddr: self.spec_page_info_addr(pfn),
+                },
         )
         &&& self@.page_count() == self.page_count
         &&& self.start_virt.is_canonical()
