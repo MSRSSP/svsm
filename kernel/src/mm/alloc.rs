@@ -21,7 +21,7 @@ use crate::locking::LockGuard;
 
 use vstd::prelude::*;
 
-#[cfg(verus_keep_ghost)]
+#[cfg(verus_keep_ghost_body)]
 include!("alloc.verus.rs");
 
 /// Represents possible errors that can occur during memory allocation.
@@ -493,6 +493,7 @@ impl MemoryRegion {
             ret.addr() == self.spec_page_info_addr(pfn as int)@,
     )]
     fn page_info_pptr(&self, pfn: usize) -> vstd::simple_pptr::PPtr<PageStorageType> {
+        proof! {broadcast use alloc_proof;}
         let offset = pfn * size_of::<PageStorageType>();
         self.start_virt.const_add(offset).as_pptr()
     }
@@ -564,7 +565,7 @@ impl MemoryRegion {
     /// Reads page information for a given page frame number.
     #[verus_spec(ret =>
         requires
-            self.wf_after_init(),
+            self.wf_mem_state(),
             pfn < self.page_count, // self.check_pfn(pfn) is not necessary.
         ensures
             self.ens_read_page_info(pfn, ret),
@@ -591,17 +592,18 @@ impl MemoryRegion {
     }
 
     /// Gets the next available page frame number for a given order.
+    #[cfg_attr(verus_keep_ghost, verifier::spinoff_prover)]
     #[verus_spec(ret =>
         requires
             order < MAX_ORDER,
-            old(self).wf_after_init(),
+            old(self).wf_mem_state(),
         ensures
             old(self).ensures_get_next_page(&*self, order, ret),
-            self.wf_after_init(),
+            self.wf_mem_state(),
     )]
     fn get_next_page(&mut self, order: usize) -> Result<usize, AllocError> {
         proof! {
-            broadcast use lemma_wf_next_page_info;
+            broadcast use alloc_proof, lemma_wf_next_page_info;
         }
         let pfn = self.next_page[order];
 
@@ -622,6 +624,12 @@ impl MemoryRegion {
             assert(self@.wf());
             let tracked perm = self.perms.borrow_mut().tracked_pop_next(order as int, pfn as int);
             self.tmp_perms.borrow_mut().tracked_push(perm);
+            assert forall |o: int, i: int| 0<= o < MAX_ORDER && 0 <= i < self@.next[o].len()
+            implies self@.next[o][i] + (1usize << (o as usize)) <= pfn ||
+            pfn + (1usize << order) <= self@.next[o][i] by {
+                assert(0 <= i < old(self)@.next[o].len());
+                lemma_unique_pfn(old(self)@, o, i, order as int, self@.next[order as int].len() as int);
+            }
         }
         self.free_pages[order] -= 1;
 
@@ -633,14 +641,15 @@ impl MemoryRegion {
     #[cfg_attr(verus_keep_ghost, verifier::loop_isolation(false))]
     #[verus_spec(
         requires old(self).req_mark_compound_page(pfn, order),
-        ensures old(self).ens_mark_compound_page(*self, pfn, 1usize << order),
+        ensures old(self).ens_mark_compound_page(*self, pfn, 1usize << order, order),
     )]
     fn mark_compound_page(&mut self, pfn: usize, order: usize) {
+        proof! {broadcast use alloc_proof;}
         let nr_pages: usize = 1 << order;
         let compound = PageInfo::Compound(CompoundInfo { order });
         #[cfg_attr(verus_keep_ghost, verus_spec(
             invariant
-                old(self).ens_mark_compound_page(*self, pfn, i)
+                old(self).ens_mark_compound_page(*self, pfn, i, order)
         ))]
         for i in 1..nr_pages {
             self.write_page_info(pfn + i, compound);
@@ -667,20 +676,18 @@ impl MemoryRegion {
         requires
             old(self).req_split_page(pfn, order),
         ensures
-            old(self).ens_split_page_ok(*self, pfn, order),
+            old(self).ens_split_page_ok(&*self, pfn, order),
+            self.wf_mem_state(),
             ret.is_ok(),
     )]
+    #[cfg_attr(verus_keep_ghost, verifier::rlimit(10))]
     fn split_page(&mut self, pfn: usize, order: usize) -> Result<(), AllocError> {
         // (1..(MAX_ORDER - 1)).contains(&order)?
-        proof!{
-            broadcast use alloc_basic_axiom;
-        }
-        let ret = (1..MAX_ORDER).contains(&order);
-        proof!{
-            assert(ret == (vstd::std_specs::cmp::spec_ge(&order, &1usize) && vstd::std_specs::cmp::spec_lt(&order, &MAX_ORDER)));
+        proof! {
+            broadcast use alloc_size_proof, lemma_wf_perms;
         }
         if !(1..MAX_ORDER).contains(&order) {
-            proof!{
+            proof! {
                 assert(!(vstd::std_specs::cmp::spec_ge(&order, &1usize) && vstd::std_specs::cmp::spec_lt(&order, &MAX_ORDER)));
             }
             return Err(AllocError::InvalidPageOrder(order));
@@ -691,20 +698,22 @@ impl MemoryRegion {
         let pfn2 = pfn + (1usize << new_order);
 
         proof! {
+            assert(self@.wf_perms());
             let vaddr1 = self.lemma_get_virt(pfn1 as int);
             let vaddr2 = self.lemma_get_virt(pfn2 as int);
             let tracked p = self.tmp_perms.borrow_mut().tracked_pop();
-            /*assert( 1usize << order == (1usize << new_order) * 2) by(bit_vector)
-            requires new_order == order - 1 && 1 <= order < 32;*/
-            //broadcast use vstd::bits::lemma_u64_shl_is_mul;
             let size = (1usize << order) * PAGE_SIZE;
             let new_size = (1usize << new_order) * PAGE_SIZE;
             vaddr1.lemma_valid_small_size(new_size as nat, size as nat);
             let tracked perms = p.perm.split(vaddr1.region_to_dom(new_size as nat));
             let tracked p1 = RangedMemPerm{vaddr: vaddr1, size: new_size as nat, perm: perms.0};
             let tracked p2 = RangedMemPerm{vaddr: vaddr2, size: new_size as nat, perm: perms.1};
-            self.tmp_perms.borrow_mut().tracked_push(p2);
-            self.tmp_perms.borrow_mut().tracked_push(p1);
+            assert(p1.wf_vaddr_order(vaddr1, new_order as usize));
+            assert(p2.wf_vaddr_order(vaddr2, new_order as usize));
+            self.perms.borrow_mut().tracked_push(new_order, pfn2, p2);
+            self.perms.borrow_mut().tracked_push(new_order, pfn1, p1);
+            assert(self.nr_pages[order as int] > 0);
+            //assert(self.nr_pages[new_order as int] + 2 <= usize::MAX);
         }
 
         let next_pfn = self.next_page[new_order];
@@ -717,20 +726,64 @@ impl MemoryRegion {
         self.nr_pages[new_order] += 2;
         self.free_pages[new_order] += 2;
 
+        proof! {
+            /*assert(old(self)@.free_page_counts() =~= Seq::new(MAX_ORDER as nat, |i| old(self).free_pages[i] as nat));
+            assert(old(self)@.free_page_counts()[new_order as int] == old(self).free_pages[new_order as int]);
+            assert(old(self).free_pages[new_order as int] == old(self)@.next[new_order as int].len());
+            assert(self@.next[new_order as int].len() == old(self)@.next[new_order as int].len() + 2);
+            assert(self@.next[new_order as int].len() == self.free_pages[new_order as int]);*/
+
+            let oldlen = old(self)@.next[new_order as int].len() as int;
+            assert(self@.wf_info()) by {
+                assert(self@.wf_item(new_order as int, oldlen));
+                assert(self@.wf_item(new_order as int, oldlen + 1));
+                assert forall|o, i| 0 <= o < MAX_ORDER && 0 <= i < self@.next[o].len()
+                implies self@.wf_item(o, i) by {
+                    let oldlen = old(self)@.next[o].len() as int;
+                    if i < oldlen {
+                        assert(old(self)@.wf_item(o, i));
+                        assert(self@.wf_item(o, i));
+                    }
+                }
+            }
+
+            assert(self@.wf());
+            assert(self@.wf_reserved());
+            assert(self.wf_params()) by {
+                let n = 1usize << order;
+                let new_n = 1usize << new_order;
+                assert(old(self).nr_pages[order as int] * n <= self.page_count);
+                assert(self.nr_pages[order as int] < old(self).nr_pages[order as int]);
+                vstd::arithmetic::mul::lemma_mul_inequality(self.nr_pages[order as int] as int, old(self).nr_pages[order as int] as int, n as int);
+                assert(self.nr_pages[order as int] * n <= self.page_count);
+                assert(self.nr_pages[new_order as int] * new_n <= self.page_count);
+            }
+            assert(self.wf_free_pages());
+            assert(self@.next_pages() =~= self.next_page@);
+            /*(assert(old(self).nr_pages[order as int] * (1usize << order) <= self.page_count);
+            assert(self.nr_pages[order as int] < old(self).nr_pages[order as int]);*/
+            //assert(self.nr_pages[order as int] * (1usize << order) <= self.page_count);
+            //assert(self.nr_pages[new_order as int] * (1usize << new_order) <= self.page_count);
+        }
+
         Ok(())
     }
 
     /// Refills the free page list for a given order.
+    #[cfg_attr(verus_keep_ghost, verifier::spinoff_prover)]
     #[verus_spec(ret =>
         requires
-            old(self).wf_after_init(),
+            old(self).wf_mem_stat_state(),
+            0 <= order <= MAX_ORDER < 63,
         ensures
-            old(self).ens_has_free_pages(*self, ret.is_ok(), order as int),
-            self.wf_after_init(),
+            old(self).ens_refill_page_list(*self, ret.is_ok(), order),
+            self.wf_mem_stat_state(),
     )]
     fn refill_page_list(&mut self, order: usize) -> Result<(), AllocError> {
         proof! {
-            broadcast use lemma_wf_next_page_info;
+            broadcast use alloc_size_proof, lemma_wf_next_page_info;
+            assert(2 * (1usize << order) == 1usize << (order + 1) as usize) by (bit_vector)
+            requires order < 63;
         }
         if order >= MAX_ORDER {
             return Err(AllocError::InvalidPageOrder(order));
@@ -738,9 +791,6 @@ impl MemoryRegion {
         let next_page = self.next_page[order];
         if next_page != 0 {
             return Ok(());
-        }
-        proof! {
-            assert(self@.next[order as int].len() == 0);
         }
         self.refill_page_list(order + 1)?;
 

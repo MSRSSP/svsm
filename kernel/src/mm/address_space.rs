@@ -8,7 +8,7 @@ use crate::address::{PhysAddr, VirtAddr};
 use crate::mm::pagetable::{PageFrame, PageTable};
 use crate::utils::immut_after_init::ImmutAfterInitCell;
 
-#[cfg(verus_keep_ghost)]
+#[cfg(verus_keep_ghost_body)]
 include!("address_space.verus.rs");
 
 #[derive(Debug, Copy, Clone)]

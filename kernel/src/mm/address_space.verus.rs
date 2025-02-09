@@ -16,6 +16,7 @@ impl SpecMemMapTr for LinearMap {
 
     type PAddr = int;
 
+    #[verifier(opaque)]
     open spec fn to_vaddrs(&self, paddr: int) -> Set<VirtAddr> {
         let s = self.to_vaddr(paddr);
         if s.is_some() {
@@ -25,6 +26,7 @@ impl SpecMemMapTr for LinearMap {
         }
     }
 
+    #[verifier(opaque)]
     open spec fn to_vaddr(&self, paddr: int) -> Option<VirtAddr> {
         let offset = paddr - self.start_phys;
         if 0 <= offset < self.size && self.start_virt.offset() + offset < VADDR_RANGE_SIZE {
@@ -35,6 +37,7 @@ impl SpecMemMapTr for LinearMap {
         }
     }
 
+    #[verifier(opaque)]
     open spec fn to_paddr(&self, vaddr: VirtAddr) -> Option<int> {
         let offset = vaddr.offset() - self.start_virt.offset();
         if 0 <= offset < self.size {
