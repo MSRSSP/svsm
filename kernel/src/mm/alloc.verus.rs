@@ -1,8 +1,8 @@
-use crate::address::{spec_is_vaddr, spec_vaddr_offset};
 use verify_external::convert::FromSpec;
 use verify_external::hw_spec::{SpecMemMapTr, SpecVAddrImpl};
 use verify_proof::bits::lemma_bit_usize_shl_values;
 use verify_proof::tracked_exec_arbirary;
+use verify_proof::tseq::TrackedSeq;
 use vstd::arithmetic::mul::lemma_mul_left_inequality;
 use vstd::raw_ptr::PointsToRaw;
 use vstd::set_lib::set_int_range;
@@ -28,7 +28,22 @@ pub broadcast group alloc_size_proof {
 //broadcast use alloc_proof;
 global size_of PageStorageType == 8;
 
-spec fn spec_page_storage_type(perm: TypedMemPerm<PageStorageType>) -> Option<PageStorageType> {
+pub type RawPerm = PointsToRaw;
+
+pub type TypedPerm<T> = PointsTo<T>;
+
+pub trait MemPermWithVAddrOrder<VAddr: SpecVAddrImpl> {
+    spec fn wf_vaddr_order(&self, vaddr: VAddr, order: usize) -> bool;
+}
+
+impl<VAddr: SpecVAddrImpl> MemPermWithVAddrOrder<VAddr> for RawPerm {
+    open spec fn wf_vaddr_order(&self, vaddr: VAddr, order: usize) -> bool {
+        let size = ((1usize << order) * PAGE_SIZE) as nat;
+        self.dom() =~= vaddr.region_to_dom(size)
+    }
+}
+
+spec fn spec_page_storage_type(perm: TypedPerm<PageStorageType>) -> Option<PageStorageType> {
     if perm.is_init() {
         Some(perm.value())
     } else {
@@ -36,7 +51,7 @@ spec fn spec_page_storage_type(perm: TypedMemPerm<PageStorageType>) -> Option<Pa
     }
 }
 
-spec fn spec_page_info(perm: TypedMemPerm<PageStorageType>) -> Option<PageInfo> {
+spec fn spec_page_info(perm: TypedPerm<PageStorageType>) -> Option<PageInfo> {
     let mem = spec_page_storage_type(perm);
     if mem.is_some() {
         PageInfo::spec_decode(mem.unwrap())
@@ -45,7 +60,7 @@ spec fn spec_page_info(perm: TypedMemPerm<PageStorageType>) -> Option<PageInfo> 
     }
 }
 
-spec fn spec_free_info(perm: TypedMemPerm<PageStorageType>) -> Option<FreeInfo> {
+spec fn spec_free_info(perm: TypedPerm<PageStorageType>) -> Option<FreeInfo> {
     let p_info = spec_page_info(perm);
     if p_info.is_some() {
         let pi = p_info.unwrap();
@@ -55,7 +70,7 @@ spec fn spec_free_info(perm: TypedMemPerm<PageStorageType>) -> Option<FreeInfo> 
     }
 }
 
-spec fn get_compound_info(perm: TypedMemPerm<PageStorageType>) -> Option<CompoundInfo> {
+spec fn get_compound_info(perm: TypedPerm<PageStorageType>) -> Option<CompoundInfo> {
     let p_info = spec_page_info(perm);
     if p_info.is_some() {
         let pi = p_info.unwrap();
@@ -65,141 +80,16 @@ spec fn get_compound_info(perm: TypedMemPerm<PageStorageType>) -> Option<Compoun
     }
 }
 
-pub type RawMemPerm = PointsToRaw;
-
-pub type TypedMemPerm<T> = PointsTo<T>;
-
-type ReservedMapType = Map<int, TypedMemPerm<PageStorageType>>;
-
-struct MapSeq<T> {
-    pub map: Map<int, T>,
-    pub ghost size: nat,
-}
-
-impl<T> MapSeq<T> {
-    #[verifier::type_invariant]
-    #[verifier(inline)]
-    pub open spec fn wf(&self) -> bool {
-        &&& forall|i| 0 <= i < self.size ==> self.map.dom().contains(i)
-    }
-
-    pub closed spec fn last(&self) -> T {
-        self.to_seq().last()
-    }
-
-    pub closed spec fn to_seq(&self) -> Seq<T> {
-        Seq::new(self.size as nat, |i| self.map[i])
-    }
-
-    proof fn tracked_push(tracked &mut self, tracked v: T)
-        ensures
-            self.to_seq() =~= old(self).to_seq().push(v),
-            self.size == old(self).size + 1,
-    {
-        use_type_invariant(&*self);
-        self.map.tracked_insert(self.size as int, v);
-        self.size = self.size + 1;
-    }
-
-    proof fn tracked_pop(tracked &mut self) -> (tracked ret: T)
-        requires
-            old(self).size > 0,
-        ensures
-            ret === old(self).last(),
-            self.to_seq().len() == old(self).to_seq().len() - 1,
-            self.to_seq() =~= old(self).to_seq().take(old(self).to_seq().len() - 1),
-    {
-        use_type_invariant(&*self);
-        let oldmap = self.map;
-        self.size = (self.size - 1) as nat;
-        assert(oldmap =~= self.map);
-        self.map.tracked_remove(self.size as int)
-    }
-}
-
-struct RangedMemPerm<VAdrr: SpecVAddrImpl> {
-    pub ghost vaddr: VAdrr,
-    pub ghost size: nat,
-    pub tracked perm: RawMemPerm,
-}
-
-impl<VAddr: SpecVAddrImpl> RangedMemPerm<VAddr> {
-    #[verifier::type_invariant]
-    spec fn wf(&self) -> bool {
-        let RangedMemPerm { vaddr, size, perm } = *self;
-        perm.dom() =~= vaddr.region_to_dom(size)
-    }
-
-    pub open spec fn wf_vaddr_order(&self, vaddr: VAddr, order: usize) -> bool {
-        let size = ((1usize << order) * PAGE_SIZE) as nat;
-        self.perm.dom() =~= vaddr.region_to_dom(size)
-    }
-}
-
-#[verifier(inline)]
-pub open spec fn spec_vaddr_range(start: int, end: int) -> Set<int> {
-    Set::new(
-        |v: int|
-            v <= usize::MAX && spec_vaddr_offset(start) <= spec_vaddr_offset(v) < spec_vaddr_offset(
-                end,
-            ),
-    )
-}
-
 struct VirtInfo<VAddr> {
     vaddr: VAddr,
     info_vaddr: VAddr,
 }
 
 tracked struct MemoryRegionTracked<VAddr: SpecVAddrImpl, const N: usize> {
-    tracked avail: Map<(int, int), RangedMemPerm<VAddr>>,  //bucket -> next_id -> perm list
-    ghost next: Seq<Seq<usize>>,  // bucket -> page_list
-    tracked reserved: ReservedMapType,  //pfn -> pginfo
+    tracked avail: Map<(int, int), RawPerm>,  //(order, idx) -> perm
+    ghost next: Seq<Seq<usize>>,  // order -> next page list
+    tracked reserved: Map<int, TypedPerm<PageStorageType>>,  //pfn -> pginfo
     ghost pfn_to_virt: Seq<VirtInfo<VAddr>>,  // pfn -> virt address
-}
-
-pub trait AllocatorManagedMemory {
-    spec fn wf_perm_for_alloc_range(
-        &self,
-        start: int,
-        end: int,
-    ) -> bool;/*closed spec fn wf_perm_for_alloc_order(&self, vaddr: VirtAddr, order: int) -> bool {
-        self.wf_perm_for_alloc_range(vaddr, vaddr + (1usize << (order as usize)))
-    }*/
-
-}
-
-impl AllocatorManagedMemory for RawMemPerm {
-    // TODO: defines the memory property and content
-    // e.g., allocator-managed memory is private
-    open spec fn wf_perm_for_alloc_range(&self, start: int, end: int) -> bool {
-        &&& self.dom() =~= spec_vaddr_range(start, end)
-    }
-}
-
-proof fn lemma_vaddr_range_sub_of(start: int, end: int, start2: int, end2: int)
-    requires
-        spec_is_vaddr(start),
-        spec_is_vaddr(end),
-        spec_is_vaddr(start2),
-        spec_is_vaddr(end2),
-        start2 <= start,
-        end <= end2,
-        start <= end,
-        start2 <= end2,
-    ensures
-        spec_vaddr_range(start, end).subset_of(spec_vaddr_range(start2, end2)),
-{
-    let d1 = spec_vaddr_range(start, end);
-    let d2 = spec_vaddr_range(start2, end2);
-    assert forall|v| d1.contains(v) implies d2.contains(v) by {
-        assert(v <= usize::MAX);
-        assert(spec_vaddr_offset(start) <= spec_vaddr_offset(v) < spec_vaddr_offset(end));
-        assert(start2 <= start);
-        assert(spec_vaddr_offset(start2) <= spec_vaddr_offset(start));
-        assert(end <= end2);
-        assert(spec_vaddr_offset(end) <= spec_vaddr_offset(end2));
-    }
 }
 
 impl PageInfo {
@@ -230,11 +120,6 @@ spec fn spec_page_count<T>(next: Seq<Seq<T>>, max_order: usize) -> int
     }
 }
 
-#[verifier(inline)]
-spec fn spec_empty_seqs(max_order: int) -> Seq<Seq<usize>> {
-    Seq::new(max_order as nat, |k| Seq::empty())
-}
-
 impl<VAddr: SpecVAddrImpl, const N: usize> MemoryRegionTracked<VAddr, N> {
     proof fn tracked_new() -> (tracked ret: MemoryRegionTracked<VAddr, N>)
         ensures
@@ -242,9 +127,7 @@ impl<VAddr: SpecVAddrImpl, const N: usize> MemoryRegionTracked<VAddr, N> {
             ret.avail === Map::empty(),
             ret.reserved === Map::empty(),
             ret.pfn_to_virt === Seq::empty(),
-        decreases N,
     {
-        Self::lemma_new_is_empty(N);
         let tracked ret = MemoryRegionTracked {
             avail: Map::tracked_empty(),
             reserved: Map::tracked_empty(),
@@ -252,12 +135,11 @@ impl<VAddr: SpecVAddrImpl, const N: usize> MemoryRegionTracked<VAddr, N> {
             pfn_to_virt: Seq::empty(),
         };
         VirtAddr::lemma_wf(0usize);
-        assert forall|i| 0 <= i < ret.page_count() implies ret.reserved.dom().contains(i) by {};
+        //assert forall|i| 0 <= i < ret.page_count() implies ret.reserved.dom().contains(i) by {};
         ret
     }
 
-    proof fn tracked_pop_next(tracked &mut self, order: int, pfn: int) -> (tracked ret:
-        RangedMemPerm<VAddr>)
+    proof fn tracked_pop_next(tracked &mut self, order: int, pfn: int) -> (tracked ret: RawPerm)
         requires
             0 <= order < N,
             old(self).wf(),
@@ -299,12 +181,7 @@ impl<VAddr: SpecVAddrImpl, const N: usize> MemoryRegionTracked<VAddr, N> {
         perm
     }
 
-    proof fn tracked_push(
-        tracked &mut self,
-        order: usize,
-        pfn: usize,
-        tracked perm: RangedMemPerm<VAddr>,
-    )
+    proof fn tracked_push(tracked &mut self, order: usize, pfn: usize, tracked perm: RawPerm)
         requires
             0 <= order < old(self).next.len(),
             old(self).wf_perms(),
@@ -495,24 +372,6 @@ impl<VAddr: SpecVAddrImpl, const N: usize> MemoryRegionTracked<VAddr, N> {
         &&& self.wf_reserved()
     }
 
-    proof fn lemma_new_is_empty(max_order: usize)
-        requires
-            max_order >= 0,
-        ensures
-            spec_page_count(spec_empty_seqs(max_order as int), max_order) == 0,
-        decreases max_order,
-    {
-        let next = spec_empty_seqs(max_order as int);
-        if max_order > 0 {
-            let prev_next = spec_empty_seqs(max_order - 1);
-            Self::lemma_new_is_empty((max_order - 1) as usize);
-            assert(prev_next =~= next.remove(max_order - 1));
-            assert(next[max_order - 1].len() == 0);
-        } else {
-            assert(spec_page_count(next, max_order) == 0);
-        }
-    }
-
     spec fn marked_free(&self, pfn: int, order: usize, next_pfn: usize) -> bool {
         let n = 1usize << order;
         let pi = self.spec_page_info(pfn);
@@ -525,27 +384,9 @@ impl<VAddr: SpecVAddrImpl, const N: usize> MemoryRegionTracked<VAddr, N> {
     }
 }
 
-ghost struct MemoryRegionExec {
-    start_phys: PhysAddr,
-    start_virt: VirtAddr,
-    page_count: usize,
-    nr_pages: [usize; MAX_ORDER],
-    next_page: [usize; MAX_ORDER],
-    free_pages: [usize; MAX_ORDER],
-}
-
 impl MemoryRegion {
-    pub closed spec fn exec_view(&self) -> MemoryRegionExec {
-        let MemoryRegion {
-            start_phys,
-            start_virt,
-            page_count,
-            nr_pages,
-            next_page,
-            free_pages,
-            ..
-        } = *self;
-        MemoryRegionExec { start_phys, start_virt, page_count, nr_pages, next_page, free_pages }
+    pub closed spec fn view(&self) -> MemoryRegionTracked<VirtAddr, MAX_ORDER> {
+        self.perms@
     }
 
     pub closed spec fn map(&self) -> LinearMap {
@@ -556,27 +397,21 @@ impl MemoryRegion {
         }
     }
 
-    pub closed spec fn view(&self) -> MemoryRegionTracked<VirtAddr, MAX_ORDER> {
-        self.perms@
-    }
-
-    spec fn inv_const_params(&self, new: &Self) -> bool {
-        &&& self.page_count == new.page_count
-        &&& self.start_phys == new.start_phys
-        &&& self.start_virt == new.start_virt
+    spec fn with_same_mapping(&self, new: &Self) -> bool {
+        self.map() === new.map()
     }
 
     pub closed spec fn spec_get_pfn(&self, vaddr: VirtAddr) -> int {
         (self.map().get_paddr(vaddr) - self.start_phys@) / PAGE_SIZE as int
     }
 
-    pub closed spec fn spec_try_get_virt(&self, pfn: int) -> Option<VirtAddr> {
-        Self::spec_map_try_get_virt(self.map(), pfn)
-    }
-
     pub closed spec fn spec_map_try_get_virt(map: LinearMap, pfn: int) -> Option<VirtAddr> {
         let phy = map.start_phys + pfn * PAGE_SIZE;
         map.to_vaddr(phy)
+    }
+
+    pub open spec fn spec_try_get_virt(&self, pfn: int) -> Option<VirtAddr> {
+        Self::spec_map_try_get_virt(self.map(), pfn)
     }
 
     pub closed spec fn spec_get_virt(&self, pfn: int) -> VirtAddr {
@@ -602,17 +437,14 @@ impl MemoryRegion {
         self.spec_get_virt(pfn)
     }
 
-    spec fn spec_page_info_addr(&self, pfn: int) -> VirtAddr {
-        Self::spec_map_page_info_addr(self.map(), pfn)
-    }
-
-    spec fn spec_map_page_info_addr(
-        map: crate::mm::address_space::LinearMap,
-        pfn: int,
-    ) -> VirtAddr {
+    spec fn spec_map_page_info_addr(map: LinearMap, pfn: int) -> VirtAddr {
         let reserved_unit_size = size_of::<PageStorageType>();
         let start = map.start_virt;
         VirtAddr::from_spec((start@ + (pfn * reserved_unit_size)) as usize)
+    }
+
+    spec fn spec_page_info_addr(&self, pfn: int) -> VirtAddr {
+        Self::spec_map_page_info_addr(self.map(), pfn)
     }
 
     spec fn wf_pfn_to_virt(&self) -> bool {
@@ -631,6 +463,7 @@ impl MemoryRegion {
     spec fn wf_page_count(&self) -> bool {
         &&& self.start_virt.offset() + self.page_count * PAGE_SIZE
             <= crate::address::VADDR_RANGE_SIZE
+        &&& self@.page_count() == self.page_count
     }
 
     spec fn wf_accounting(&self) -> bool {
@@ -650,9 +483,8 @@ impl MemoryRegion {
         let perms = self@;
         &&& self.start_virt.is_canonical()
         &&& self.wf_pfn_to_virt()
-        &&& self@.page_count() == self.page_count
-        &&& self.wf_accounting()
         &&& self.wf_page_count()
+        &&& self.wf_accounting()
     }
 
     pub closed spec fn wf_reserved(&self) -> bool {
@@ -668,11 +500,11 @@ impl MemoryRegion {
     // Strict invariant that should hold at public interfaces.
     pub closed spec fn wf_mem_state(&self) -> bool {
         let perms = self@;
-        &&& perms.wf()
         &&& self.wf_params()
-        &&& perms.next_pages() === self.next_page@
-        &&& perms.wf_reserved()
         &&& self.wf_free_pages()
+        &&& perms.wf()
+        &&& perms.next_pages() =~= self.next_page@
+        &&& perms.wf_reserved()
     }
 
     pub closed spec fn wf_mem_stat_state(&self) -> bool {
@@ -690,18 +522,22 @@ impl MemoryRegion {
         let vaddr = new_self.spec_get_virt(ret.unwrap() as int);
         let order = order as int;
         &&& self.wf_mem_state()
-        &&& self.inv_const_params(new_self)
+        &&& self.with_same_mapping(new_self)
         &&& ret.is_err() == (self.next_page[order] == 0)
         &&& ret.is_err() == (self.free_pages[order] == 0)
         &&& ret.is_err() ==> self === new_self
         &&& ret.is_ok() ==> {
             &&& new_tmp.last().wf_vaddr_order(vaddr, order as usize)
-            &&& new_tmp =~= tmp.push(new_tmp.last())
-            &&& new_self.tmp_perms@.size == self.tmp_perms@.size + 1
+            &&& new_tmp =~= tmp.push(
+                new_tmp.last(),
+            )
+            //&&& new_self.tmp_perms@.len() == self.tmp_perms@.len() + 1
             &&& ret.unwrap() == self.next_page[order]
             &&& new_self.valid_pfn_order(ret.unwrap(), order as usize)
-            &&& new_self.free_pages[order] == self.free_pages[order] - 1
-            &&& new_self.free_pages@ =~= self.free_pages@.update(order, new_self.free_pages[order])
+            &&& new_self.free_pages@ =~= self.free_pages@.update(
+                order,
+                (self.free_pages[order] - 1) as usize,
+            )
             &&& new_self.next_page@ =~= self.next_page@.update(order, new_self.next_page[order])
             &&& new_self.nr_pages === self.nr_pages
             &&& new_self@.pfn_not_available(ret.unwrap(), order as usize)
@@ -740,7 +576,7 @@ impl MemoryRegion {
         let perm = self.tmp_perms@.last();
         let vaddr = self.spec_get_virt(pfn as int);
         let new_size = (1usize << (order - 1) as usize);
-        &&& self.tmp_perms@.size > 0
+        &&& self.tmp_perms@.len() > 0
         &&& perm.wf_vaddr_order(vaddr, order as usize)
         &&& self.valid_pfn_order(pfn, order)
         &&& order >= 1
@@ -764,7 +600,7 @@ impl MemoryRegion {
         let newp = free_perms[new_order].push(rhs_pfn).push(pfn);
         &&& new_free_perms =~= free_perms.update(new_order, newp)
         &&& new_tmp =~= tmp.take(tmp.len() - 1)
-        &&& self.inv_const_params(new)
+        &&& self.with_same_mapping(new)
         &&& new.nr_pages@[new_order] == self.nr_pages[new_order] + 2
         &&& new.nr_pages@[order] == self.nr_pages[order] - 1
         &&& new.free_pages[new_order] == self.free_pages[new_order] + 2
@@ -831,7 +667,7 @@ impl MemoryRegion {
     }
 
     spec fn only_update_order_higher(&self, new: Self, order: usize) -> bool {
-        &&& self.inv_const_params(&new)
+        &&& self.with_same_mapping(&new)
         &&& forall|i: int|
             0 <= i < order ==> {
                 &&& self.free_pages[i] == new.free_pages[i]
@@ -849,11 +685,7 @@ impl MemoryRegion {
     ) -> bool {
         let n = 1usize << order;
         let pfn = pfn as int;
-        //let c_changes = Map::new(|i|  pfn < i < pfn + n, |i|new@.reserved[i]);
         let changes = Map::new(|i| pfn <= i < pfn + n, |i| new@.reserved[i]);
-        //&&& n > 0
-        //&&& new@.reserved =~~= self@.reserved.insert(pfn, new@.reserved[pfn]).union_prefer_right(c_changes)
-        //&&& !c_changes.dom().contains(pfn)
         &&& self.only_update_reserved(new)
         &&& new@.reserved =~~= self@.reserved.union_prefer_right(changes)
         &&& new@.marked_free(pfn, order, next_pfn)
@@ -861,7 +693,7 @@ impl MemoryRegion {
     }
 }
 
-trait FromPageStorageTypeSpec: core::marker::Sized {
+trait SpecDecoderProof<PageStorageType>: core::marker::Sized {
     spec fn spec_decode(mem: PageStorageType) -> Option<Self>;
 
     spec fn spec_encode(&self) -> PageStorageType;
@@ -873,17 +705,27 @@ trait FromPageStorageTypeSpec: core::marker::Sized {
     ;
 }
 
-impl FromPageStorageTypeSpec for PageType {
+impl SpecDecoderProof<PageStorageType> for PageType {
     spec fn spec_decode(mem: PageStorageType) -> Option<Self>;
 
-    spec fn spec_encode(&self) -> PageStorageType;
+    spec fn spec_encode(&self) -> PageStorageType {
+        let val = match self {
+            PageType::Free => 0,
+            PageType::Allocated => 1,
+            PageType::SlabPage => 2,
+            PageType::Compound => 3,
+            PageType::File => 4,
+            PageType::Reserved => (1u64 << 4) - 1,
+        };
+        PageStorageType(val as u64)
+    }
 
     #[verifier::external_body]
     proof fn proof_encode_decode(&self) {
     }
 }
 
-impl FromPageStorageTypeSpec for FreeInfo {
+impl SpecDecoderProof<PageStorageType> for FreeInfo {
     spec fn spec_decode(mem: PageStorageType) -> Option<Self>;
 
     spec fn spec_encode(&self) -> PageStorageType;
@@ -896,7 +738,7 @@ impl FromPageStorageTypeSpec for FreeInfo {
     }
 }
 
-impl FromPageStorageTypeSpec for AllocatedInfo {
+impl SpecDecoderProof<PageStorageType> for AllocatedInfo {
     spec fn spec_decode(mem: PageStorageType) -> Option<Self>;
 
     spec fn spec_encode(&self) -> PageStorageType;
@@ -909,7 +751,7 @@ impl FromPageStorageTypeSpec for AllocatedInfo {
     }
 }
 
-impl FromPageStorageTypeSpec for SlabPageInfo {
+impl SpecDecoderProof<PageStorageType> for SlabPageInfo {
     spec fn spec_decode(mem: PageStorageType) -> Option<Self>;
 
     spec fn spec_encode(&self) -> PageStorageType;
@@ -922,7 +764,7 @@ impl FromPageStorageTypeSpec for SlabPageInfo {
     }
 }
 
-impl FromPageStorageTypeSpec for CompoundInfo {
+impl SpecDecoderProof<PageStorageType> for CompoundInfo {
     spec fn spec_decode(mem: PageStorageType) -> Option<Self>;
 
     spec fn spec_encode(&self) -> PageStorageType;
@@ -935,7 +777,7 @@ impl FromPageStorageTypeSpec for CompoundInfo {
     }
 }
 
-impl FromPageStorageTypeSpec for FileInfo {
+impl SpecDecoderProof<PageStorageType> for FileInfo {
     spec fn spec_decode(mem: PageStorageType) -> Option<Self>;
 
     spec fn spec_encode(&self) -> PageStorageType;
@@ -948,7 +790,7 @@ impl FromPageStorageTypeSpec for FileInfo {
     }
 }
 
-impl FromPageStorageTypeSpec for ReservedInfo {
+impl SpecDecoderProof<PageStorageType> for ReservedInfo {
     spec fn spec_decode(mem: PageStorageType) -> Option<Self>;
 
     spec fn spec_encode(&self) -> PageStorageType;
@@ -961,8 +803,8 @@ impl FromPageStorageTypeSpec for ReservedInfo {
     }
 }
 
-impl FromPageStorageTypeSpec for PageInfo {
-    spec fn spec_decode(mem: PageStorageType) -> Option<Self> {
+impl SpecDecoderProof<PageStorageType> for PageInfo {
+    closed spec fn spec_decode(mem: PageStorageType) -> Option<Self> {
         let typ = PageType::spec_decode(mem);
         match typ {
             Some(typ) => Some(
@@ -981,7 +823,7 @@ impl FromPageStorageTypeSpec for PageInfo {
         }
     }
 
-    spec fn spec_encode(&self) -> PageStorageType {
+    closed spec fn spec_encode(&self) -> PageStorageType {
         match self {
             Self::Free(fi) => fi.spec_encode(),
             Self::Allocated(ai) => ai.spec_encode(),

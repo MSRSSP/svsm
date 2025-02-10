@@ -202,7 +202,6 @@ impl PageStorageType {
     }
 
     /// Retrieves the page type from the [`PageStorageType`].
-    #[verus_verify(external_body)]
     #[verus_spec( ret =>
         ensures
             ret.is_ok() == PageType::spec_decode(*self).is_some(),
@@ -417,7 +416,7 @@ struct MemoryRegion {
     #[cfg(verus_keep_ghost_body)]
     perms: Tracked<MemoryRegionTracked<VirtAddr, MAX_ORDER>>,
     #[cfg(verus_keep_ghost_body)]
-    tmp_perms: Tracked<MapSeq<RangedMemPerm<VirtAddr>>>, // (vaddr, order) -> perm
+    tmp_perms: Tracked<TrackedSeq<RawPerm>>, // (vaddr, order) -> perm
 }
 
 #[verus_verify]
@@ -431,7 +430,7 @@ impl MemoryRegion {
         }
         proof! {
             *perms.borrow_mut() = MemoryRegionTracked::tracked_new();
-            *tmp_perms.borrow_mut() = MapSeq{map: Map::tracked_empty(), size: 0};
+            *tmp_perms.borrow_mut() = TrackedSeq::tracked_empty();
         }
         Self {
             start_phys: PhysAddr::null(),
@@ -705,14 +704,12 @@ impl MemoryRegion {
             let size = (1usize << order) * PAGE_SIZE;
             let new_size = (1usize << new_order) * PAGE_SIZE;
             vaddr1.lemma_valid_small_size(new_size as nat, size as nat);
-            let tracked perms = p.perm.split(vaddr1.region_to_dom(new_size as nat));
-            let tracked p1 = RangedMemPerm{vaddr: vaddr1, size: new_size as nat, perm: perms.0};
-            let tracked p2 = RangedMemPerm{vaddr: vaddr2, size: new_size as nat, perm: perms.1};
-            assert(p1.wf_vaddr_order(vaddr1, new_order as usize));
-            assert(p2.wf_vaddr_order(vaddr2, new_order as usize));
+            let tracked perms = p.split(vaddr1.region_to_dom(new_size as nat));
+            let tracked p1 = perms.0;
+            let tracked p2 = perms.1;
             self.perms.borrow_mut().tracked_push(new_order, pfn2, p2);
             self.perms.borrow_mut().tracked_push(new_order, pfn1, p1);
-            assert(self.nr_pages[order as int] > 0);
+            //assert(self.nr_pages[order as int] > 0);
             //assert(self.nr_pages[new_order as int] + 2 <= usize::MAX);
         }
 
@@ -727,43 +724,24 @@ impl MemoryRegion {
         self.free_pages[new_order] += 2;
 
         proof! {
-            /*assert(old(self)@.free_page_counts() =~= Seq::new(MAX_ORDER as nat, |i| old(self).free_pages[i] as nat));
-            assert(old(self)@.free_page_counts()[new_order as int] == old(self).free_pages[new_order as int]);
-            assert(old(self).free_pages[new_order as int] == old(self)@.next[new_order as int].len());
-            assert(self@.next[new_order as int].len() == old(self)@.next[new_order as int].len() + 2);
-            assert(self@.next[new_order as int].len() == self.free_pages[new_order as int]);*/
-
             let oldlen = old(self)@.next[new_order as int].len() as int;
             assert(self@.wf_info()) by {
                 assert(self@.wf_item(new_order as int, oldlen));
                 assert(self@.wf_item(new_order as int, oldlen + 1));
                 assert forall|o, i| 0 <= o < MAX_ORDER && 0 <= i < self@.next[o].len()
                 implies self@.wf_item(o, i) by {
-                    let oldlen = old(self)@.next[o].len() as int;
-                    if i < oldlen {
+                    if i < old(self)@.next[o].len() {
                         assert(old(self)@.wf_item(o, i));
                         assert(self@.wf_item(o, i));
                     }
                 }
             }
-
-            assert(self@.wf());
-            assert(self@.wf_reserved());
             assert(self.wf_params()) by {
                 let n = 1usize << order;
-                let new_n = 1usize << new_order;
                 assert(old(self).nr_pages[order as int] * n <= self.page_count);
                 assert(self.nr_pages[order as int] < old(self).nr_pages[order as int]);
                 vstd::arithmetic::mul::lemma_mul_inequality(self.nr_pages[order as int] as int, old(self).nr_pages[order as int] as int, n as int);
-                assert(self.nr_pages[order as int] * n <= self.page_count);
-                assert(self.nr_pages[new_order as int] * new_n <= self.page_count);
             }
-            assert(self.wf_free_pages());
-            assert(self@.next_pages() =~= self.next_page@);
-            /*(assert(old(self).nr_pages[order as int] * (1usize << order) <= self.page_count);
-            assert(self.nr_pages[order as int] < old(self).nr_pages[order as int]);*/
-            //assert(self.nr_pages[order as int] * (1usize << order) <= self.page_count);
-            //assert(self.nr_pages[new_order as int] * (1usize << new_order) <= self.page_count);
         }
 
         Ok(())

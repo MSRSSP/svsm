@@ -11,6 +11,8 @@ use vstd::prelude::*;
 
 pub mod bits;
 
+pub mod tseq;
+
 verus! {
 
 global size_of usize == 8;

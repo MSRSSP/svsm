@@ -5,6 +5,7 @@ verus! {
 
 use verify_external::hw_spec::SpecMemMapTr;
 
+#[allow(missing_debug_implementations)]
 pub struct LinearMap {
     pub start_virt: VirtAddr,
     pub start_phys: int,
