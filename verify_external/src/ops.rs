@@ -56,7 +56,7 @@ def_uop_spec!(
 
 macro_rules! def_bin_ops_spec {
     ($trait:path, $extrait: ident, $fun:ident, $spec_trait:ident, $spec_requires:ident, $spec_ensures:ident, $axiom_requires:ident, $axiom_fn:ident) => {
-        builtin_macros::verus!{
+        builtin_macros::verus! {
             pub open spec fn $spec_ensures<T, Rhs, Output>(v: T, rhs: Rhs, ret: Output)-> bool;
 
             pub open spec fn $spec_requires<T, Rhs>(v: T, rhs: Rhs) -> bool;
