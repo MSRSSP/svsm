@@ -2,6 +2,7 @@ verus! {
 
 use vstd::arithmetic::div_mod::{lemma_mod_self_0, lemma_small_mod, lemma_add_mod_noop};
 
+#[verifier::spinoff_prover]
 broadcast proof fn lemma_wf_next_page_info(mr: MemoryRegion, order: int)
     requires
         mr.wf_mem_state(),
@@ -33,6 +34,7 @@ broadcast proof fn lemma_wf_next_page_info(mr: MemoryRegion, order: int)
     }
 }
 
+#[verifier::spinoff_prover]
 proof fn lemma_ens_has_free_pages_pages(mr: MemoryRegion, order: int)
     requires
         mr.spec_alloc_fails(order),
@@ -43,6 +45,7 @@ proof fn lemma_ens_has_free_pages_pages(mr: MemoryRegion, order: int)
 {
 }
 
+#[verifier::spinoff_prover]
 broadcast proof fn lemma_wf_perms<VAddr: SpecVAddrImpl, const N: usize>(
     perms: MemoryRegionTracked<VAddr, N>,
 )
@@ -59,6 +62,7 @@ broadcast proof fn lemma_wf_perms<VAddr: SpecVAddrImpl, const N: usize>(
     ) by { assert(perms.wf_item(order, i)) }
 }
 
+#[verifier::spinoff_prover]
 proof fn lemma_unique_pfn_same_order<VAddr: SpecVAddrImpl, const N: usize>(
     perms: MemoryRegionTracked<VAddr, N>,
     order: int,
@@ -110,6 +114,7 @@ proof fn lemma_unique_pfn_same_order<VAddr: SpecVAddrImpl, const N: usize>(
     }
 }
 
+#[verifier::spinoff_prover]
 proof fn lemma_unique_pfn_start<VAddr: SpecVAddrImpl, const N: usize>(
     perms: MemoryRegionTracked<VAddr, N>,
     o1: int,

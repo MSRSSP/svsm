@@ -492,7 +492,7 @@ impl MemoryRegion {
             ret.addr() == self.spec_page_info_addr(pfn as int)@,
     )]
     fn page_info_pptr(&self, pfn: usize) -> vstd::simple_pptr::PPtr<PageStorageType> {
-        proof! {broadcast use alloc_proof;}
+        proof! {broadcast use lemma_bit_usize_shl_values;}
         let offset = pfn * size_of::<PageStorageType>();
         self.start_virt.const_add(offset).as_pptr()
     }
@@ -508,10 +508,13 @@ impl MemoryRegion {
             Some(*ret) == self@.spec_page_storage_type(pfn as int)
     )]
     fn get_page_storage_type(&self, pfn: usize) -> &PageStorageType {
-        verus_exec_stmts! {
+        proof!{
             assert(self@.reserved.dom().contains(pfn as int));
             assert(self@.reserved[pfn as int].addr() == self@.spec_page_info_addr(pfn as int)@);
             assert(self@.reserved[pfn as int].addr() == self.spec_page_info_addr(pfn as int)@);
+            let info = self@.spec_page_info(pfn as int);
+        }
+        verus_exec_stmts! {
             let perm = Tracked(self.perms.borrow().reserved.tracked_borrow(pfn as int));
         }
         self.page_info_pptr(pfn).borrow(perm)
@@ -538,6 +541,7 @@ impl MemoryRegion {
     }
 
     /// Writes page information for a given page frame number.
+    #[cfg_attr(verus_keep_ghost, verifier::spinoff_prover)]
     #[verus_spec(
         requires
             old(self).req_write_page_info(pfn),
@@ -550,6 +554,7 @@ impl MemoryRegion {
         let info: PageStorageType = pi.to_mem();
         // SAFETY: we have checked that the pfn is valid via check_pfn() above.
         //unsafe { self.page_info_mut_ptr(pfn).write(info) };
+        proof!{let info = self@.spec_page_info(pfn as int);}
         verus_extra_stmts! {
             let mut perm = Tracked(self.perms.borrow_mut().reserved.tracked_remove(pfn as int));
         }
@@ -557,11 +562,13 @@ impl MemoryRegion {
             self.page_info_pptr(pfn).write(Tracked(perm.borrow_mut()), info);
         }
         proof! {
+            let info = self@.spec_page_info(pfn as int);
             self.perms.borrow_mut().reserved.tracked_insert(pfn as int, perm.get());
         }
     }
 
     /// Reads page information for a given page frame number.
+    #[cfg_attr(verus_keep_ghost, verifier::spinoff_prover)]
     #[verus_spec(ret =>
         requires
             self.wf_mem_state(),
@@ -602,7 +609,7 @@ impl MemoryRegion {
     )]
     fn get_next_page(&mut self, order: usize) -> Result<usize, AllocError> {
         proof! {
-            broadcast use alloc_proof, lemma_wf_next_page_info;
+            broadcast use lemma_bit_usize_shl_values, lemma_wf_next_page_info;
         }
         let pfn = self.next_page[order];
 
@@ -643,7 +650,7 @@ impl MemoryRegion {
         ensures old(self).ens_mark_compound_page(*self, pfn, 1usize << order, order),
     )]
     fn mark_compound_page(&mut self, pfn: usize, order: usize) {
-        proof! {broadcast use alloc_proof;}
+        proof! {broadcast use lemma_bit_usize_shl_values;}
         let nr_pages: usize = 1 << order;
         let compound = PageInfo::Compound(CompoundInfo { order });
         #[cfg_attr(verus_keep_ghost, verus_spec(
@@ -679,11 +686,9 @@ impl MemoryRegion {
             self.wf_mem_state(),
             ret.is_ok(),
     )]
-    #[cfg_attr(verus_keep_ghost, verifier::rlimit(4))]
+    #[cfg_attr(verus_keep_ghost, verifier::spinoff_prover)]
     fn split_page(&mut self, pfn: usize, order: usize) -> Result<(), AllocError> {
-        proof! {
-            broadcast use alloc_size_proof;
-        }
+        proof! { broadcast use lemma_bit_usize_shl_values; }
         if !(1..MAX_ORDER).contains(&order) {
             proof! {
                 assert(!(vstd::std_specs::cmp::spec_ge(&order, &1usize) && vstd::std_specs::cmp::spec_lt(&order, &MAX_ORDER)));

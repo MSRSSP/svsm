@@ -15,10 +15,6 @@ use crate::mm::address_space::LinearMap;
 
 include!("alloc.proof.verus.rs");
 
-pub broadcast group alloc_proof {
-    crate::address::sign_extend_proof,
-}
-
 pub broadcast group alloc_size_proof {
     crate::types::lemma_page_size,
     lemma_bit_usize_shl_values,
@@ -120,6 +116,7 @@ spec fn spec_page_count<T>(next: Seq<Seq<T>>, max_order: usize) -> int
 }
 
 impl<VAddr: SpecVAddrImpl, const N: usize> MemoryRegionTracked<VAddr, N> {
+    #[verifier::spinoff_prover]
     proof fn tracked_new() -> (tracked ret: MemoryRegionTracked<VAddr, N>)
         ensures
             ret.wf(),
@@ -139,6 +136,7 @@ impl<VAddr: SpecVAddrImpl, const N: usize> MemoryRegionTracked<VAddr, N> {
         ret
     }
 
+    #[verifier::spinoff_prover]
     proof fn tracked_pop_next(tracked &mut self, order: int, pfn: int) -> (tracked ret: RawPerm)
         requires
             0 <= order < N,
@@ -189,6 +187,7 @@ impl<VAddr: SpecVAddrImpl, const N: usize> MemoryRegionTracked<VAddr, N> {
         perm
     }
 
+    #[verifier::spinoff_prover]
     proof fn tracked_push(tracked &mut self, order: usize, pfn: usize, tracked perm: RawPerm)
         requires
             0 <= order < old(self).next.len(),
@@ -355,7 +354,7 @@ impl<VAddr: SpecVAddrImpl, const N: usize> MemoryRegionTracked<VAddr, N> {
         let reserved = self.reserved;
         let page_count = self.page_count();
         &&& forall|pfn: int|
-            #![trigger reserved[pfn]]
+            #![trigger self.spec_page_info(pfn)]
             0 <= pfn < page_count ==> (reserved[pfn].addr() == self.spec_page_info_addr(
                 pfn,
             ).spec_int_addr().unwrap() && self.spec_page_info(pfn).is_some())
