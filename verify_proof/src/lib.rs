@@ -10,8 +10,9 @@
 use vstd::prelude::*;
 
 pub mod bits;
-
+pub mod nonlinear;
 pub mod tseq;
+
 
 verus! {
 

@@ -386,3 +386,15 @@ pub broadcast proof fn lemma_bit_usize_shr_is_div(v: usize, n: usize)
 }
 
 } // verus!
+
+verus!{
+    #[verifier::bit_vector]
+    proof fn lemma_xor_neighbor(pfn: u64, order: u64)
+    requires
+        pfn & sub((1u64<<order), 1) == 0,
+    ensures
+        pfn & sub(1u64<<(add(order, 1)), 1) == 0 ==>  pfn ^ (1u64 << order) == add(pfn, (1u64 << order)),
+        pfn & sub(1u64<<(add(order, 1)), 1) != 0 ==>  pfn ^ (1u64 << order) == sub(pfn, (1u64 << order)),
+    {
+    }
+}

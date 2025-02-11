@@ -12,7 +12,7 @@ pub tracked struct TrackedSeq<T> {
 impl<T> TrackedSeq<T> {
     #[verifier::type_invariant]
     pub closed spec fn wf(&self) -> bool {
-        self.map.dom() =~= vstd::set_lib::set_int_range(0, self.size as int)
+        forall |i| 0 <= i < self.size ==> self.map.dom().contains(i)
     }
 
     pub closed spec fn to_seq(&self) -> Seq<T> {

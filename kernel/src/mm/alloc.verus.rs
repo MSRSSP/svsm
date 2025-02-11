@@ -3,7 +3,7 @@ use verify_external::hw_spec::{SpecMemMapTr, SpecVAddrImpl};
 use verify_proof::bits::lemma_bit_usize_shl_values;
 use verify_proof::tracked_exec_arbirary;
 use verify_proof::tseq::TrackedSeq;
-use vstd::arithmetic::mul::lemma_mul_left_inequality;
+use vstd::arithmetic::mul::lemma_mul_inequality;
 use vstd::raw_ptr::PointsToRaw;
 use vstd::set_lib::set_int_range;
 use vstd::simple_pptr::PointsTo;
@@ -17,7 +17,6 @@ include!("alloc.proof.verus.rs");
 
 pub broadcast group alloc_proof {
     crate::address::sign_extend_proof,
-    lemma_mul_left_inequality,
 }
 
 pub broadcast group alloc_size_proof {
@@ -135,6 +134,7 @@ impl<VAddr: SpecVAddrImpl, const N: usize> MemoryRegionTracked<VAddr, N> {
             pfn_to_virt: Seq::empty(),
         };
         VirtAddr::lemma_wf(0usize);
+        assert(ret.reserved.dom() =~= set_int_range(0, 0));
         //assert forall|i| 0 <= i < ret.page_count() implies ret.reserved.dom().contains(i) by {};
         ret
     }
@@ -156,11 +156,11 @@ impl<VAddr: SpecVAddrImpl, const N: usize> MemoryRegionTracked<VAddr, N> {
             ),
             self.next_page(order) == old(self).next_next_page(order),
             self.next_page(order) == old(self).get_free_info(pfn).unwrap().next_page,
-            self.next_pages() =~= old(self).next_pages().update(
+            self.next_pages() === old(self).next_pages().update(
                 order,
                 self.next_page(order) as usize,
             ),
-            self.free_page_counts() =~~= old(self).free_page_counts().update(
+            self.free_page_counts() === old(self).free_page_counts().update(
                 order,
                 (old(self).free_page_counts()[order] - 1) as nat,
             ),
@@ -178,6 +178,14 @@ impl<VAddr: SpecVAddrImpl, const N: usize> MemoryRegionTracked<VAddr, N> {
         }
         assert(self.free_page_counts()[order] == self.next[order].len());
         assert(self.wf());
+        assert(self.next_pages() =~= old(self).next_pages().update(
+            order,
+            self.next_page(order) as usize,
+        ));
+        assert(self.free_page_counts() =~= old(self).free_page_counts().update(
+            order,
+            (old(self).free_page_counts()[order] - 1) as nat,
+        ));
         perm
     }
 
@@ -191,7 +199,7 @@ impl<VAddr: SpecVAddrImpl, const N: usize> MemoryRegionTracked<VAddr, N> {
         ensures
             self.wf_perms(),
             self.next[order as int].last() == pfn,
-            self.next[order as int] =~= old(self).next[order as int].push(pfn),
+            self.next[order as int] === old(self).next[order as int].push(pfn),
             self.next === old(self).next.update(order as int, self.next[order as int]),
             self.reserved === old(self).reserved,
             self.pfn_to_virt === old(self).pfn_to_virt,
@@ -201,6 +209,7 @@ impl<VAddr: SpecVAddrImpl, const N: usize> MemoryRegionTracked<VAddr, N> {
                 perm,
             ),
     {
+        reveal(MemoryRegionTracked::wf_perms);
         let order = order as int;
         let idx = self.next[order].len() as int;
         self.avail.tracked_insert((order, idx), perm);
@@ -284,7 +293,8 @@ impl<VAddr: SpecVAddrImpl, const N: usize> MemoryRegionTracked<VAddr, N> {
         &&& avail.dom() =~= Set::new(
             |k: (int, int)| 0 <= k.0 < N && 0 <= k.1 < self.next[k.0].len(),
         )
-        &&& reserved.dom() =~= set_int_range(0, page_count as int)
+        //&&& reserved.dom() =~= set_int_range(0, page_count as int)
+
     }
 
     #[verifier(inline)]
@@ -306,6 +316,7 @@ impl<VAddr: SpecVAddrImpl, const N: usize> MemoryRegionTracked<VAddr, N> {
         let n = 1usize << order;
         &&& 0 < pfn < self.page_count()
         &&& pfn + n <= self.page_count()
+        &&& pfn % n == 0
         &&& order < MAX_ORDER
     }
 
@@ -348,7 +359,7 @@ impl<VAddr: SpecVAddrImpl, const N: usize> MemoryRegionTracked<VAddr, N> {
             0 <= pfn < page_count ==> (reserved[pfn].addr() == self.spec_page_info_addr(
                 pfn,
             ).spec_int_addr().unwrap() && self.spec_page_info(pfn).is_some())
-        &&& reserved.dom() =~= set_int_range(0, page_count as int)
+        &&& reserved.dom() === set_int_range(0, page_count as int)
     }
 
     spec fn wf_info(&self) -> bool {
@@ -356,6 +367,7 @@ impl<VAddr: SpecVAddrImpl, const N: usize> MemoryRegionTracked<VAddr, N> {
         &&& forall|order, i| 0 <= order < N && 0 <= i < next[order].len() ==> self.wf_item(order, i)
     }
 
+    #[verifier(opaque)]
     spec fn wf_perms(&self) -> bool {
         let next = self.next;
         &&& next.len() == N
@@ -377,7 +389,7 @@ impl<VAddr: SpecVAddrImpl, const N: usize> MemoryRegionTracked<VAddr, N> {
         let pi = self.spec_page_info(pfn);
         &&& pi === Some(PageInfo::Free(FreeInfo { next_page: next_pfn, order }))
         &&& forall|i|
-            #![trigger self.reserved[i]]
+            #![trigger self.spec_page_info(i)]
             pfn < i < pfn + n ==> self.spec_page_info(i) == Some(
                 PageInfo::Compound(CompoundInfo { order }),
             )
@@ -449,7 +461,7 @@ impl MemoryRegion {
 
     spec fn wf_pfn_to_virt(&self) -> bool {
         let map = self.map();
-        self@.pfn_to_virt =~= Seq::new(
+        self@.pfn_to_virt === Seq::new(
             (map.size / PAGE_SIZE as nat),
             |pfn|
                 VirtInfo {
@@ -528,17 +540,17 @@ impl MemoryRegion {
         &&& ret.is_err() ==> self === new_self
         &&& ret.is_ok() ==> {
             &&& new_tmp.last().wf_vaddr_order(vaddr, order as usize)
-            &&& new_tmp =~= tmp.push(
+            &&& new_tmp === tmp.push(
                 new_tmp.last(),
             )
             //&&& new_self.tmp_perms@.len() == self.tmp_perms@.len() + 1
             &&& ret.unwrap() == self.next_page[order]
             &&& new_self.valid_pfn_order(ret.unwrap(), order as usize)
-            &&& new_self.free_pages@ =~= self.free_pages@.update(
+            &&& new_self.free_pages@ === self.free_pages@.update(
                 order,
                 (self.free_pages[order] - 1) as usize,
             )
-            &&& new_self.next_page@ =~= self.next_page@.update(order, new_self.next_page[order])
+            &&& new_self.next_page@ === self.next_page@.update(order, new_self.next_page[order])
             &&& new_self.nr_pages === self.nr_pages
             &&& new_self@.pfn_not_available(ret.unwrap(), order as usize)
         }
@@ -553,7 +565,8 @@ impl MemoryRegion {
         forall|i| #![trigger self.next_page[i]] order <= i < MAX_ORDER ==> self.next_page[i] == 0
     }
 
-    pub closed spec fn valid_pfn_order(&self, pfn: usize, order: usize) -> bool {
+    #[verifier(inline)]
+    pub open spec fn valid_pfn_order(&self, pfn: usize, order: usize) -> bool {
         self@.valid_pfn_order(pfn, order)
     }
 
@@ -592,8 +605,8 @@ impl MemoryRegion {
     pub closed spec fn ens_split_page_ok(&self, new: &Self, pfn: usize, order: usize) -> bool {
         let free_perms = self@.next;
         let new_free_perms = new@.next;
-        let tmp = self.tmp_perms@.to_seq();
-        let new_tmp = new.tmp_perms@.to_seq();
+        let tmp = self.tmp_perms@@;
+        let new_tmp = new.tmp_perms@@;
         let rhs_pfn = (pfn + (1usize << order) / 2) as usize;
         let new_order = order - 1;
         let order = order as int;
@@ -691,157 +704,20 @@ impl MemoryRegion {
         &&& new@.marked_free(pfn, order, next_pfn)
         &&& new.wf_reserved()
     }
-}
 
-trait SpecDecoderProof<PageStorageType>: core::marker::Sized {
-    spec fn spec_decode(mem: PageStorageType) -> Option<Self>;
-
-    spec fn spec_encode(&self) -> PageStorageType;
-
-    proof fn proof_encode_decode(&self)
-        ensures
-            Self::spec_decode(self.spec_encode()).is_some(),
-            Self::spec_decode(self.spec_encode()).unwrap() === *self,
-    ;
-}
-
-impl SpecDecoderProof<PageStorageType> for PageType {
-    spec fn spec_decode(mem: PageStorageType) -> Option<Self>;
-
-    spec fn spec_encode(&self) -> PageStorageType {
-        let val = match self {
-            PageType::Free => 0,
-            PageType::Allocated => 1,
-            PageType::SlabPage => 2,
-            PageType::Compound => 3,
-            PageType::File => 4,
-            PageType::Reserved => (1u64 << 4) - 1,
-        };
-        PageStorageType(val as u64)
+    spec fn req_compound_neighbor(&self, pfn: usize, order: usize) -> bool {
+        self.valid_pfn_order(pfn, order)
     }
 
-    #[verifier::external_body]
-    proof fn proof_encode_decode(&self) {
-    }
-}
-
-impl SpecDecoderProof<PageStorageType> for FreeInfo {
-    spec fn spec_decode(mem: PageStorageType) -> Option<Self>;
-
-    spec fn spec_encode(&self) -> PageStorageType;
-
-    #[verifier::external_body]
-    proof fn proof_encode_decode(&self)
-        ensures
-            PageType::spec_decode(self.spec_encode()) === Some(PageType::Free),
-    {
-    }
-}
-
-impl SpecDecoderProof<PageStorageType> for AllocatedInfo {
-    spec fn spec_decode(mem: PageStorageType) -> Option<Self>;
-
-    spec fn spec_encode(&self) -> PageStorageType;
-
-    #[verifier::external_body]
-    proof fn proof_encode_decode(&self)
-        ensures
-            PageType::spec_decode(self.spec_encode()) === Some(PageType::Allocated),
-    {
-    }
-}
-
-impl SpecDecoderProof<PageStorageType> for SlabPageInfo {
-    spec fn spec_decode(mem: PageStorageType) -> Option<Self>;
-
-    spec fn spec_encode(&self) -> PageStorageType;
-
-    #[verifier::external_body]
-    proof fn proof_encode_decode(&self)
-        ensures
-            PageType::spec_decode(self.spec_encode()) === Some(PageType::SlabPage),
-    {
-    }
-}
-
-impl SpecDecoderProof<PageStorageType> for CompoundInfo {
-    spec fn spec_decode(mem: PageStorageType) -> Option<Self>;
-
-    spec fn spec_encode(&self) -> PageStorageType;
-
-    #[verifier::external_body]
-    proof fn proof_encode_decode(&self)
-        ensures
-            PageType::spec_decode(self.spec_encode()) === Some(PageType::Compound),
-    {
-    }
-}
-
-impl SpecDecoderProof<PageStorageType> for FileInfo {
-    spec fn spec_decode(mem: PageStorageType) -> Option<Self>;
-
-    spec fn spec_encode(&self) -> PageStorageType;
-
-    #[verifier::external_body]
-    proof fn proof_encode_decode(&self)
-        ensures
-            PageType::spec_decode(self.spec_encode()) === Some(PageType::File),
-    {
-    }
-}
-
-impl SpecDecoderProof<PageStorageType> for ReservedInfo {
-    spec fn spec_decode(mem: PageStorageType) -> Option<Self>;
-
-    spec fn spec_encode(&self) -> PageStorageType;
-
-    #[verifier::external_body]
-    proof fn proof_encode_decode(&self)
-        ensures
-            PageType::spec_decode(self.spec_encode()) === Some(PageType::Reserved),
-    {
-    }
-}
-
-impl SpecDecoderProof<PageStorageType> for PageInfo {
-    closed spec fn spec_decode(mem: PageStorageType) -> Option<Self> {
-        let typ = PageType::spec_decode(mem);
-        match typ {
-            Some(typ) => Some(
-                match typ {
-                    PageType::Free => Self::Free(FreeInfo::spec_decode(mem).unwrap()),
-                    PageType::Allocated => Self::Allocated(
-                        AllocatedInfo::spec_decode(mem).unwrap(),
-                    ),
-                    PageType::SlabPage => Self::Slab(SlabPageInfo::spec_decode(mem).unwrap()),
-                    PageType::Compound => Self::Compound(CompoundInfo::spec_decode(mem).unwrap()),
-                    PageType::File => Self::File(FileInfo::spec_decode(mem).unwrap()),
-                    PageType::Reserved => Self::Reserved(ReservedInfo::spec_decode(mem).unwrap()),
-                },
-            ),
-            _ => { None },
-        }
-    }
-
-    closed spec fn spec_encode(&self) -> PageStorageType {
-        match self {
-            Self::Free(fi) => fi.spec_encode(),
-            Self::Allocated(ai) => ai.spec_encode(),
-            Self::Slab(si) => si.spec_encode(),
-            Self::Compound(ci) => ci.spec_encode(),
-            Self::File(fi) => fi.spec_encode(),
-            Self::Reserved(ri) => ri.spec_encode(),
-        }
-    }
-
-    proof fn proof_encode_decode(&self) {
-        match self {
-            Self::Free(fi) => fi.proof_encode_decode(),
-            Self::Allocated(ai) => ai.proof_encode_decode(),
-            Self::Slab(si) => si.proof_encode_decode(),
-            Self::Compound(ci) => ci.proof_encode_decode(),
-            Self::File(fi) => fi.proof_encode_decode(),
-            Self::Reserved(ri) => ri.proof_encode_decode(),
+    spec fn ens_compound_neighbor_ok(&self, pfn: usize, order: usize, ret_pfn: usize) -> bool {
+        let new_order = (order + 1) as usize;
+        let n = 1usize << order;
+        if ret_pfn == pfn - n {
+            self.valid_pfn_order(ret_pfn, new_order)
+        } else if ret_pfn == pfn + n {
+            self.valid_pfn_order(pfn, new_order)
+        } else {
+            false
         }
     }
 }

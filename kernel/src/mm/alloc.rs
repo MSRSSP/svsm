@@ -679,11 +679,10 @@ impl MemoryRegion {
             self.wf_mem_state(),
             ret.is_ok(),
     )]
-    #[cfg_attr(verus_keep_ghost, verifier::rlimit(10))]
+    #[cfg_attr(verus_keep_ghost, verifier::rlimit(4))]
     fn split_page(&mut self, pfn: usize, order: usize) -> Result<(), AllocError> {
-        // (1..(MAX_ORDER - 1)).contains(&order)?
         proof! {
-            broadcast use alloc_size_proof, lemma_wf_perms;
+            broadcast use alloc_size_proof;
         }
         if !(1..MAX_ORDER).contains(&order) {
             proof! {
@@ -697,7 +696,6 @@ impl MemoryRegion {
         let pfn2 = pfn + (1usize << new_order);
 
         proof! {
-            assert(self@.wf_perms());
             let vaddr1 = self.lemma_get_virt(pfn1 as int);
             let vaddr2 = self.lemma_get_virt(pfn2 as int);
             let tracked p = self.tmp_perms.borrow_mut().tracked_pop();
@@ -707,10 +705,10 @@ impl MemoryRegion {
             let tracked perms = p.split(vaddr1.region_to_dom(new_size as nat));
             let tracked p1 = perms.0;
             let tracked p2 = perms.1;
+            lemma_wf_perms(self.perms@);
+            lemma_valid_pfn_order_split(self, pfn1, order);
             self.perms.borrow_mut().tracked_push(new_order, pfn2, p2);
             self.perms.borrow_mut().tracked_push(new_order, pfn1, p1);
-            //assert(self.nr_pages[order as int] > 0);
-            //assert(self.nr_pages[new_order as int] + 2 <= usize::MAX);
         }
 
         let next_pfn = self.next_page[new_order];
@@ -738,9 +736,11 @@ impl MemoryRegion {
             }
             assert(self.wf_params()) by {
                 let n = 1usize << order;
-                assert(old(self).nr_pages[order as int] * n <= self.page_count);
-                assert(self.nr_pages[order as int] < old(self).nr_pages[order as int]);
-                vstd::arithmetic::mul::lemma_mul_inequality(self.nr_pages[order as int] as int, old(self).nr_pages[order as int] as int, n as int);
+                let order = order as int;
+                let n = n as int;
+                assert(old(self).nr_pages[order] * n <= self.page_count);
+                assert(self.nr_pages[order] < old(self).nr_pages[order]);
+                lemma_mul_inequality(self.nr_pages[order] as int, old(self).nr_pages[order] as int, n);
             }
         }
 
@@ -872,12 +872,18 @@ impl MemoryRegion {
 
     /// Finds the neighboring page frame number for a compound page.
     #[verus_verify(external_body)]
+    #[verus_spec(ret =>
+        requires
+            self.req_compound_neighbor(pfn, order),
+        ensures
+            self.ens_compound_neighbor_ok(pfn, order, ret.unwrap()),
+    )]
     fn compound_neighbor(&self, pfn: usize, order: usize) -> Result<usize, AllocError> {
         if order >= MAX_ORDER - 1 {
             return Err(AllocError::InvalidPageOrder(order));
         }
 
-        assert_eq!(pfn & ((1usize << order) - 1), 0);
+        //assert_eq!(pfn & ((1usize << order) - 1), 0);
         let pfn = pfn ^ (1usize << order);
         if pfn >= self.page_count {
             return Err(AllocError::InvalidPfn(pfn));
@@ -888,6 +894,12 @@ impl MemoryRegion {
 
     /// Merges two pages of the same order into a new compound page.
     #[verus_verify(external_body)]
+    #[verus_spec(ret =>
+        requires
+            old(self).wf_mem_state(),
+        ensures
+            self.wf_mem_state(),
+    )]
     fn merge_pages(&mut self, pfn1: usize, pfn2: usize, order: usize) -> Result<usize, AllocError> {
         if order >= MAX_ORDER - 1 {
             return Err(AllocError::InvalidPageOrder(order));

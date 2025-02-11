@@ -1,5 +1,7 @@
 verus! {
 
+use vstd::arithmetic::div_mod::{lemma_mod_self_0, lemma_small_mod, lemma_add_mod_noop};
+
 broadcast proof fn lemma_wf_next_page_info(mr: MemoryRegion, order: int)
     requires
         mr.wf_mem_state(),
@@ -49,6 +51,7 @@ broadcast proof fn lemma_wf_perms<VAddr: SpecVAddrImpl, const N: usize>(
     ensures
         #[trigger] perms.wf_perms(),
 {
+    reveal(MemoryRegionTracked::wf_perms);
     assert forall|order, i|
         0 <= order < N && 0 <= i < perms.next[order].len() implies #[trigger] perms.wf_item_perm(
         order,
@@ -180,6 +183,214 @@ proof fn lemma_unique_pfn<VAddr: SpecVAddrImpl, const N: usize>(
     let c2 = Some(PageInfo::Compound(CompoundInfo { order: o2 as usize }));
     assert(perms.spec_page_info(pfn1 as int) !== c2);
     assert(perms.spec_page_info(pfn2 as int) !== c1);
+}
+
+broadcast proof fn lemma_valid_pfn_order_split(mr: &MemoryRegion, pfn: usize, order: usize)
+    requires
+        #[trigger] mr.valid_pfn_order(pfn, order),
+        0 < order < MAX_ORDER,
+    ensures
+        mr.valid_pfn_order(pfn, (order - 1) as usize),
+        (pfn + (1usize << (order - 1) as usize)) % (1usize << (order - 1) as usize) as int == 0,
+{
+    broadcast use lemma_bit_usize_shl_values;
+
+    let n = 1usize << order;
+    let lower_n = 1usize << (order - 1) as usize;
+    assert(1usize << order == 2 * (1usize << (order - 1) as usize)) by (bit_vector)
+        requires
+            0 < order < 64,
+    ;
+    if mr.valid_pfn_order(pfn, order) && order > 0 {
+        verify_proof::nonlinear::lemma_modulus_product_divisibility(pfn as int, lower_n as int, 2);
+    }
+    lemma_add_mod_noop(pfn as int, lower_n as int, lower_n as int);
+    lemma_mod_self_0(lower_n as int);
+    lemma_small_mod(0, lower_n as nat);
+    assert((pfn + lower_n) % lower_n as int == 0);
+}
+
+broadcast proof fn lemma_valid_pfn_order_merge(mr: MemoryRegion, pfn: usize, order: usize)
+    requires
+        #[trigger] mr.valid_pfn_order(pfn, order),
+    ensures
+        ((pfn % (1usize << (order + 1) as usize) == 0) && (pfn + (1usize << (order + 1) as usize)
+            <= mr.page_count)) ==> (pfn + (1usize << order)) % (1usize << order) as int == 0,
+        (pfn % (1usize << (order + 1) as usize) != 0) && (order + 1) < MAX_ORDER ==> (pfn - (1usize
+            << order)) % (1usize << (order + 1) as usize) as int == 0,
+{
+    broadcast use lemma_bit_usize_shl_values;
+
+    let n = 1usize << order;
+    let m = 1usize << (order + 1) as usize;
+    assert(2 * (1usize << order) == 1usize << (order + 1) as usize) by (bit_vector)
+        requires
+            order < 63,
+    ;
+    assert(m == n + n);
+
+    verify_proof::nonlinear::lemma_modulus_add_sub_m(pfn as int, n as int);
+    assert((pfn + n) % n as int == 0);
+    if pfn % m != 0 {
+        assert((pfn - n) % m as int == 0);
+        assert(pfn - n >= 0);
+    }
+}
+
+} // verus!
+verus! {
+
+trait SpecDecoderProof<PageStorageType>: core::marker::Sized {
+    spec fn spec_decode(mem: PageStorageType) -> Option<Self>;
+
+    spec fn spec_encode(&self) -> PageStorageType;
+
+    proof fn proof_encode_decode(&self)
+        ensures
+            Self::spec_decode(self.spec_encode()).is_some(),
+            Self::spec_decode(self.spec_encode()).unwrap() === *self,
+    ;
+}
+
+impl SpecDecoderProof<PageStorageType> for PageType {
+    spec fn spec_decode(mem: PageStorageType) -> Option<Self>;
+
+    spec fn spec_encode(&self) -> PageStorageType {
+        let val = match self {
+            PageType::Free => 0,
+            PageType::Allocated => 1,
+            PageType::SlabPage => 2,
+            PageType::Compound => 3,
+            PageType::File => 4,
+            PageType::Reserved => (1u64 << 4) - 1,
+        };
+        PageStorageType(val as u64)
+    }
+
+    #[verifier::external_body]
+    proof fn proof_encode_decode(&self) {
+    }
+}
+
+impl SpecDecoderProof<PageStorageType> for FreeInfo {
+    spec fn spec_decode(mem: PageStorageType) -> Option<Self>;
+
+    spec fn spec_encode(&self) -> PageStorageType;
+
+    #[verifier::external_body]
+    proof fn proof_encode_decode(&self)
+        ensures
+            PageType::spec_decode(self.spec_encode()) === Some(PageType::Free),
+    {
+    }
+}
+
+impl SpecDecoderProof<PageStorageType> for AllocatedInfo {
+    spec fn spec_decode(mem: PageStorageType) -> Option<Self>;
+
+    spec fn spec_encode(&self) -> PageStorageType;
+
+    #[verifier::external_body]
+    proof fn proof_encode_decode(&self)
+        ensures
+            PageType::spec_decode(self.spec_encode()) === Some(PageType::Allocated),
+    {
+    }
+}
+
+impl SpecDecoderProof<PageStorageType> for SlabPageInfo {
+    spec fn spec_decode(mem: PageStorageType) -> Option<Self>;
+
+    spec fn spec_encode(&self) -> PageStorageType;
+
+    #[verifier::external_body]
+    proof fn proof_encode_decode(&self)
+        ensures
+            PageType::spec_decode(self.spec_encode()) === Some(PageType::SlabPage),
+    {
+    }
+}
+
+impl SpecDecoderProof<PageStorageType> for CompoundInfo {
+    spec fn spec_decode(mem: PageStorageType) -> Option<Self>;
+
+    spec fn spec_encode(&self) -> PageStorageType;
+
+    #[verifier::external_body]
+    proof fn proof_encode_decode(&self)
+        ensures
+            PageType::spec_decode(self.spec_encode()) === Some(PageType::Compound),
+    {
+    }
+}
+
+impl SpecDecoderProof<PageStorageType> for FileInfo {
+    spec fn spec_decode(mem: PageStorageType) -> Option<Self>;
+
+    spec fn spec_encode(&self) -> PageStorageType;
+
+    #[verifier::external_body]
+    proof fn proof_encode_decode(&self)
+        ensures
+            PageType::spec_decode(self.spec_encode()) === Some(PageType::File),
+    {
+    }
+}
+
+impl SpecDecoderProof<PageStorageType> for ReservedInfo {
+    spec fn spec_decode(mem: PageStorageType) -> Option<Self>;
+
+    spec fn spec_encode(&self) -> PageStorageType;
+
+    #[verifier::external_body]
+    proof fn proof_encode_decode(&self)
+        ensures
+            PageType::spec_decode(self.spec_encode()) === Some(PageType::Reserved),
+    {
+    }
+}
+
+impl SpecDecoderProof<PageStorageType> for PageInfo {
+    closed spec fn spec_decode(mem: PageStorageType) -> Option<Self> {
+        let typ = PageType::spec_decode(mem);
+        match typ {
+            Some(typ) => Some(
+                match typ {
+                    PageType::Free => Self::Free(FreeInfo::spec_decode(mem).unwrap()),
+                    PageType::Allocated => Self::Allocated(
+                        AllocatedInfo::spec_decode(mem).unwrap(),
+                    ),
+                    PageType::SlabPage => Self::Slab(SlabPageInfo::spec_decode(mem).unwrap()),
+                    PageType::Compound => Self::Compound(CompoundInfo::spec_decode(mem).unwrap()),
+                    PageType::File => Self::File(FileInfo::spec_decode(mem).unwrap()),
+                    PageType::Reserved => Self::Reserved(ReservedInfo::spec_decode(mem).unwrap()),
+                },
+            ),
+            _ => { None },
+        }
+    }
+
+    closed spec fn spec_encode(&self) -> PageStorageType {
+        match self {
+            Self::Free(fi) => fi.spec_encode(),
+            Self::Allocated(ai) => ai.spec_encode(),
+            Self::Slab(si) => si.spec_encode(),
+            Self::Compound(ci) => ci.spec_encode(),
+            Self::File(fi) => fi.spec_encode(),
+            Self::Reserved(ri) => ri.spec_encode(),
+        }
+    }
+
+    proof fn proof_encode_decode(&self) {
+        match self {
+            Self::Free(fi) => fi.proof_encode_decode(),
+            Self::Allocated(ai) => ai.proof_encode_decode(),
+            Self::Slab(si) => si.proof_encode_decode(),
+            Self::Compound(ci) => ci.proof_encode_decode(),
+            Self::File(fi) => fi.proof_encode_decode(),
+            Self::Reserved(ri) => ri.proof_encode_decode(),
+        }
+    }
 }
 
 } // verus!
