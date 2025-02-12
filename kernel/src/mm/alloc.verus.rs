@@ -1,6 +1,10 @@
+use crate::utils::util::spec_align_up;
 use verify_external::convert::FromSpec;
 use verify_external::hw_spec::{SpecMemMapTr, SpecVAddrImpl};
-use verify_proof::bits::lemma_bit_usize_shl_values;
+use verify_proof::bits::{
+    lemma_bit_usize_and_mask_is_mod, lemma_bit_usize_shl_values, lemma_bit_usize_xor_neighbor,
+};
+use verify_proof::nonlinear::lemma_modulus_add_sub_m;
 use verify_proof::tracked_exec_arbirary;
 use verify_proof::tseq::TrackedSeq;
 use vstd::arithmetic::mul::lemma_mul_inequality;
@@ -142,7 +146,8 @@ impl<VAddr: SpecVAddrImpl, const N: usize> MemoryRegionTracked<VAddr, N> {
             0 <= order < N,
             old(self).wf(),
             pfn == old(self).next_page(order),
-            pfn > 0,
+            old(self).page_count() > 0,
+            pfn >= old(self).reserved_pfn_count(),
         ensures
             ret.wf_vaddr_order(self.pfn_to_virt[pfn].vaddr, order as usize),
             self.wf(),
@@ -163,9 +168,10 @@ impl<VAddr: SpecVAddrImpl, const N: usize> MemoryRegionTracked<VAddr, N> {
                 (old(self).free_page_counts()[order] - 1) as nat,
             ),
     {
+        let old_self = *self;
         let vaddr = self.pfn_to_virt[pfn].vaddr;
         let last_idx = self.next[order].len() - 1;
-        let old_self = *self;
+        assert(self.wf_info());
         assert(self.wf_item(order, last_idx));
         let tracked perm = self.avail.tracked_remove((order, last_idx));
         self.next = self.next.update(order, self.next[order].take(last_idx));
@@ -194,7 +200,7 @@ impl<VAddr: SpecVAddrImpl, const N: usize> MemoryRegionTracked<VAddr, N> {
             old(self).wf_perms(),
             old(self).valid_pfn_order(pfn, order),
             perm.wf_vaddr_order(old(self).pfn_to_virt[pfn as int].vaddr, order as usize),
-            pfn > 0,
+            pfn >= old(self).reserved_pfn_count(),
         ensures
             self.wf_perms(),
             self.next[order as int].last() == pfn,
@@ -229,7 +235,16 @@ impl<VAddr: SpecVAddrImpl, const N: usize> MemoryRegionTracked<VAddr, N> {
     }
 }
 
+pub open spec fn reserved_pfn_count(page_count: nat) -> nat {
+    spec_align_up(page_count as int, (0x1000 as int / 8)) as nat
+}
+
 impl<VAddr: SpecVAddrImpl, const N: usize> MemoryRegionTracked<VAddr, N> {
+    #[verifier(inline)]
+    pub open spec fn reserved_pfn_count(&self) -> nat {
+        reserved_pfn_count(self.page_count())
+    }
+
     pub closed spec fn spec_page_info_addr(&self, pfn: int) -> VAddr {
         self.pfn_to_virt[pfn].info_vaddr
     }
@@ -313,8 +328,8 @@ impl<VAddr: SpecVAddrImpl, const N: usize> MemoryRegionTracked<VAddr, N> {
 
     pub closed spec fn valid_pfn_order(&self, pfn: usize, order: usize) -> bool {
         let n = 1usize << order;
-        &&& 0 < pfn < self.page_count()
-        &&& pfn + n <= self.page_count()
+        &&& self.reserved_pfn_count() < pfn < self.page_count()
+        &&& pfn + n <= self.page_count() < usize::MAX
         &&& pfn % n == 0
         &&& order < MAX_ORDER
     }
@@ -323,7 +338,7 @@ impl<VAddr: SpecVAddrImpl, const N: usize> MemoryRegionTracked<VAddr, N> {
         let pfn = self.next[order][i] as int;
         let perm = self.avail[(order, i)];
         let vaddr = self.pfn_to_virt[pfn].vaddr;
-        &&& pfn > 0
+        &&& pfn >= self.reserved_pfn_count()
         &&& self.valid_pfn_order(pfn as usize, order as usize)
         &&& perm.wf_vaddr_order(vaddr, order as usize)
     }
@@ -361,9 +376,18 @@ impl<VAddr: SpecVAddrImpl, const N: usize> MemoryRegionTracked<VAddr, N> {
         &&& reserved.dom() === set_int_range(0, page_count as int)
     }
 
+    spec fn wf_reserved_info(&self) -> bool {
+        forall|pfn: int|
+            0 <= pfn < self.reserved_pfn_count() ==> #[trigger] self.spec_page_info(pfn) === Some(
+                PageInfo::Reserved(ReservedInfo),
+            )
+    }
+
     spec fn wf_info(&self) -> bool {
         let next = self.next;
-        &&& forall|order, i| 0 <= order < N && 0 <= i < next[order].len() ==> self.wf_item(order, i)
+        &&& self.wf_reserved_info()
+        &&& forall|order, i|
+            0 <= order < N && 0 <= i < next[order].len() ==> #[trigger] self.wf_item(order, i)
     }
 
     #[verifier(opaque)]
@@ -392,6 +416,10 @@ impl<VAddr: SpecVAddrImpl, const N: usize> MemoryRegionTracked<VAddr, N> {
             pfn < i < pfn + n ==> self.spec_page_info(i) == Some(
                 PageInfo::Compound(CompoundInfo { order }),
             )
+    }
+
+    spec fn marked_reserved(&self, pfn: int) -> bool {
+        self.spec_page_info(pfn) === Some(PageInfo::Reserved(ReservedInfo))
     }
 }
 
@@ -704,20 +732,38 @@ impl MemoryRegion {
         &&& new.wf_reserved()
     }
 
-    spec fn req_compound_neighbor(&self, pfn: usize, order: usize) -> bool {
-        self.valid_pfn_order(pfn, order)
+    spec fn ens_find_neighbor(pfn: usize, order: usize, ret_pfn: usize) -> bool {
+        &&& ret_pfn == pfn - (1usize << order) || ret_pfn == pfn + (1usize << order)
+        &&& ret_pfn == pfn - (1usize << order) ==> ret_pfn % (1usize << (order + 1) as usize) == 0
+        &&& ret_pfn == pfn + (1usize << order) ==> pfn % (1usize << (order + 1) as usize) == 0
     }
 
     spec fn ens_compound_neighbor_ok(&self, pfn: usize, order: usize, ret_pfn: usize) -> bool {
         let new_order = (order + 1) as usize;
         let n = 1usize << order;
-        if ret_pfn == pfn - n {
-            self.valid_pfn_order(ret_pfn, new_order)
-        } else if ret_pfn == pfn + n {
-            self.valid_pfn_order(pfn, new_order)
-        } else {
-            false
-        }
+        let m = 1usize << new_order;
+        &&& ret_pfn < self.page_count
+        &&& Self::ens_find_neighbor(pfn, order, ret_pfn)
+    }
+
+    pub closed spec fn ens_allocate_pfn(&self, new: &Self, pfn: usize, order: usize) -> bool {
+        &&& self.wf_mem_stat_state()
+        &&& self.tmp_perms@@.last().wf_vaddr_order(self.spec_get_virt(pfn as int), order as usize)
+    }
+
+    pub closed spec fn req_try_to_merge_page(&self, pfn: usize, order: usize) -> bool {
+        &&& self.wf_mem_stat_state()
+        &&& self.tmp_perms@@.last().wf_vaddr_order(self.spec_get_virt(pfn as int), order as usize)
+        &&& self.valid_pfn_order(pfn, order)
+    }
+
+    pub closed spec fn req_merge_pages(&self, pfn1: usize, pfn2: usize, order: usize) -> bool {
+        &&& self.wf_mem_state()
+        &&& self.tmp_perms@@.last().wf_vaddr_order(self.spec_get_virt(pfn2 as int), order as usize)
+        &&& self.tmp_perms@@[self.tmp_perms@@.len() - 2].wf_vaddr_order(
+            self.spec_get_virt(pfn1 as int),
+            order as usize,
+        )
     }
 }
 

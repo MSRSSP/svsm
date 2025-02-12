@@ -147,6 +147,7 @@ proof fn lemma_unique_pfn_start<VAddr: SpecVAddrImpl, const N: usize>(
     }
 }
 
+#[verifier::spinoff_prover]
 proof fn lemma_unique_pfn<VAddr: SpecVAddrImpl, const N: usize>(
     perms: MemoryRegionTracked<VAddr, N>,
     o1: int,
@@ -190,6 +191,7 @@ proof fn lemma_unique_pfn<VAddr: SpecVAddrImpl, const N: usize>(
     assert(perms.spec_page_info(pfn2 as int) !== c1);
 }
 
+#[verifier::spinoff_prover]
 broadcast proof fn lemma_valid_pfn_order_split(mr: &MemoryRegion, pfn: usize, order: usize)
     requires
         #[trigger] mr.valid_pfn_order(pfn, order),
@@ -215,6 +217,7 @@ broadcast proof fn lemma_valid_pfn_order_split(mr: &MemoryRegion, pfn: usize, or
     assert((pfn + lower_n) % lower_n as int == 0);
 }
 
+#[verifier::spinoff_prover]
 broadcast proof fn lemma_valid_pfn_order_merge(mr: MemoryRegion, pfn: usize, order: usize)
     requires
         #[trigger] mr.valid_pfn_order(pfn, order),
@@ -239,6 +242,39 @@ broadcast proof fn lemma_valid_pfn_order_merge(mr: MemoryRegion, pfn: usize, ord
     if pfn % m != 0 {
         assert((pfn - n) % m as int == 0);
         assert(pfn - n >= 0);
+    }
+}
+
+#[verifier::spinoff_prover]
+proof fn lemma_compound_neighbor(pfn: usize, order: usize, ret_pfn: usize)
+    requires
+        pfn % (1usize << order) == 0,
+        pfn + (1usize << order) <= usize::MAX,
+        ret_pfn == pfn ^ (1usize << order),
+        0 <= order < 63,
+    ensures
+        (ret_pfn == pfn - (1usize << order)) ==> ret_pfn % (1usize << (order + 1)) == 0,
+        MemoryRegion::ens_find_neighbor(pfn, order, ret_pfn),
+{
+    broadcast use lemma_bit_usize_shl_values;
+
+    assert(pfn % (1usize << order) == 0);
+    let n = 1usize << (order + 1);
+    assert(1usize << (order + 1) == 2 * (1usize << order));
+    lemma_bit_usize_and_mask_is_mod(pfn, ((1usize << order) - 1) as usize);
+    lemma_bit_usize_and_mask_is_mod(pfn, ((1usize << (order + 1) as usize) - 1) as usize);
+    lemma_bit_usize_xor_neighbor(pfn, order);
+    lemma_modulus_add_sub_m(pfn as int, (1usize << order) as int);
+    if ret_pfn == pfn - (1usize << order) {
+        let x = pfn;
+        let m = 1usize << order;
+        if x as int % (2 * m) == 0 {
+            assert(x & (2 * m - 1) as usize == 0);
+            assert(x & (n - 1) as usize == 0);
+            assert(x ^ m == sub(x, m));
+        }
+        assert(x as int % (2 * m) != 0);
+        assert(((x - m) % (2 * m) == 0 && (x >= m || x <= -m)))
     }
 }
 

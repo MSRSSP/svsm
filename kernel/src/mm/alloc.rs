@@ -508,7 +508,7 @@ impl MemoryRegion {
             Some(*ret) == self@.spec_page_storage_type(pfn as int)
     )]
     fn get_page_storage_type(&self, pfn: usize) -> &PageStorageType {
-        proof!{
+        proof! {
             assert(self@.reserved.dom().contains(pfn as int));
             assert(self@.reserved[pfn as int].addr() == self@.spec_page_info_addr(pfn as int)@);
             assert(self@.reserved[pfn as int].addr() == self.spec_page_info_addr(pfn as int)@);
@@ -554,7 +554,7 @@ impl MemoryRegion {
         let info: PageStorageType = pi.to_mem();
         // SAFETY: we have checked that the pfn is valid via check_pfn() above.
         //unsafe { self.page_info_mut_ptr(pfn).write(info) };
-        proof!{let info = self@.spec_page_info(pfn as int);}
+        proof! {let info = self@.spec_page_info(pfn as int);}
         verus_extra_stmts! {
             let mut perm = Tracked(self.perms.borrow_mut().reserved.tracked_remove(pfn as int));
         }
@@ -876,19 +876,24 @@ impl MemoryRegion {
     }
 
     /// Finds the neighboring page frame number for a compound page.
-    #[verus_verify(external_body)]
+    //#[verus_verify(external_body)]
     #[verus_spec(ret =>
         requires
-            self.req_compound_neighbor(pfn, order),
+            self.valid_pfn_order(pfn, order),
         ensures
-            self.ens_compound_neighbor_ok(pfn, order, ret.unwrap()),
+            ret.is_ok() ==> self.ens_compound_neighbor_ok(pfn, order, ret.unwrap()),
     )]
+    #[cfg_attr(verus_keep_ghost, verifier::spinoff_prover)]
     fn compound_neighbor(&self, pfn: usize, order: usize) -> Result<usize, AllocError> {
+        proof! {
+            lemma_compound_neighbor(pfn, order, pfn ^ (1usize << order));
+        }
         if order >= MAX_ORDER - 1 {
             return Err(AllocError::InvalidPageOrder(order));
         }
 
-        //assert_eq!(pfn & ((1usize << order) - 1), 0);
+        #[cfg(not(verus_keep_ghost))]
+        assert_eq!(pfn & ((1usize << order) - 1), 0);
         let pfn = pfn ^ (1usize << order);
         if pfn >= self.page_count {
             return Err(AllocError::InvalidPfn(pfn));
@@ -951,6 +956,10 @@ impl MemoryRegion {
     ///
     /// Panics if `order` is greater than [`MAX_ORDER`].
     #[verus_verify(external_body)]
+    #[verus_spec(ret =>
+        ensures
+            ret.is_ok() ==> old(self).ens_allocate_pfn(self, pfn, order),
+    )]
     fn allocate_pfn(&mut self, pfn: usize, order: usize) -> Result<(), AllocError> {
         let first_pfn = self.next_page[order];
 
@@ -1015,7 +1024,10 @@ impl MemoryRegion {
     /// Attempts to merge a given page with its neighboring page.
     /// If successful, returns the new page frame number after merging.
     /// If unsuccessful, the page remains unmerged, and an error is returned.
-    #[verus_verify(external_body)]
+    #[verus_spec(
+        requires
+            old(self).req_try_to_merge_page(pfn, order),
+    )]
     fn try_to_merge_page(&mut self, pfn: usize, order: usize) -> Result<usize, AllocError> {
         let neighbor_pfn = self.compound_neighbor(pfn, order)?;
         let neighbor_page = self.read_page_info(neighbor_pfn);
@@ -1026,6 +1038,10 @@ impl MemoryRegion {
 
         if fi.order != order {
             return Err(AllocError::InvalidPageOrder(fi.order));
+        }
+
+        proof! {
+            assert(0 < neighbor_pfn < self.page_count);
         }
 
         self.allocate_pfn(neighbor_pfn, order)?;

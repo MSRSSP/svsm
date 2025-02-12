@@ -387,14 +387,19 @@ pub broadcast proof fn lemma_bit_usize_shr_is_div(v: usize, n: usize)
 
 } // verus!
 
-verus!{
-    #[verifier::bit_vector]
-    proof fn lemma_xor_neighbor(pfn: u64, order: u64)
-    requires
-        pfn & sub((1u64<<order), 1) == 0,
-    ensures
-        pfn & sub(1u64<<(add(order, 1)), 1) == 0 ==>  pfn ^ (1u64 << order) == add(pfn, (1u64 << order)),
-        pfn & sub(1u64<<(add(order, 1)), 1) != 0 ==>  pfn ^ (1u64 << order) == sub(pfn, (1u64 << order)),
-    {
+macro_rules! bit_xor_neighbor {
+    ($typ:ty, $pname: ident) => {
+        verus!{
+        #[verifier::bit_vector]
+        pub proof fn $pname(pfn: $typ, order: $typ)
+        requires
+            pfn & sub((1u8 as $typ) << order, 1) == 0,
+        ensures
+            ((pfn & sub((1u8 as $typ) << add(order, 1), 1)) == 0) ==>  (pfn ^ ((1u8 as $typ) << order)) == add(pfn, ((1u8 as $typ) << order)),
+            ((pfn & sub((1u8 as $typ) << add(order, 1), 1)) != 0) ==>  (pfn ^ ((1u8 as $typ) << order)) == sub(pfn, ((1u8 as $typ) << order)),
+        {}
+        }
     }
 }
+
+bit_xor_neighbor!{usize, lemma_bit_usize_xor_neighbor}
