@@ -2,6 +2,73 @@ verus! {
 
 use vstd::arithmetic::div_mod::{lemma_mod_self_0, lemma_small_mod, lemma_add_mod_noop};
 
+impl<VAddr: SpecVAddrImpl, const N: usize> MemoryRegionTracked<VAddr, N> {
+    #[verifier::spinoff_prover]
+    proof fn lemma_unique_pfn(&self, o1: int, i1: int, o2: int, i2: int)
+        requires
+            self.wf(),
+            !((o1, i1) === (o2, i2)),
+            0 <= o1 < N,
+            0 <= o2 < N,
+            0 <= i1 < self.next[o1].len(),
+            0 <= i2 < self.next[o2].len(),
+        ensures
+            (self.next[o1][i1] + (1usize << o1 as usize) <= self.next[o2][i2]) || (self.next[o2][i2]
+                + (1usize << o2 as usize) <= self.next[o1][i1]),
+            self.next[o1][i1] != self.next[o2][i2],
+    {
+        let perms = *self;
+        lemma_unique_pfn_start(perms, o1, i1, o2, i2);
+        let n1 = (1usize << o1 as usize);
+        let n2 = (1usize << o2 as usize);
+        let pfn1 = perms.next[o1][i1];
+        let pfn2 = perms.next[o2][i2];
+        assert(perms.wf_item(o1, i1));
+        assert(perms.wf_item(o2, i2));
+        let next_pfn1 = if i1 > 0 {
+            perms.next[o1][i1 - 1]
+        } else {
+            0usize
+        };
+        let next_pfn2 = if i2 > 0 {
+            perms.next[o2][i2 - 1]
+        } else {
+            0usize
+        };
+        assert(perms.marked_free(pfn1 as int, o1 as usize, next_pfn1));
+        assert(perms.marked_free(pfn2 as int, o2 as usize, next_pfn2));
+        let c1 = Some(PageInfo::Compound(CompoundInfo { order: o1 as usize }));
+        let c2 = Some(PageInfo::Compound(CompoundInfo { order: o2 as usize }));
+        assert(perms.spec_page_info(pfn1 as int) !== c2);
+        assert(perms.spec_page_info(pfn2 as int) !== c1);
+    }
+
+    proof fn lemma_unique_pfn_forall(&self, order: int, idx: int)
+        requires
+            self.wf(),
+            0 <= idx < self.next[order].len(),
+            0 <= order < N,
+        ensures
+            forall|o: int, i: int|
+                0 <= o < N && 0 <= i < self.next[o].len() && (o, i) !== (order, idx)
+                    ==> #[trigger] self.next[o][i] + (1usize << (o as usize))
+                    <= self.next[order][idx] || self.next[order][idx] + (1usize << order)
+                    <= self.next[o][i],
+    {
+        let pfn = self.next[order][idx];
+        assert(self.wf_item(order, idx));
+        assert forall|o: int, i: int|
+            0 <= o < N && 0 <= i < self.next[o].len() && (o, i) !== (
+                order,
+                idx,
+            ) implies #[trigger] self.next[o][i] + (1usize << (o as usize)) <= pfn || pfn + (1usize
+            << order) <= self.next[o][i] by {
+            assert(0 <= i < self.next[o].len());
+            self.lemma_unique_pfn(o, i, order as int, idx);
+        }
+    }
+}
+
 #[verifier::spinoff_prover]
 broadcast proof fn lemma_wf_next_page_info(mr: MemoryRegion, order: int)
     requires
@@ -145,50 +212,6 @@ proof fn lemma_unique_pfn_start<VAddr: SpecVAddrImpl, const N: usize>(
     } else {
         lemma_unique_pfn_same_order(perms, o1, perms.next[o1].len() as int);
     }
-}
-
-#[verifier::spinoff_prover]
-proof fn lemma_unique_pfn<VAddr: SpecVAddrImpl, const N: usize>(
-    perms: MemoryRegionTracked<VAddr, N>,
-    o1: int,
-    i1: int,
-    o2: int,
-    i2: int,
-)
-    requires
-        perms.wf(),
-        !((o1, i1) === (o2, i2)),
-        0 <= o1 < N,
-        0 <= o2 < N,
-        0 <= i1 < perms.next[o1].len(),
-        0 <= i2 < perms.next[o2].len(),
-    ensures
-        (perms.next[o1][i1] + (1usize << o1 as usize) <= perms.next[o2][i2]) || (perms.next[o2][i2]
-            + (1usize << o2 as usize) <= perms.next[o1][i1]),
-{
-    lemma_unique_pfn_start(perms, o1, i1, o2, i2);
-    let n1 = (1usize << o1 as usize);
-    let n2 = (1usize << o2 as usize);
-    let pfn1 = perms.next[o1][i1];
-    let pfn2 = perms.next[o2][i2];
-    assert(perms.wf_item(o1, i1));
-    assert(perms.wf_item(o2, i2));
-    let next_pfn1 = if i1 > 0 {
-        perms.next[o1][i1 - 1]
-    } else {
-        0usize
-    };
-    let next_pfn2 = if i2 > 0 {
-        perms.next[o2][i2 - 1]
-    } else {
-        0usize
-    };
-    assert(perms.marked_free(pfn1 as int, o1 as usize, next_pfn1));
-    assert(perms.marked_free(pfn2 as int, o2 as usize, next_pfn2));
-    let c1 = Some(PageInfo::Compound(CompoundInfo { order: o1 as usize }));
-    let c2 = Some(PageInfo::Compound(CompoundInfo { order: o2 as usize }));
-    assert(perms.spec_page_info(pfn1 as int) !== c2);
-    assert(perms.spec_page_info(pfn2 as int) !== c1);
 }
 
 #[verifier::spinoff_prover]

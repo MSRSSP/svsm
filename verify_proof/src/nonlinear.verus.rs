@@ -32,6 +32,7 @@ verus!{
     ensures
         x % (2 * m) != 0 ==> (((x - m) % (2 * m) == 0) && (x >= m || x <= -m)),
         (x + m) % m == 0,
+        (x - m) % m == 0,
     {
         let i = x / m;
         let n = 2 * m;

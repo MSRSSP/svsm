@@ -140,48 +140,81 @@ impl<VAddr: SpecVAddrImpl, const N: usize> MemoryRegionTracked<VAddr, N> {
         ret
     }
 
+    spec fn ens_remove(&self, new: &Self, order: int, idx: int, ret: RawPerm) -> bool {
+        let next = self.next.update(order, self.next[order].remove(idx));
+        let expected = MemoryRegionTracked { next, avail: new.avail, ..*self };
+        let pfn = self.next[order][idx] as int;
+        &&& *new === expected
+        &&& ret.wf_vaddr_order(self.pfn_to_virt[pfn].vaddr, order as usize)
+        &&& (idx == self.next[order].len() - 1) ==> new.next_page(order) == self.next_next_page(
+            order,
+        )
+        // &&& (idx == self.next[order].len() - 1) ==> new.next_page(order) == self.get_free_info(pfn).unwrap().next_page
+        &&& new.next_pages() === self.next_pages().update(order, new.next_page(order) as usize)
+        &&& new.free_page_counts() === self.free_page_counts().update(
+            order,
+            (self.free_page_counts()[order] - 1) as nat,
+        )
+    }
+
     #[verifier::spinoff_prover]
-    proof fn tracked_pop_next(tracked &mut self, order: int, pfn: int) -> (tracked ret: RawPerm)
+    proof fn tracked_remove(tracked &mut self, order: int, idx: int) -> (tracked ret: RawPerm)
         requires
             0 <= order < N,
-            old(self).wf(),
-            pfn == old(self).next_page(order),
+            old(self).wf_perms() || old(self).wf(),
             old(self).page_count() > 0,
-            pfn >= old(self).reserved_pfn_count(),
+            0 <= idx < old(
+                self,
+            ).next[order].len(),
+    //let pfn = old(self).next[order][idx - 1] as int;
+    //let next_pfn = old(self).next[order][idx + 1];
+    //old(self).marked_free(pfn, order, next_pfn),
+
         ensures
-            ret.wf_vaddr_order(self.pfn_to_virt[pfn].vaddr, order as usize),
-            self.wf(),
-            self.reserved === old(self).reserved,
-            self.pfn_to_virt === old(self).pfn_to_virt,
-            self.next === old(self).next.update(
-                order,
-                old(self).next[order].take(old(self).next[order].len() - 1),
-            ),
-            self.next_page(order) == old(self).next_next_page(order),
-            self.next_page(order) == old(self).get_free_info(pfn).unwrap().next_page,
-            self.next_pages() === old(self).next_pages().update(
-                order,
-                self.next_page(order) as usize,
-            ),
-            self.free_page_counts() === old(self).free_page_counts().update(
-                order,
-                (old(self).free_page_counts()[order] - 1) as nat,
-            ),
+    //self.wf(),
+
+            self.wf_perms(),
+            old(self).ens_remove(self, order, idx, ret),
     {
+        reveal(MemoryRegionTracked::wf_perms);
+        assert(self.wf_perms()) by {
+            broadcast use lemma_wf_perms;
+
+        };
         let old_self = *self;
-        let vaddr = self.pfn_to_virt[pfn].vaddr;
-        let last_idx = self.next[order].len() - 1;
-        assert(self.wf_info());
-        assert(self.wf_item(order, last_idx));
-        let tracked perm = self.avail.tracked_remove((order, last_idx));
-        self.next = self.next.update(order, self.next[order].take(last_idx));
-        assert(self.next[order].len() == last_idx);
-        let next = self.next;
-        assert forall|o, i| 0 <= o < N && 0 <= i < next[o].len() implies self.wf_item(o, i) by {
-            assert(old_self.wf_item(o, i));
+        assert(self.wf_item_perm(order, idx));
+        let len = self.next[order].len();
+        let m = Map::new(
+            |k: (int, int)| self.avail.dom().contains(k) && k != (order, len - 1),
+            |k: (int, int)|
+                if k.0 == order && k.1 >= idx {
+                    (k.0, k.1 + 1)
+                } else {
+                    k
+                },
+        );
+        let tracked perm = self.avail.tracked_remove((order, idx));
+        self.avail.tracked_map_keys_in_place(m);
+        self.next = self.next.update(order, self.next[order].remove(idx));
+
+        assert(self.next[order].len() == old_self.next[order].len() - 1);
+        assert forall|o, i| 0 <= o < N && 0 <= i < self.next[o].len() implies self.wf_item_perm(
+            o,
+            i,
+        ) by {
+            assert(old_self.wf_item_perm(o, i));
+            if o == order && i >= idx {
+                assert(old_self.wf_item_perm(o, i + 1));
+                assert(self.avail[(o, i)] === old(self).avail[(o, i + 1)]);
+                assert(self.next[o][i] === old(self).next[o][i + 1]);
+                assert(self.wf_item_perm(o, i));
+            } else {
+                assert(self.avail[(o, i)] === old(self).avail[(o, i)]);
+                assert(self.wf_item_perm(o, i));
+            }
         }
         assert(self.free_page_counts()[order] == self.next[order].len());
-        assert(self.wf());
+        assert(self.wf_perms());
         assert(self.next_pages() =~= old(self).next_pages().update(
             order,
             self.next_page(order) as usize,
@@ -191,6 +224,32 @@ impl<VAddr: SpecVAddrImpl, const N: usize> MemoryRegionTracked<VAddr, N> {
             (old(self).free_page_counts()[order] - 1) as nat,
         ));
         perm
+    }
+
+    #[verifier::spinoff_prover]
+    proof fn tracked_pop_next(tracked &mut self, order: int, pfn: int) -> (tracked ret: RawPerm)
+        requires
+            0 <= order < N,
+            old(self).wf(),
+            pfn == old(self).next_page(order),
+            old(self).page_count() > 0,
+            pfn >= old(self).reserved_pfn_count(),
+        ensures
+            old(self).ens_remove(self, order, old(self).next[order].len() - 1, ret),
+            self.wf(),
+    {
+        broadcast use lemma_wf_perms;
+
+        reveal(MemoryRegionTracked::wf_perms);
+        let tracked p = self.tracked_remove(order, self.next[order].len() - 1);
+        assert forall|o, i| 0 <= o < N && 0 <= i < self.next[o].len() implies self.wf_item(
+            o,
+            i,
+        ) by {
+            assert(old(self).wf_item(o, i));
+            assert(self.wf_item_perm(o, i));
+        }
+        p
     }
 
     #[verifier::spinoff_prover]
@@ -302,14 +361,10 @@ impl<VAddr: SpecVAddrImpl, const N: usize> MemoryRegionTracked<VAddr, N> {
     spec fn wf_dom(&self) -> bool {
         let avail = self.avail;
         let next = self.next;
-        let reserved = self.reserved;
-        let page_count = self.page_count();
         &&& next.len() == N
         &&& avail.dom() =~= Set::new(
             |k: (int, int)| 0 <= k.0 < N && 0 <= k.1 < self.next[k.0].len(),
         )
-        //&&& reserved.dom() =~= set_int_range(0, page_count as int)
-
     }
 
     #[verifier(inline)]
@@ -332,7 +387,7 @@ impl<VAddr: SpecVAddrImpl, const N: usize> MemoryRegionTracked<VAddr, N> {
         &&& self.reserved_pfn_count() <= pfn < self.page_count()
         &&& pfn + n <= self.page_count() <= usize::MAX
         &&& pfn % n == 0
-        &&& order < MAX_ORDER
+        &&& order < N
     }
 
     pub closed spec fn wf_item_perm(&self, order: int, i: int) -> bool {
@@ -404,10 +459,7 @@ impl<VAddr: SpecVAddrImpl, const N: usize> MemoryRegionTracked<VAddr, N> {
     #[verifier(opaque)]
     spec fn wf_perms(&self) -> bool {
         let next = self.next;
-        &&& next.len() == N
-        &&& self.avail.dom() =~= Set::new(
-            |k: (int, int)| 0 <= k.0 < N && 0 <= k.1 < self.next[k.0].len(),
-        )
+        &&& self.wf_dom()
         &&& forall|order, i|
             0 <= order < N && 0 <= i < next[order].len() ==> #[trigger] self.wf_item_perm(order, i)
     }
@@ -753,6 +805,7 @@ impl MemoryRegion {
         &&& ret_pfn == pfn - (1usize << order) || ret_pfn == pfn + (1usize << order)
         &&& ret_pfn == pfn - (1usize << order) ==> ret_pfn % (1usize << (order + 1) as usize) == 0
         &&& ret_pfn == pfn + (1usize << order) ==> pfn % (1usize << (order + 1) as usize) == 0
+        &&& ret_pfn % (1usize << order) == 0
     }
 
     spec fn ens_compound_neighbor_ok(&self, pfn: usize, order: usize, ret_pfn: usize) -> bool {
@@ -761,6 +814,14 @@ impl MemoryRegion {
         let m = 1usize << new_order;
         &&& ret_pfn < self.page_count
         &&& Self::ens_find_neighbor(pfn, order, ret_pfn)
+    }
+
+    pub closed spec fn req_allocate_pfn(&self, pfn: usize, order: usize) -> bool {
+        let n = 1usize << order;
+        &&& self@.reserved_pfn_count() <= pfn
+        &&& pfn % n == 0
+        &&& order < MAX_ORDER
+        &&& self.wf_mem_state()
     }
 
     pub closed spec fn ens_allocate_pfn(&self, new: &Self, pfn: usize, order: usize) -> bool {
