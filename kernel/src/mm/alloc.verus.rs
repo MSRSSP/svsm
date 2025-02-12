@@ -706,6 +706,13 @@ impl MemoryRegion {
         &&& expected_perm === new@
     }
 
+    spec fn only_update_reserved_and_nr(&self, new: &Self) -> bool {
+        let expected_perm = MemoryRegionTracked { reserved: new@.reserved, ..self@ };
+        let expected_self = MemoryRegion { perms: new.perms, nr_pages: new.nr_pages, ..*self };
+        &&& expected_self === *new
+        &&& expected_perm === new@
+    }
+
     spec fn only_update_order_higher(&self, new: Self, order: usize) -> bool {
         &&& self.with_same_mapping(&new)
         &&& forall|i: int|
@@ -752,18 +759,46 @@ impl MemoryRegion {
     }
 
     pub closed spec fn req_try_to_merge_page(&self, pfn: usize, order: usize) -> bool {
-        &&& self.wf_mem_stat_state()
+        &&& self.wf_reserved()
         &&& self.tmp_perms@@.last().wf_vaddr_order(self.spec_get_virt(pfn as int), order as usize)
         &&& self.valid_pfn_order(pfn, order)
     }
 
     pub closed spec fn req_merge_pages(&self, pfn1: usize, pfn2: usize, order: usize) -> bool {
-        &&& self.wf_mem_state()
+        &&& self.wf_reserved()
         &&& self.tmp_perms@@.last().wf_vaddr_order(self.spec_get_virt(pfn2 as int), order as usize)
         &&& self.tmp_perms@@[self.tmp_perms@@.len() - 2].wf_vaddr_order(
             self.spec_get_virt(pfn1 as int),
             order as usize,
         )
+        &&& self.valid_pfn_order(pfn1, order)
+        &&& self.valid_pfn_order(pfn2, order)
+        &&& pfn1 == pfn2 + (1usize << order) || pfn1 == pfn2 - (1usize << order)
+        &&& self.valid_pfn_order(
+            vstd::math::min(pfn1 as int, pfn2 as int) as usize,
+            (order + 1) as usize,
+        )
+    }
+
+    pub closed spec fn ens_merge_pages(
+        &self,
+        new: &Self,
+        pfn1: usize,
+        pfn2: usize,
+        order: usize,
+    ) -> bool {
+        let order = order as int;
+        let pfn = vstd::math::min(pfn1 as int, pfn2 as int);
+        let n1 = (self.nr_pages[order] - 2) as usize;
+        let n2 = (self.nr_pages[order + 1] + 1) as usize;
+        let new_nr_pages = self.nr_pages@.update(order, n1).update(order + 1, n2);
+        &&& new.wf_mem_state()
+        &&& new.tmp_perms@@ =~= self.tmp_perms@@.take(self.tmp_perms@@.len() - 2).push(
+            new.tmp_perms@@.last(),
+        )
+        &&& new.tmp_perms@@.last().wf_vaddr_order(self.spec_get_virt(pfn), (order + 1) as usize)
+        &&& self.only_update_reserved_and_nr(new)
+        &&& new.nr_pages@ === new_nr_pages
     }
 }
 

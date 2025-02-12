@@ -903,19 +903,17 @@ impl MemoryRegion {
     }
 
     /// Merges two pages of the same order into a new compound page.
-    #[verus_verify(external_body)]
     #[verus_spec(ret =>
         requires
-            old(self).wf_mem_state(),
+            old(self).req_merge_pages(pfn1, pfn2, order),
         ensures
-            self.wf_mem_state(),
+            old(self).ens_merge_pages(self, pfn1, pfn2, order),
     )]
     fn merge_pages(&mut self, pfn1: usize, pfn2: usize, order: usize) -> Result<usize, AllocError> {
         if order >= MAX_ORDER - 1 {
             return Err(AllocError::InvalidPageOrder(order));
         }
 
-        let nr_pages: usize = 1 << (order + 1);
         let pfn = pfn1.min(pfn2);
 
         // Write new compound head
@@ -923,10 +921,7 @@ impl MemoryRegion {
         self.write_page_info(pfn, pg);
 
         // Write compound pages
-        let pg = PageInfo::Compound(CompoundInfo { order: order + 1 });
-        for i in 1..nr_pages {
-            self.write_page_info(pfn + i, pg);
-        }
+        self.mark_compound_page(pfn, order + 1);
 
         // Do the accounting - none of the pages is free yet, so free_pages is
         // not updated here.
