@@ -192,7 +192,7 @@ proof fn lemma_unique_pfn<VAddr: SpecVAddrImpl, const N: usize>(
 }
 
 #[verifier::spinoff_prover]
-broadcast proof fn lemma_valid_pfn_order_split(mr: &MemoryRegion, pfn: usize, order: usize)
+proof fn lemma_valid_pfn_order_split(mr: &MemoryRegion, pfn: usize, order: usize)
     requires
         #[trigger] mr.valid_pfn_order(pfn, order),
         0 < order < MAX_ORDER,
@@ -218,7 +218,7 @@ broadcast proof fn lemma_valid_pfn_order_split(mr: &MemoryRegion, pfn: usize, or
 }
 
 #[verifier::spinoff_prover]
-broadcast proof fn lemma_valid_pfn_order_merge(mr: MemoryRegion, pfn: usize, order: usize)
+proof fn lemma_valid_pfn_order_merge(mr: MemoryRegion, pfn: usize, order: usize)
     requires
         #[trigger] mr.valid_pfn_order(pfn, order),
     ensures

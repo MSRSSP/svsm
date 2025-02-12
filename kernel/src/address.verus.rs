@@ -192,6 +192,18 @@ impl SpecVAddrImpl for VirtAddr {
                     < self.offset() + size,
         )
     }
+
+    proof fn lemma_unique(v1: &Self, v2: &Self) {
+    }
+
+    proof fn lemma_valid_size(&self, size: nat) {
+    }
+
+    proof fn lemma_valid_small_size(&self, size1: nat, size2: nat) {
+    }
+
+    proof fn lemma_region_to_dom(&self, size: nat) {
+    }
 }
 
 impl VirtAddr {
@@ -200,19 +212,20 @@ impl VirtAddr {
     #[verifier::type_invariant]
     pub open spec fn is_canonical(&self) -> bool {
         &&& spec_is_vaddr(self@ as int)
-        &&& self.offset() <= VADDR_RANGE_SIZE
+        &&& self.offset() < VADDR_RANGE_SIZE
     }
 
     /// Property:
     /// A valid virtual address have a canonical form where the upper bits
     /// are either all zeroes or all ones.
-    proof fn property_canonical(&self)
+    pub proof fn property_canonical(&self)
         ensures
             self.is_canonical() == (top_all_zeros(self@) || top_all_ones(self@)),
+            self.is_canonical() == (*self === VirtAddr::from_spec(self.offset() as usize)),
     {
     }
 
-    pub proof fn lemma_wf(v: InnerAddr)
+    pub broadcast proof fn lemma_wf(v: InnerAddr)
         ensures
             (#[trigger] VirtAddr::from_spec(v)).is_canonical(),
             0 <= v < VADDR_RANGE_SIZE ==> VirtAddr::from_spec(v).offset() == v,

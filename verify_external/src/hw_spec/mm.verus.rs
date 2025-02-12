@@ -19,15 +19,13 @@ pub trait SpecVAddrImpl {
     /// Unique when casting to int address
     proof fn lemma_unique(v1: &Self, v2: &Self)
     ensures
-        (v1.spec_int_addr() == v2.spec_int_addr()) == (v1 === v2)
-    {}
+        (v1.spec_int_addr() == v2.spec_int_addr()) == (v1 === v2);
 
     /// valid size = 1
     proof fn lemma_valid_size(&self, size: nat)
     ensures
-        self.spec_valid_size_for_ptr(1) == self.spec_int_addr().is_some(),
-        self.spec_valid_size_for_ptr(size) ==> self.spec_valid_size(size),
-    {}
+        self.spec_valid_size_for_ptr(1) ==> self.spec_int_addr().is_some(),
+        self.spec_valid_size_for_ptr(size) ==> self.spec_valid_size(size);
 
     /// If a size is valid, then smaller size must be valid 
     proof fn lemma_valid_small_size(&self, size1: nat, size2: nat)
@@ -35,8 +33,7 @@ pub trait SpecVAddrImpl {
         size2 >= size1,
     ensures
         self.spec_valid_size_for_ptr(size2) ==> self.spec_valid_size_for_ptr(size1),
-        self.region_to_dom(size1).subset_of(self.region_to_dom(size2)),
-    {}
+        self.region_to_dom(size1).subset_of(self.region_to_dom(size2));
 
     // When valid, the region_to_dom() must be a continuous dom
     proof fn lemma_region_to_dom(&self, size: nat)
@@ -44,8 +41,7 @@ pub trait SpecVAddrImpl {
         self.spec_valid_size_for_ptr(size)
     ensures
         self.spec_int_addr().is_some(),
-        self.region_to_dom(size) =~= set_int_range(self.spec_int_addr().unwrap(), self.spec_int_addr().unwrap() + size),
-    {}
+        self.region_to_dom(size) =~= set_int_range(self.spec_int_addr().unwrap(), self.spec_int_addr().unwrap() + size);
 }
 // Define a trait describing the memory mapping groundtruth
 pub trait SpecMemMapTr {
@@ -88,22 +84,25 @@ pub trait SpecMemMapTr {
             self.is_one_to_one_mapping(),
         ensures
             self.to_vaddrs(addr).len() <= 1,
-            self.to_vaddr(addr).is_some() ==> self.to_paddr(self.get_vaddr(addr)).is_some(),
-    {}
+            self.to_vaddr(addr).is_some() ==> self.to_paddr(self.get_vaddr(addr)).is_some();
 
     proof fn proof_correct_mapping_vaddr(&self, addr: Self::VAddr)
+        requires
+            self.to_paddr(addr).is_some(),
         ensures
-            self.to_paddr(addr).is_some() ==> 
-                self.to_vaddrs(self.get_paddr(addr)).contains(addr){}
+            self.to_vaddrs(self.get_paddr(addr)).contains(addr);
     
     proof fn proof_correct_mapping_paddr(&self, addr: Self::PAddr)
     ensures
         (self.to_vaddrs(addr).len() > 0) == self.to_vaddr(addr).is_some(),
         self.to_vaddr(addr).is_some() ==> self.to_vaddrs(addr).contains(self.get_vaddr(addr)),
-        self.to_vaddrs(addr).len() > 0 ==> self.to_vaddrs(addr).contains(self.get_vaddr(addr)),
-        forall |vaddr: Self::VAddr|self.to_vaddrs(addr).contains(vaddr) ==>
-            self.to_paddr(vaddr) === Some(addr)
-    {}
+        self.to_vaddrs(addr).len() > 0 ==> self.to_vaddrs(addr).contains(self.get_vaddr(addr));
+    
+    proof fn proof_correct_mapping_addrs(&self, addr: Self::PAddr, vaddr: Self::VAddr)
+    requires
+        self.to_vaddrs(addr).contains(vaddr)
+    ensures
+        self.to_paddr(vaddr) === Some(addr);
 }
 
 } // verus!

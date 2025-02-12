@@ -207,6 +207,7 @@ impl PageStorageType {
             ret.is_ok() == PageType::spec_decode(*self).is_some(),
             ret.unwrap() === PageType::spec_decode(*self).unwrap(),
     )]
+    #[cfg_attr(verus_keep_ghost, verifier::spinoff_prover)]
     fn page_type(&self) -> Result<PageType, AllocError> {
         PageType::try_from(self.0 & Self::TYPE_MASK)
     }
@@ -507,6 +508,7 @@ impl MemoryRegion {
         ensures
             Some(*ret) == self@.spec_page_storage_type(pfn as int)
     )]
+    #[cfg_attr(verus_keep_ghost, verifier::spinoff_prover)]
     fn get_page_storage_type(&self, pfn: usize) -> &PageStorageType {
         proof! {
             assert(self@.reserved.dom().contains(pfn as int));
@@ -529,6 +531,7 @@ impl MemoryRegion {
         ensures pfn < self.page_count
         no_unwind when pfn < self.page_count
     )]
+    #[cfg_attr(verus_keep_ghost, verifier::spinoff_prover)]
     fn check_pfn(&self, pfn: usize) {
         if pfn >= self.page_count {
             panic!("Invalid Page Number {}", pfn);
@@ -544,7 +547,7 @@ impl MemoryRegion {
     #[cfg_attr(verus_keep_ghost, verifier::spinoff_prover)]
     #[verus_spec(
         requires
-            old(self).req_write_page_info(pfn),
+            old(self).req_write_page_info(pfn, pi),
         ensures
             old(self).ens_write_page_info(*self, pfn, pi),
     )]
@@ -571,7 +574,7 @@ impl MemoryRegion {
     #[cfg_attr(verus_keep_ghost, verifier::spinoff_prover)]
     #[verus_spec(ret =>
         requires
-            self.wf_mem_state(),
+            self.wf_reserved(),
             pfn < self.page_count, // self.check_pfn(pfn) is not necessary.
         ensures
             self.ens_read_page_info(pfn, ret),
@@ -903,6 +906,7 @@ impl MemoryRegion {
     }
 
     /// Merges two pages of the same order into a new compound page.
+    #[verus_verify(external_body)]
     #[verus_spec(ret =>
         requires
             old(self).req_merge_pages(pfn1, pfn2, order),
@@ -1019,10 +1023,13 @@ impl MemoryRegion {
     /// Attempts to merge a given page with its neighboring page.
     /// If successful, returns the new page frame number after merging.
     /// If unsuccessful, the page remains unmerged, and an error is returned.
-    #[verus_spec(
+    #[verus_spec(ret =>
         requires
             old(self).req_try_to_merge_page(pfn, order),
+        ensures
+            old(self).ens_try_to_merge_page(self, pfn, order, ret),
     )]
+    #[cfg_attr(verus_keep_ghost, verifier::spinoff_prover)]
     fn try_to_merge_page(&mut self, pfn: usize, order: usize) -> Result<usize, AllocError> {
         let neighbor_pfn = self.compound_neighbor(pfn, order)?;
         let neighbor_page = self.read_page_info(neighbor_pfn);
@@ -1035,11 +1042,11 @@ impl MemoryRegion {
             return Err(AllocError::InvalidPageOrder(fi.order));
         }
 
-        proof! {
-            assert(0 < neighbor_pfn < self.page_count);
-        }
-
         self.allocate_pfn(neighbor_pfn, order)?;
+
+        proof! {
+            broadcast use lemma_bit_usize_shl_values;
+        }
 
         let new_pfn = self.merge_pages(pfn, neighbor_pfn, order)?;
 

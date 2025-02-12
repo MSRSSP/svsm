@@ -236,7 +236,8 @@ impl<VAddr: SpecVAddrImpl, const N: usize> MemoryRegionTracked<VAddr, N> {
 }
 
 pub open spec fn reserved_pfn_count(page_count: nat) -> nat {
-    spec_align_up(page_count as int, (0x1000 as int / 8)) as nat
+    let n = (0x1000 as int / 8);
+    (spec_align_up(page_count as int, n) / n) as nat
 }
 
 impl<VAddr: SpecVAddrImpl, const N: usize> MemoryRegionTracked<VAddr, N> {
@@ -328,8 +329,8 @@ impl<VAddr: SpecVAddrImpl, const N: usize> MemoryRegionTracked<VAddr, N> {
 
     pub closed spec fn valid_pfn_order(&self, pfn: usize, order: usize) -> bool {
         let n = 1usize << order;
-        &&& self.reserved_pfn_count() < pfn < self.page_count()
-        &&& pfn + n <= self.page_count() < usize::MAX
+        &&& self.reserved_pfn_count() <= pfn < self.page_count()
+        &&& pfn + n <= self.page_count() <= usize::MAX
         &&& pfn % n == 0
         &&& order < MAX_ORDER
     }
@@ -374,6 +375,7 @@ impl<VAddr: SpecVAddrImpl, const N: usize> MemoryRegionTracked<VAddr, N> {
                 pfn,
             ).spec_int_addr().unwrap() && self.spec_page_info(pfn).is_some())
         &&& reserved.dom() === set_int_range(0, page_count as int)
+        &&& self.wf_reserved_info()
     }
 
     spec fn wf_reserved_info(&self) -> bool {
@@ -383,9 +385,18 @@ impl<VAddr: SpecVAddrImpl, const N: usize> MemoryRegionTracked<VAddr, N> {
             )
     }
 
+    spec fn wf_freeinfo_item(&self, pfn: usize) -> bool {
+        self.get_free_info(pfn as int).is_some() ==> self.next[self.get_free_info(
+            pfn as int,
+        ).unwrap().order as int].contains(pfn)
+    }
+
+    spec fn wf_freeinfo(&self) -> bool {
+        forall|pfn: usize| 0 <= pfn < self.page_count() ==> #[trigger] self.wf_freeinfo_item(pfn)
+    }
+
     spec fn wf_info(&self) -> bool {
         let next = self.next;
-        &&& self.wf_reserved_info()
         &&& forall|order, i|
             0 <= order < N && 0 <= i < next[order].len() ==> #[trigger] self.wf_item(order, i)
     }
@@ -470,9 +481,7 @@ impl MemoryRegion {
         broadcast use crate::types::lemma_page_size;
 
         reveal(<LinearMap as SpecMemMapTr>::to_vaddr);
-        crate::address::lemma_vaddr_upper_mask();
-        assert(self.start_virt.is_canonical());
-        VirtAddr::lemma_wf((self.start_virt@ + (pfn * PAGE_SIZE)) as usize);
+        VirtAddr::lemma_wf((self.start_virt.offset() + (pfn * PAGE_SIZE)) as usize);
         self.spec_get_virt(pfn)
     }
 
@@ -652,8 +661,9 @@ impl MemoryRegion {
         &&& new.next_page@ =~= self.next_page@.update(order - 1, pfn)
     }
 
-    pub closed spec fn req_write_page_info(&self, pfn: usize) -> bool {
-        self.wf_reserved()
+    pub closed spec fn req_write_page_info(&self, pfn: usize, pi: PageInfo) -> bool {
+        &&& self.wf_reserved()
+        &&& pfn < self@.reserved_pfn_count() ==> pi === PageInfo::Reserved(ReservedInfo)
     }
 
     pub closed spec fn ens_write_page_info(&self, new: Self, pfn: usize, pi: PageInfo) -> bool {
@@ -754,18 +764,51 @@ impl MemoryRegion {
     }
 
     pub closed spec fn ens_allocate_pfn(&self, new: &Self, pfn: usize, order: usize) -> bool {
-        &&& self.wf_mem_stat_state()
-        &&& self.tmp_perms@@.last().wf_vaddr_order(self.spec_get_virt(pfn as int), order as usize)
+        &&& new.tmp_perms@@ === self.tmp_perms@@.push(new.tmp_perms@@.last())
+        &&& new.tmp_perms@@.last().wf_vaddr_order(self.spec_get_virt(pfn as int), order as usize)
+        &&& new.wf_mem_state()
+        &&& new.map() === self.map()
+        &&& new.valid_pfn_order(pfn, order)
     }
 
     pub closed spec fn req_try_to_merge_page(&self, pfn: usize, order: usize) -> bool {
         &&& self.wf_reserved()
+        &&& self.wf_mem_state()
+        &&& self.tmp_perms@@.len() >= 1
         &&& self.tmp_perms@@.last().wf_vaddr_order(self.spec_get_virt(pfn as int), order as usize)
         &&& self.valid_pfn_order(pfn, order)
+        &&& order < MAX_ORDER - 1
+    }
+
+    pub closed spec fn ens_try_to_merge_page_ok(
+        &self,
+        new: &Self,
+        pfn: usize,
+        order: usize,
+        ret: Result<usize, AllocError>,
+    ) -> bool {
+        let vaddr = new.spec_get_virt(pfn as int);
+        let new_pfn = ret.unwrap();
+        &&& new_pfn == pfn || new_pfn == pfn - (1usize << order)
+        &&& new.wf_reserved()
+        &&& new.tmp_perms@@.last().wf_vaddr_order(vaddr, order)
+        &&& self.valid_pfn_order(new_pfn, (order + 1) as usize)
+        &&& self.only_update_reserved_and_nr(new)
+    }
+
+    pub closed spec fn ens_try_to_merge_page(
+        &self,
+        new: &Self,
+        pfn: usize,
+        order: usize,
+        ret: Result<usize, AllocError>,
+    ) -> bool {
+        ret.is_ok() ==> self.ens_try_to_merge_page_ok(new, pfn, order, ret)
     }
 
     pub closed spec fn req_merge_pages(&self, pfn1: usize, pfn2: usize, order: usize) -> bool {
         &&& self.wf_reserved()
+        &&& self.tmp_perms@@.len() >= 2
         &&& self.tmp_perms@@.last().wf_vaddr_order(self.spec_get_virt(pfn2 as int), order as usize)
         &&& self.tmp_perms@@[self.tmp_perms@@.len() - 2].wf_vaddr_order(
             self.spec_get_virt(pfn1 as int),
@@ -773,7 +816,7 @@ impl MemoryRegion {
         )
         &&& self.valid_pfn_order(pfn1, order)
         &&& self.valid_pfn_order(pfn2, order)
-        &&& pfn1 == pfn2 + (1usize << order) || pfn1 == pfn2 - (1usize << order)
+        &&& (pfn1 == pfn2 + (1usize << order)) || (pfn1 == pfn2 - (1usize << order))
         &&& self.valid_pfn_order(
             vstd::math::min(pfn1 as int, pfn2 as int) as usize,
             (order + 1) as usize,
