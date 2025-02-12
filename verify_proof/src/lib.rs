@@ -11,8 +11,8 @@ use vstd::prelude::*;
 
 pub mod bits;
 pub mod nonlinear;
+pub mod set;
 pub mod tseq;
-
 
 verus! {
 

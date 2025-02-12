@@ -12,6 +12,35 @@ pub struct LinearMap {
     pub size: nat,
 }
 
+impl LinearMap {
+    pub open spec fn wf(&self) -> bool {
+        &&& self.start_virt.is_canonical()
+        &&& self.start_virt.offset() + self.size <= crate::address::VADDR_RANGE_SIZE
+    }
+
+    pub closed spec fn try_get_virt(&self, pfn: usize) -> Option<VirtAddr> {
+        let phy = self.start_phys + pfn * crate::types::PAGE_SIZE;
+        self.to_vaddr(phy)
+    }
+
+    pub proof fn lemma_get_virt(&self, pfn: usize) -> (ret: VirtAddr)
+        requires
+            self.wf(),
+            pfn < self.size / crate::types::PAGE_SIZE as nat,
+        ensures
+            ret == self.try_get_virt(pfn).unwrap(),
+            self.try_get_virt(pfn).is_some(),
+            ret.is_canonical(),
+            ret.offset() == self.start_virt.offset() + (pfn * crate::types::PAGE_SIZE),
+    {
+        broadcast use crate::types::lemma_page_size;
+
+        reveal(<LinearMap as SpecMemMapTr>::to_vaddr);
+        VirtAddr::lemma_wf((self.start_virt.offset() + (pfn * crate::types::PAGE_SIZE)) as usize);
+        self.try_get_virt(pfn).unwrap()
+    }
+}
+
 impl SpecMemMapTr for LinearMap {
     type VAddr = VirtAddr;
 

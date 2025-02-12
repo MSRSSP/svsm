@@ -1,3 +1,19 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+//
+// Copyright (c) Microsoft Corporation
+//
+// Author: Ziqiao Zhou <ziqiaozhou@microsoft.com>
+//
+// This module defines specification helper functions to verify the correct use of memory.
+//
+// Trusted Assumptions:
+// - Upon entry to the SVSM (Secure Virtual Machine Monitor) kernel, there exists a set of unique
+//   memory permissions that are predefined and trusted.
+// - Memory permissions are considered unforgeable, ensuring their integrity during execution.
+//
+// Note:
+// - No additional specification needs to be trusted here; all assumptions are established
+//   within the trusted context of the kernel entry.
 use crate::utils::util::spec_align_up;
 use verify_external::convert::FromSpec;
 use verify_external::hw_spec::{SpecMemMapTr, SpecVAddrImpl};
@@ -5,6 +21,10 @@ use verify_proof::bits::{
     lemma_bit_usize_and_mask_is_mod, lemma_bit_usize_shl_values, lemma_bit_usize_xor_neighbor,
 };
 use verify_proof::nonlinear::lemma_modulus_add_sub_m;
+use verify_proof::set::{
+    lemma_int_range_disjoint, lemma_sets_to_set_contains, lemma_sets_to_set_finite_iff,
+    lemma_sets_to_set_fixed_len, seq_sets_are_disjoint, seq_sets_to_set,
+};
 use verify_proof::tracked_exec_arbirary;
 use verify_proof::tseq::TrackedSeq;
 use vstd::arithmetic::mul::lemma_mul_inequality;
@@ -31,14 +51,35 @@ pub type RawPerm = PointsToRaw;
 
 pub type TypedPerm<T> = PointsTo<T>;
 
+spec fn pfn_disjoint(start1: usize, order1: usize, start2: usize, order2: usize) -> bool {
+    let end1 = start1 + (1usize << order1);
+    let end2 = start2 + (1usize << order2);
+    (end1 <= start2 || end2 <= start1)
+}
+
+pub closed spec fn allocator_provenance() -> vstd::raw_ptr::Provenance;
+
 pub trait MemPermWithVAddrOrder<VAddr: SpecVAddrImpl> {
     spec fn wf_vaddr_order(&self, vaddr: VAddr, order: usize) -> bool;
+}
+
+pub trait MemPermWithPfnOrder {
+    spec fn wf_pfn_order(&self, map: LinearMap, pfn: usize, order: usize) -> bool;
 }
 
 impl<VAddr: SpecVAddrImpl> MemPermWithVAddrOrder<VAddr> for RawPerm {
     open spec fn wf_vaddr_order(&self, vaddr: VAddr, order: usize) -> bool {
         let size = ((1usize << order) * PAGE_SIZE) as nat;
-        self.dom() =~= vaddr.region_to_dom(size)
+        &&& self.dom() =~= vaddr.region_to_dom(size)
+        &&& self.provenance() === allocator_provenance()
+    }
+}
+
+impl MemPermWithPfnOrder for RawPerm {
+    open spec fn wf_pfn_order(&self, map: LinearMap, pfn: usize, order: usize) -> bool {
+        let vaddr = map.try_get_virt(pfn);
+        &&& pfn < map.size / PAGE_SIZE as nat
+        &&& self.wf_vaddr_order(vaddr.unwrap(), order)
     }
 }
 
@@ -69,17 +110,7 @@ spec fn spec_free_info(perm: TypedPerm<PageStorageType>) -> Option<FreeInfo> {
     }
 }
 
-spec fn get_compound_info(perm: TypedPerm<PageStorageType>) -> Option<CompoundInfo> {
-    let p_info = spec_page_info(perm);
-    if p_info.is_some() {
-        let pi = p_info.unwrap();
-        pi.get_compound()
-    } else {
-        None
-    }
-}
-
-struct VirtInfo<VAddr> {
+ghost struct VirtInfo<VAddr> {
     vaddr: VAddr,
     info_vaddr: VAddr,
 }
@@ -91,7 +122,193 @@ tracked struct MemoryRegionTracked<VAddr: SpecVAddrImpl, const N: usize> {
     ghost pfn_to_virt: Seq<VirtInfo<VAddr>>,  // pfn -> virt address
 }
 
+ghost struct FreePerms<VAddr: SpecVAddrImpl, const N: usize> {
+    avail: Map<(int, int), RawPerm>,  //(order, idx) -> perm
+    next: Seq<Seq<usize>>,  // order -> next page list
+    pfn_to_virt: Seq<VirtInfo<VAddr>>,  // pfn -> virt address
+    page_count: PageCountParam<N>,
+}
+
+impl<VAddr: SpecVAddrImpl, const N: usize> FreePerms<VAddr, N> {
+    spec fn wf_at(&self, order: int, i: int) -> bool {
+        let pfn = self.next[order][i] as int;
+        let perm = self.avail[(order, i)];
+        let vaddr = self.pfn_to_virt[pfn].vaddr;
+        &&& pfn >= self.page_count.reserved_pfn_count()
+        &&& self.page_count.valid_pfn_order(pfn as usize, order as usize)
+        &&& perm.wf_vaddr_order(vaddr, order as usize)
+    }
+
+    #[verifier(opaque)]
+    spec fn wf(&self) -> bool {
+        forall|order, i|
+            0 <= order < N && 0 <= i < self.next[order].len() ==> #[trigger] self.wf_at(order, i)
+    }
+}
+
+struct ReservedPerms<const N: usize> {
+    reserved: Map<int, TypedPerm<PageStorageType>>,
+    page_count: PageCountParam<N>,
+}
+
+pub struct PageCountParam<const N: usize> {
+    pub page_count: nat,
+}
+
+impl<const N: usize> PageCountParam<N> {
+    pub open spec fn reserved_pfn_count(&self) -> nat {
+        let n = (0x1000 as int / 8);
+        (spec_align_up(self.page_count as int, n) / n) as nat
+    }
+
+    pub open spec fn valid_pfn_order(&self, pfn: usize, order: usize) -> bool {
+        let n = 1usize << order;
+        &&& self.reserved_pfn_count() <= pfn < self.page_count
+        &&& pfn + n <= self.page_count <= usize::MAX
+        &&& pfn % n == 0
+        &&& order < N
+    }
+}
+
+impl<const N: usize> ReservedPerms<N> {
+    spec fn page_count(&self) -> nat {
+        self.page_count.page_count
+    }
+
+    spec fn reserved_count(&self) -> nat {
+        self.page_count.reserved_pfn_count()
+    }
+
+    #[verifier(inline)]
+    spec fn spec_page_info(&self, pfn: usize) -> Option<PageInfo> {
+        spec_page_info(self.reserved[pfn as int])
+    }
+
+    spec fn valid_pfn_order(&self, pfn: usize, order: usize) -> bool {
+        self.page_count.valid_pfn_order(pfn, order)
+    }
+
+    spec fn marked_compound(&self, pfn: usize, order: usize) -> bool {
+        let n = 1usize << order;
+        let pi = self.spec_page_info(pfn);
+        &&& order < N
+        &&& self.valid_pfn_order(pfn, order)
+        &&& forall|i|
+            #![trigger self.spec_page_info(i)]
+            pfn < i < pfn + n ==> self.spec_page_info(i) == Some(
+                PageInfo::Compound(CompoundInfo { order }),
+            )
+    }
+
+    spec fn marked_order(&self, pfn: usize, order: usize) -> bool {
+        let pi = self.spec_page_info(pfn);
+        &&& pi.is_some()
+        &&& order < N
+        &&& self.valid_pfn_order(pfn, order)
+        &&& pi.unwrap().get_order() == order
+        &&& match pi.unwrap() {
+            PageInfo::Reserved(_) => false,
+            PageInfo::Compound(ci) => false,
+            PageInfo::Slab(_) | PageInfo::File(_) => true,
+            PageInfo::Allocated(_) => { self.marked_allocated(pfn, order) },
+            PageInfo::Free(FreeInfo { next_page, .. }) => { self.marked_free(pfn, order, next_page)
+            },
+        }
+    }
+
+    spec fn marked_free_order(&self, pfn: usize, order: usize) -> bool {
+        let pi = self.spec_page_info(pfn);
+        &&& pi.unwrap().get_order() == order
+        &&& pi.unwrap().get_free().is_some()
+        &&& self.marked_compound(pfn, order)
+    }
+
+    spec fn marked_allocated(&self, pfn: usize, order: usize) -> bool {
+        let pi = self.spec_page_info(pfn);
+        &&& pi.unwrap().get_order() == order
+        &&& pi === Some(PageInfo::Allocated(AllocatedInfo { order }))
+        &&& self.marked_compound(pfn, order)
+    }
+
+    spec fn marked_free(&self, pfn: usize, order: usize, next_pfn: usize) -> bool {
+        let pi = self.spec_page_info(pfn);
+        &&& pi === Some(PageInfo::Free(FreeInfo { next_page: next_pfn, order }))
+        &&& self.marked_free_order(pfn, order)
+    }
+
+    spec fn marked_not_free(&self, pfn: usize, order: usize) -> bool {
+        &&& self.marked_order(pfn, order)
+        &&& !self.marked_free_order(pfn, order)
+    }
+
+    spec fn wf_page_info_at(&self, pfn: usize) -> bool {
+        let pinfo = self.spec_page_info(pfn).unwrap();
+        match pinfo {
+            PageInfo::Reserved(_) => false,
+            PageInfo::Allocated(ai) => { self.marked_compound(pfn, ai.order) },
+            PageInfo::Free(fi) => { self.marked_compound(pfn, fi.order) },
+            PageInfo::Slab(_) | PageInfo::File(_) => true,
+            PageInfo::Compound(ci) => {
+                let start = find_pfn_head(pfn, ci.order);
+                &&& (self.marked_allocated(start, ci.order) || self.marked_free_order(
+                    start,
+                    ci.order,
+                ))
+                &&& ci.order > 0
+            },
+        }
+    }
+
+    #[verifier(opaque)]
+    spec fn wf_page_info(&self) -> bool {
+        forall|pfn: usize|
+            self.reserved_count() <= pfn < self.page_count() ==> self.wf_page_info_at(pfn)
+    }
+
+    spec fn wf_reserved_basic(&self) -> bool {
+        forall|pfn: usize|
+            0 <= pfn < self.reserved_count() ==> #[trigger] self.spec_page_info(pfn) === Some(
+                PageInfo::Reserved(ReservedInfo),
+            )
+    }
+
+    spec fn wf_dom(&self) -> bool {
+        &&& self.reserved.dom() === set_int_range(0, self.page_count() as int)
+        &&& forall|pfn: usize|
+            0 <= pfn < self.page_count() ==> #[trigger] (self.spec_page_info(pfn).is_some())
+    }
+
+    spec fn wf_ptr<VAddr: SpecVAddrImpl>(&self, pfn_to_virt: Seq<VirtInfo<VAddr>>) -> bool {
+        forall|pfn: usize|
+            0 <= pfn < self.page_count() ==> (#[trigger] self.reserved[pfn as int]).addr()
+                == pfn_to_virt[pfn as int].info_vaddr.spec_int_addr().unwrap()
+    }
+
+    spec fn wf(&self) -> bool {
+        &&& self.wf_dom()
+        &&& self.wf_reserved_basic()
+        &&& self.wf_page_info()
+    }
+
+    spec fn ens_allocate_pfn(&self, new: Self, pfn: usize, prev_pfn: usize, order: usize) -> bool {
+        &&& new.marked_order(pfn, order)
+        &&& new.reserved =~= self.reserved.union_prefer_right(
+            Map::new(|k| k == pfn || k == prev_pfn, |k| new.reserved[k]),
+        )
+        &&& prev_pfn > 0 ==> new.marked_free_order(prev_pfn, order)
+    }
+}
+
 impl PageInfo {
+    spec fn get_order(&self) -> usize {
+        match *self {
+            PageInfo::Compound(CompoundInfo { order }) => order,
+            PageInfo::Allocated(AllocatedInfo { order }) => order,
+            PageInfo::Free(FreeInfo { order, .. }) => order,
+            _ => 0,
+        }
+    }
+
     spec fn get_free(&self) -> Option<FreeInfo> {
         match *self {
             PageInfo::Free(info) => { Some(info) },
@@ -119,203 +336,75 @@ spec fn spec_page_count<T>(next: Seq<Seq<T>>, max_order: usize) -> int
     }
 }
 
-impl<VAddr: SpecVAddrImpl, const N: usize> MemoryRegionTracked<VAddr, N> {
-    #[verifier::spinoff_prover]
-    proof fn tracked_new() -> (tracked ret: MemoryRegionTracked<VAddr, N>)
-        ensures
-            ret.wf(),
-            ret.avail === Map::empty(),
-            ret.reserved === Map::empty(),
-            ret.pfn_to_virt === Seq::empty(),
-    {
-        let tracked ret = MemoryRegionTracked {
-            avail: Map::tracked_empty(),
-            reserved: Map::tracked_empty(),
-            next: Seq::new(N as nat, |k| Seq::empty()),
-            pfn_to_virt: Seq::empty(),
-        };
-        VirtAddr::lemma_wf(0usize);
-        assert(ret.reserved.dom() =~= set_int_range(0, 0));
-        //assert forall|i| 0 <= i < ret.page_count() implies ret.reserved.dom().contains(i) by {};
-        ret
-    }
-
-    spec fn ens_remove(&self, new: &Self, order: int, idx: int, ret: RawPerm) -> bool {
-        let next = self.next.update(order, self.next[order].remove(idx));
-        let expected = MemoryRegionTracked { next, avail: new.avail, ..*self };
-        let pfn = self.next[order][idx] as int;
-        &&& *new === expected
-        &&& ret.wf_vaddr_order(self.pfn_to_virt[pfn].vaddr, order as usize)
-        &&& (idx == self.next[order].len() - 1) ==> new.next_page(order) == self.next_next_page(
-            order,
-        )
-        // &&& (idx == self.next[order].len() - 1) ==> new.next_page(order) == self.get_free_info(pfn).unwrap().next_page
-        &&& new.next_pages() === self.next_pages().update(order, new.next_page(order) as usize)
-        &&& new.free_page_counts() === self.free_page_counts().update(
-            order,
-            (self.free_page_counts()[order] - 1) as nat,
-        )
-    }
-
-    #[verifier::spinoff_prover]
-    proof fn tracked_remove(tracked &mut self, order: int, idx: int) -> (tracked ret: RawPerm)
-        requires
-            0 <= order < N,
-            old(self).wf_perms() || old(self).wf(),
-            old(self).page_count() > 0,
-            0 <= idx < old(
-                self,
-            ).next[order].len(),
-    //let pfn = old(self).next[order][idx - 1] as int;
-    //let next_pfn = old(self).next[order][idx + 1];
-    //old(self).marked_free(pfn, order, next_pfn),
-
-        ensures
-    //self.wf(),
-
-            self.wf_perms(),
-            old(self).ens_remove(self, order, idx, ret),
-    {
-        reveal(MemoryRegionTracked::wf_perms);
-        assert(self.wf_perms()) by {
-            broadcast use lemma_wf_perms;
-
-        };
-        let old_self = *self;
-        assert(self.wf_item_perm(order, idx));
-        let len = self.next[order].len();
-        let m = Map::new(
-            |k: (int, int)| self.avail.dom().contains(k) && k != (order, len - 1),
-            |k: (int, int)|
-                if k.0 == order && k.1 >= idx {
-                    (k.0, k.1 + 1)
-                } else {
-                    k
-                },
-        );
-        let tracked perm = self.avail.tracked_remove((order, idx));
-        self.avail.tracked_map_keys_in_place(m);
-        self.next = self.next.update(order, self.next[order].remove(idx));
-
-        assert(self.next[order].len() == old_self.next[order].len() - 1);
-        assert forall|o, i| 0 <= o < N && 0 <= i < self.next[o].len() implies self.wf_item_perm(
-            o,
-            i,
-        ) by {
-            assert(old_self.wf_item_perm(o, i));
-            if o == order && i >= idx {
-                assert(old_self.wf_item_perm(o, i + 1));
-                assert(self.avail[(o, i)] === old(self).avail[(o, i + 1)]);
-                assert(self.next[o][i] === old(self).next[o][i + 1]);
-                assert(self.wf_item_perm(o, i));
-            } else {
-                assert(self.avail[(o, i)] === old(self).avail[(o, i)]);
-                assert(self.wf_item_perm(o, i));
-            }
-        }
-        assert(self.free_page_counts()[order] == self.next[order].len());
-        assert(self.wf_perms());
-        assert(self.next_pages() =~= old(self).next_pages().update(
-            order,
-            self.next_page(order) as usize,
-        ));
-        assert(self.free_page_counts() =~= old(self).free_page_counts().update(
-            order,
-            (old(self).free_page_counts()[order] - 1) as nat,
-        ));
-        perm
-    }
-
-    #[verifier::spinoff_prover]
-    proof fn tracked_pop_next(tracked &mut self, order: int, pfn: int) -> (tracked ret: RawPerm)
-        requires
-            0 <= order < N,
-            old(self).wf(),
-            pfn == old(self).next_page(order),
-            old(self).page_count() > 0,
-            pfn >= old(self).reserved_pfn_count(),
-        ensures
-            old(self).ens_remove(self, order, old(self).next[order].len() - 1, ret),
-            self.wf(),
-    {
-        broadcast use lemma_wf_perms;
-
-        reveal(MemoryRegionTracked::wf_perms);
-        let tracked p = self.tracked_remove(order, self.next[order].len() - 1);
-        assert forall|o, i| 0 <= o < N && 0 <= i < self.next[o].len() implies self.wf_item(
-            o,
-            i,
-        ) by {
-            assert(old(self).wf_item(o, i));
-            assert(self.wf_item_perm(o, i));
-        }
-        p
-    }
-
-    #[verifier::spinoff_prover]
-    proof fn tracked_push(tracked &mut self, order: usize, pfn: usize, tracked perm: RawPerm)
-        requires
-            0 <= order < old(self).next.len(),
-            old(self).wf_perms(),
-            old(self).valid_pfn_order(pfn, order),
-            perm.wf_vaddr_order(old(self).pfn_to_virt[pfn as int].vaddr, order as usize),
-            pfn >= old(self).reserved_pfn_count(),
-        ensures
-            self.wf_perms(),
-            self.next[order as int].last() == pfn,
-            self.next[order as int] === old(self).next[order as int].push(pfn),
-            self.next === old(self).next.update(order as int, self.next[order as int]),
-            self.reserved === old(self).reserved,
-            self.pfn_to_virt === old(self).pfn_to_virt,
-            self.avail[(order as int, old(self).next[order as int].len() as int)] === perm,
-            self.avail === old(self).avail.insert(
-                (order as int, old(self).next[order as int].len() as int),
-                perm,
-            ),
-    {
-        reveal(MemoryRegionTracked::wf_perms);
-        let order = order as int;
-        let idx = self.next[order].len() as int;
-        self.avail.tracked_insert((order, idx), perm);
-        self.next = self.next.update(order, self.next[order].push(pfn));
-        assert(self.wf_item_perm(order, idx));
-        assert forall|o, i|
-            0 <= o < N && 0 <= i < self.next[o].len() implies #[trigger] self.wf_item_perm(
-            o,
-            i,
-        ) by {
-            if i < old(self).next[o].len() {
-                assert(old(self).wf_item_perm(o, i))
-            } else {
-                assert(o == order);
-                assert(i == idx);
-            }
-        }
-    }
+spec fn seq_range_to_sets(next: Seq<usize>, size: nat) -> Seq<Set<int>> {
+    next.map_values(|pfn: usize| set_int_range(pfn as int, pfn + size))
 }
 
-pub open spec fn reserved_pfn_count(page_count: nat) -> nat {
-    let n = (0x1000 as int / 8);
-    (spec_align_up(page_count as int, n) / n) as nat
+#[verifier(inline)]
+spec fn find_pfn_head(pfn: usize, order: usize) -> usize {
+    crate::utils::util::spec_align_down(pfn as int, (1usize << order) as int) as usize
 }
 
 impl<VAddr: SpecVAddrImpl, const N: usize> MemoryRegionTracked<VAddr, N> {
     #[verifier(inline)]
-    pub open spec fn reserved_pfn_count(&self) -> nat {
-        reserved_pfn_count(self.page_count())
+    spec fn pg_params(&self) -> PageCountParam<N> {
+        PageCountParam { page_count: self.page_count() }
     }
 
-    pub closed spec fn spec_page_info_addr(&self, pfn: int) -> VAddr {
+    #[verifier(inline)]
+    spec fn reserved(&self) -> ReservedPerms<N> {
+        ReservedPerms { page_count: self.pg_params(), reserved: self.reserved }
+    }
+
+    spec fn free_perms(&self) -> FreePerms<VAddr, N> {
+        FreePerms {
+            page_count: self.pg_params(),
+            avail: self.avail,
+            next: self.next,
+            pfn_to_virt: self.pfn_to_virt,
+        }
+    }
+
+    spec fn free_pfn_len(&self, order: int) -> nat {
+        self.next[order].len()
+    }
+
+    spec fn free_pfn_dom_seq(&self, order: int) -> Seq<Set<int>> {
+        Seq::new(self.free_pfn_len(order), |idx| self.free_pfn_dom_at(order, idx))
+    }
+
+    spec fn free_pfn_dom(&self, order: int) -> Set<int> {
+        seq_sets_to_set(self.free_pfn_dom_seq(order))
+    }
+
+    spec fn free_pfn_dom_at(&self, order: int, idx: int) -> Set<int> {
+        let size = 1usize << order;
+        let pfn = self.next[order][idx];
+        set_int_range(pfn as int, pfn + size)
+    }
+
+    #[verifier(inline)]
+    spec fn reserved_pfn_count(&self) -> nat {
+        self.pg_params().reserved_pfn_count()
+    }
+
+    #[verifier(inline)]
+    spec fn spec_page_info_addr(&self, pfn: int) -> VAddr {
         self.pfn_to_virt[pfn].info_vaddr
     }
 
-    pub closed spec fn pfn_not_available(&self, pfn: usize, order: usize) -> bool {
-        forall|o: int, i: int|
-            0 <= o < MAX_ORDER && 0 <= i < self.next[o].len() ==> (self.next[o][i] + (1usize << (
-            o as usize)) <= pfn || pfn + (1usize << order) <= self.next[o][i])
+    pub closed spec fn pfn_range_is_allocated(&self, pfn: usize, order: usize) -> bool {
+        let next = self.next;
+        forall|o, i|
+            0 <= o < N && 0 <= i < next[o].len() ==> pfn_disjoint(
+                #[trigger] next[o][i],
+                o as usize,
+                pfn,
+                order,
+            )
     }
 
-    pub closed spec fn next_page(&self, i: int) -> int {
+    spec fn next_page(&self, i: int) -> int {
         if self.next[i].len() == 0 {
             0
         } else {
@@ -324,7 +413,7 @@ impl<VAddr: SpecVAddrImpl, const N: usize> MemoryRegionTracked<VAddr, N> {
     }
 
     #[verifier(inline)]
-    pub open spec fn next_pages(&self) -> Seq<usize> {
+    spec fn next_pages(&self) -> Seq<usize> {
         Seq::new(N as nat, |i| self.next_page(i) as usize)
     }
 
@@ -333,7 +422,7 @@ impl<VAddr: SpecVAddrImpl, const N: usize> MemoryRegionTracked<VAddr, N> {
         Seq::new(N as nat, |i| self.next[i].len())
     }
 
-    closed spec fn next_pages_after_remove(&self, order: int) -> Seq<usize> {
+    spec fn next_pages_after_remove(&self, order: int) -> Seq<usize> {
         Seq::new(
             N as nat,
             |i|
@@ -367,8 +456,23 @@ impl<VAddr: SpecVAddrImpl, const N: usize> MemoryRegionTracked<VAddr, N> {
         &&& end <= self.next[o][i] + (1usize << o)
     }
 
+    spec fn contains_range(&self, pfn: usize, order: usize) -> bool {
+        exists|o, i| self.contained_by_order_idx(pfn, order, o, i)
+    }
+
     spec fn choose_order_idx(&self, pfn: usize, order: usize) -> (int, int) {
         choose|o, i| self.contained_by_order_idx(pfn, order, o, i)
+    }
+
+    spec fn full_pfn_dom(&self) -> Set<int> {
+        set_int_range(self.reserved_pfn_count() as int, self.page_count() as int)
+    }
+
+    spec fn inv_remove_pfn(&self, new: Self) -> bool {
+        forall|o, i|
+            0 <= o < new.next.len() && 0 <= i < new.next[o].len() ==> self.next[o].contains(
+                #[trigger] new.next[o][i],
+            )
     }
 
     spec fn wf_dom(&self) -> bool {
@@ -387,7 +491,7 @@ impl<VAddr: SpecVAddrImpl, const N: usize> MemoryRegionTracked<VAddr, N> {
 
     #[verifier(inline)]
     spec fn spec_page_info(&self, pfn: int) -> Option<PageInfo> {
-        spec_page_info(self.reserved[pfn])
+        self.reserved().spec_page_info(pfn as usize)
     }
 
     #[verifier(inline)]
@@ -396,85 +500,78 @@ impl<VAddr: SpecVAddrImpl, const N: usize> MemoryRegionTracked<VAddr, N> {
     }
 
     pub closed spec fn valid_pfn_order(&self, pfn: usize, order: usize) -> bool {
-        let n = 1usize << order;
-        &&& self.reserved_pfn_count() <= pfn < self.page_count()
-        &&& pfn + n <= self.page_count() <= usize::MAX
-        &&& pfn % n == 0
-        &&& order < N
+        self.pg_params().valid_pfn_order(pfn, order)
     }
 
-    pub closed spec fn wf_item_perm(&self, order: int, i: int) -> bool {
-        let pfn = self.next[order][i] as int;
-        let perm = self.avail[(order, i)];
-        let vaddr = self.pfn_to_virt[pfn].vaddr;
-        &&& pfn >= self.reserved_pfn_count()
-        &&& self.valid_pfn_order(pfn as usize, order as usize)
-        &&& perm.wf_vaddr_order(vaddr, order as usize)
+    #[verifier(inline)]
+    spec fn wf_freep(&self, order: int, i: int) -> bool {
+        self.free_perms().wf_at(order, i)
     }
 
-    pub closed spec fn wf_item(&self, order: int, i: int) -> bool {
+    pub closed spec fn wf_at(&self, order: int, i: int) -> bool {
         let next = self.next[order];
-        let pfn = next[i] as int;
+        let pfn = next[i];
         let next_pfn = if i > 0 {
             next[i - 1]
         } else {
             0
         };
-        &&& self.wf_item_perm(order, i)
+        &&& self.wf_freep(order, i)
         &&& self.marked_free(pfn, order as usize, next_pfn)
     }
 
     #[verifier(inline)]
     spec fn wf_next(&self, order: int) -> bool {
         let i = self.next[order].len() - 1;
-        &&& self.wf_item(order, i)
+        &&& self.wf_at(order, i)
     }
 
     spec fn spec_page_count(&self) -> int {
         spec_page_count(self.next, N)
     }
 
+    spec fn ens_allocate_pfn(&self, new: Self, pfn: usize, order: usize) -> bool {
+        let target_next = new.next[order as int];
+        let old_next = self.next[order as int];
+        let idx = old_next.index_of(pfn);
+        let size = 1usize << order;
+        let prev_pfn = if idx < old_next.len() - 1 {
+            old_next[idx + 1]
+        } else {
+            0
+        };
+        &&& self.inv_remove_pfn(new)
+        &&& old_next.contains(pfn)
+        &&& old_next[idx] == pfn
+        &&& new.next === self.next.update(order as int, new.next[order as int])
+        &&& idx === old_next.len() - 1 ==> new.reserved() === self.reserved()
+        &&& self.reserved().ens_allocate_pfn(new.reserved(), pfn, prev_pfn, order)
+    }
+
     spec fn wf_reserved(&self) -> bool {
-        let reserved = self.reserved;
-        let page_count = self.page_count();
-        &&& forall|pfn: int|
-            #![trigger self.spec_page_info(pfn)]
-            0 <= pfn < page_count ==> (reserved[pfn].addr() == self.spec_page_info_addr(
-                pfn,
-            ).spec_int_addr().unwrap() && self.spec_page_info(pfn).is_some())
-        &&& reserved.dom() === set_int_range(0, page_count as int)
-        &&& self.wf_reserved_info()
+        &&& self.reserved().wf_dom()
+        &&& self.reserved().wf_ptr(self.pfn_to_virt)
+        &&& self.reserved().wf_reserved_basic()
     }
 
-    spec fn wf_reserved_info(&self) -> bool {
-        forall|pfn: int|
-            0 <= pfn < self.reserved_pfn_count() ==> #[trigger] self.spec_page_info(pfn) === Some(
-                PageInfo::Reserved(ReservedInfo),
-            )
+    spec fn wf_page_info_at(&self, pfn: usize) -> bool {
+        self.reserved().wf_page_info_at(pfn)
     }
 
-    spec fn wf_freeinfo_item(&self, pfn: usize) -> bool {
-        self.get_free_info(pfn as int).is_some() ==> self.next[self.get_free_info(
-            pfn as int,
-        ).unwrap().order as int].contains(pfn)
-    }
-
-    spec fn wf_freeinfo(&self) -> bool {
-        forall|pfn: usize| 0 <= pfn < self.page_count() ==> #[trigger] self.wf_freeinfo_item(pfn)
+    spec fn wf_info_content(&self) -> bool {
+        self.reserved().wf_page_info()
     }
 
     spec fn wf_info(&self) -> bool {
         let next = self.next;
-        &&& forall|order, i|
-            0 <= order < N && 0 <= i < next[order].len() ==> #[trigger] self.wf_item(order, i)
+        &&& forall|order, i| 0 <= order < N && 0 <= i < next[order].len() ==> self.wf_at(order, i)
+        &&& self.wf_info_content()
     }
 
-    #[verifier(opaque)]
     spec fn wf_perms(&self) -> bool {
         let next = self.next;
         &&& self.wf_dom()
-        &&& forall|order, i|
-            0 <= order < N && 0 <= i < next[order].len() ==> #[trigger] self.wf_item_perm(order, i)
+        &&& self.free_perms().wf()
     }
 
     pub closed spec fn wf(&self) -> bool {
@@ -483,131 +580,40 @@ impl<VAddr: SpecVAddrImpl, const N: usize> MemoryRegionTracked<VAddr, N> {
         &&& self.wf_reserved()
     }
 
-    spec fn marked_free(&self, pfn: int, order: usize, next_pfn: usize) -> bool {
-        let n = 1usize << order;
-        let pi = self.spec_page_info(pfn);
-        &&& pi === Some(PageInfo::Free(FreeInfo { next_page: next_pfn, order }))
-        &&& forall|i|
-            #![trigger self.spec_page_info(i)]
-            pfn < i < pfn + n ==> self.spec_page_info(i) == Some(
-                PageInfo::Compound(CompoundInfo { order }),
-            )
+    #[verifier(inline)]
+    spec fn marked_compound(&self, pfn: usize, order: usize) -> bool {
+        self.reserved().marked_compound(pfn, order)
     }
 
-    spec fn marked_reserved(&self, pfn: int) -> bool {
-        self.spec_page_info(pfn) === Some(PageInfo::Reserved(ReservedInfo))
+    #[verifier(inline)]
+    spec fn marked_free(&self, pfn: usize, order: usize, next_pfn: usize) -> bool {
+        self.reserved().marked_free(pfn, order, next_pfn)
+    }
+
+    #[verifier(inline)]
+    spec fn marked_free_order(&self, pfn: usize, order: usize) -> bool {
+        self.reserved().marked_free_order(pfn, order)
+    }
+
+    #[verifier(inline)]
+    spec fn marked_allocated(&self, pfn: usize, order: usize) -> bool {
+        self.reserved().marked_allocated(pfn, order)
+    }
+
+    #[verifier(inline)]
+    spec fn marked_order(&self, pfn: usize, order: usize) -> bool {
+        self.reserved().marked_order(pfn, order)
+    }
+
+    #[verifier(inline)]
+    spec fn marked_not_free(&self, pfn: usize, order: usize) -> bool {
+        self.reserved().marked_not_free(pfn, order)
     }
 }
 
 impl MemoryRegion {
     pub closed spec fn view(&self) -> MemoryRegionTracked<VirtAddr, MAX_ORDER> {
         self.perms@
-    }
-
-    pub closed spec fn map(&self) -> LinearMap {
-        LinearMap {
-            start_virt: self.start_virt,
-            start_phys: self.start_phys@ as int,
-            size: (self.page_count * PAGE_SIZE) as nat,
-        }
-    }
-
-    spec fn with_same_mapping(&self, new: &Self) -> bool {
-        self.map() === new.map()
-    }
-
-    pub closed spec fn spec_get_pfn(&self, vaddr: VirtAddr) -> int {
-        (self.map().get_paddr(vaddr) - self.start_phys@) / PAGE_SIZE as int
-    }
-
-    pub closed spec fn spec_map_try_get_virt(map: LinearMap, pfn: int) -> Option<VirtAddr> {
-        let phy = map.start_phys + pfn * PAGE_SIZE;
-        map.to_vaddr(phy)
-    }
-
-    pub open spec fn spec_try_get_virt(&self, pfn: int) -> Option<VirtAddr> {
-        Self::spec_map_try_get_virt(self.map(), pfn)
-    }
-
-    pub closed spec fn spec_get_virt(&self, pfn: int) -> VirtAddr {
-        self.spec_try_get_virt(pfn).unwrap()
-    }
-
-    proof fn lemma_get_virt(&self, pfn: int) -> (ret: VirtAddr)
-        requires
-            self.wf_params(),
-            0 <= pfn < self@.page_count(),
-        ensures
-            self.spec_try_get_virt(pfn).is_some(),
-            ret == self.spec_get_virt(pfn),
-            ret.is_canonical(),
-            ret.offset() == self.start_virt.offset() + (pfn * PAGE_SIZE),
-    {
-        broadcast use crate::types::lemma_page_size;
-
-        reveal(<LinearMap as SpecMemMapTr>::to_vaddr);
-        VirtAddr::lemma_wf((self.start_virt.offset() + (pfn * PAGE_SIZE)) as usize);
-        self.spec_get_virt(pfn)
-    }
-
-    spec fn spec_map_page_info_addr(map: LinearMap, pfn: int) -> VirtAddr {
-        let reserved_unit_size = size_of::<PageStorageType>();
-        let start = map.start_virt;
-        VirtAddr::from_spec((start@ + (pfn * reserved_unit_size)) as usize)
-    }
-
-    spec fn spec_page_info_addr(&self, pfn: int) -> VirtAddr {
-        Self::spec_map_page_info_addr(self.map(), pfn)
-    }
-
-    spec fn wf_pfn_to_virt(&self) -> bool {
-        let map = self.map();
-        self@.pfn_to_virt === Seq::new(
-            (map.size / PAGE_SIZE as nat),
-            |pfn|
-                VirtInfo {
-                    vaddr: Self::spec_map_try_get_virt(map, pfn).unwrap(),
-                    info_vaddr: Self::spec_map_page_info_addr(map, pfn),
-                },
-        )
-    }
-
-    #[verifier(inline)]
-    spec fn wf_page_count(&self) -> bool {
-        &&& self.start_virt.offset() + self.page_count * PAGE_SIZE
-            <= crate::address::VADDR_RANGE_SIZE
-        &&& self@.page_count() == self.page_count
-    }
-
-    spec fn wf_accounting(&self) -> bool {
-        &&& forall|order|
-            0 <= order < MAX_ORDER ==> #[trigger] self.free_pages[order] <= self.nr_pages[order]
-        &&& forall|order|
-            0 <= order < MAX_ORDER ==> #[trigger] self.nr_pages[order] * (1usize << order as usize)
-                <= self.page_count
-    }
-
-    spec fn wf_accounting_strict(&self) -> bool {
-        &&& forall|order| 0 <= order < MAX_ORDER ==> self.nr_pages[order] == self.free_pages[order]
-    }
-
-    // Basic invariant that should hold except in initialization stage
-    pub closed spec fn wf_params(&self) -> bool {
-        let perms = self@;
-        &&& self.start_virt.is_canonical()
-        &&& self.wf_pfn_to_virt()
-        &&& self.wf_page_count()
-        &&& self.wf_accounting()
-    }
-
-    pub closed spec fn wf_reserved(&self) -> bool {
-        &&& self@.wf_reserved()
-        &&& self.wf_params()
-    }
-
-    pub closed spec fn wf_free_pages(&self) -> bool {
-        forall|order|
-            0 <= order < MAX_ORDER ==> self@.next[order].len() == #[trigger] self.free_pages[order]
     }
 
     // Strict invariant that should hold at public interfaces.
@@ -624,7 +630,108 @@ impl MemoryRegion {
         self.wf_mem_state() && self.wf_accounting_strict()
     }
 
-    pub closed spec fn ensures_get_next_page(
+    spec fn map(&self) -> LinearMap {
+        LinearMap {
+            start_virt: self.start_virt,
+            start_phys: self.start_phys@ as int,
+            size: (self.page_count * PAGE_SIZE) as nat,
+        }
+    }
+
+    spec fn with_same_mapping(&self, new: &Self) -> bool {
+        self.map() === new.map()
+    }
+
+    spec fn spec_get_pfn(&self, vaddr: VirtAddr) -> int {
+        (self.map().get_paddr(vaddr) - self.start_phys@) / PAGE_SIZE as int
+    }
+
+    spec fn spec_try_get_virt(&self, pfn: int) -> Option<VirtAddr> {
+        self.map().try_get_virt(pfn as usize)
+    }
+
+    spec fn spec_get_virt(&self, pfn: int) -> VirtAddr {
+        self.spec_try_get_virt(pfn).unwrap()
+    }
+
+    spec fn spec_map_page_info_addr(map: LinearMap, pfn: int) -> VirtAddr {
+        let reserved_unit_size = size_of::<PageStorageType>();
+        let start = map.start_virt;
+        VirtAddr::from_spec((start@ + (pfn * reserved_unit_size)) as usize)
+    }
+
+    spec fn spec_page_info_addr(&self, pfn: int) -> VirtAddr {
+        Self::spec_map_page_info_addr(self.map(), pfn)
+    }
+
+    spec fn wf_accounting(&self) -> bool {
+        &&& forall|order|
+            0 <= order < MAX_ORDER ==> #[trigger] self.free_pages[order] <= self.nr_pages[order]
+        &&& forall|order|
+            0 <= order < MAX_ORDER ==> #[trigger] self.nr_pages[order] * (1usize << order as usize)
+                <= self.page_count
+    }
+
+    proof fn lemma_accounting(&self, order: int)
+        requires
+            self.wf_accounting(),
+            0 <= order < MAX_ORDER,
+        ensures
+            self.nr_pages[order] <= self.page_count,
+    {
+        assert(self.nr_pages[order] * (1usize << order as usize) <= self.page_count);
+        broadcast use lemma_bit_usize_shl_values;
+
+        let n = (1usize << order as usize) as int;
+        assert(self.nr_pages[order] <= self.page_count) by (nonlinear_arith)
+            requires
+                self.nr_pages[order] * n <= self.page_count,
+                n >= 1,
+        ;
+    }
+
+    spec fn wf_accounting_strict(&self) -> bool {
+        &&& forall|order| 0 <= order < MAX_ORDER ==> self.nr_pages[order] == self.free_pages[order]
+    }
+
+    spec fn wf_accounting_strict_except(&self, start_order: int, end_order: int) -> bool {
+        forall|order|
+            0 <= order < MAX_ORDER && !(start_order <= order < end_order)
+                ==> #[trigger] self.nr_pages[order] == self.free_pages[order]
+    }
+
+    spec fn wf_pfn_to_virt(&self) -> bool {
+        let map = self.map();
+        self@.pfn_to_virt === Seq::new(
+            (map.size / PAGE_SIZE as nat),
+            |pfn|
+                VirtInfo {
+                    vaddr: map.try_get_virt(pfn as usize).unwrap(),
+                    info_vaddr: Self::spec_map_page_info_addr(map, pfn),
+                },
+        )
+    }
+
+    // Basic invariant that should hold except in initialization stage
+    spec fn wf_params(&self) -> bool {
+        let perms = self@;
+        &&& self.map().wf()
+        &&& self.wf_pfn_to_virt()
+        &&& self@.page_count() == self.page_count
+        &&& self.wf_accounting()
+    }
+
+    spec fn wf_reserved(&self) -> bool {
+        &&& self@.wf_reserved()
+        &&& self.wf_params()
+    }
+
+    spec fn wf_free_pages(&self) -> bool {
+        forall|order|
+            0 <= order < MAX_ORDER ==> self@.next[order].len() == #[trigger] self.free_pages[order]
+    }
+
+    spec fn ens_get_next_page(
         &self,
         new_self: &Self,
         order: usize,
@@ -634,7 +741,6 @@ impl MemoryRegion {
         let new_tmp = new_self.tmp_perms@.to_seq();
         let vaddr = new_self.spec_get_virt(ret.unwrap() as int);
         let order = order as int;
-        &&& self.wf_mem_state()
         &&& self.with_same_mapping(new_self)
         &&& ret.is_err() == (self.next_page[order] == 0)
         &&& ret.is_err() == (self.free_pages[order] == 0)
@@ -652,26 +758,30 @@ impl MemoryRegion {
                 (self.free_pages[order] - 1) as usize,
             )
             &&& new_self.next_page@ === self.next_page@.update(order, new_self.next_page[order])
+            &&& new_self@.next[order] === self@.next[order].remove(self@.next[order].len() - 1)
+            &&& new_self@.next === self@.next.update(order, new_self@.next[order])
+            &&& self@.inv_remove_pfn(new_self@)
             &&& new_self.nr_pages === self.nr_pages
-            &&& new_self@.pfn_not_available(ret.unwrap(), order as usize)
+            &&& new_self@.pfn_range_is_allocated(ret.unwrap(), order as usize)
+            &&& new_self@.reserved === self@.reserved
         }
     }
 
-    pub closed spec fn ens_read_page_info(self, pfn: usize, ret: PageInfo) -> bool {
+    spec fn ens_read_page_info(self, pfn: usize, ret: PageInfo) -> bool {
         &&& self@.spec_page_info(pfn as int).is_some()
         &&& self@.spec_page_info(pfn as int).unwrap() === ret
     }
 
-    pub closed spec fn spec_alloc_fails(&self, order: int) -> bool {
+    spec fn spec_alloc_fails(&self, order: int) -> bool {
         forall|i| #![trigger self.next_page[i]] order <= i < MAX_ORDER ==> self.next_page[i] == 0
     }
 
     #[verifier(inline)]
-    pub open spec fn valid_pfn_order(&self, pfn: usize, order: usize) -> bool {
+    spec fn valid_pfn_order(&self, pfn: usize, order: usize) -> bool {
         self@.valid_pfn_order(pfn, order)
     }
 
-    pub closed spec fn ens_refill_page_list(&self, new: Self, ret: bool, order: usize) -> bool {
+    spec fn ens_refill_page_list(&self, new: Self, ret: bool, order: usize) -> bool {
         let new_free_perms = new@.next;
         // No available if no slot >= order
         let valid_order = (0 <= order < MAX_ORDER);
@@ -680,13 +790,12 @@ impl MemoryRegion {
             &&& !ret
         } else {
             &&& ret
-            //&&& new@.next[order as int].len() > 0
             &&& new.free_pages[order as int] > 0
             &&& self.only_update_order_higher(new, order)
         }
     }
 
-    pub closed spec fn req_split_page(&self, pfn: usize, order: usize) -> bool {
+    spec fn req_split_page(&self, pfn: usize, order: usize) -> bool {
         let perm = self.tmp_perms@.last();
         let vaddr = self.spec_get_virt(pfn as int);
         let new_size = (1usize << (order - 1) as usize);
@@ -699,11 +808,12 @@ impl MemoryRegion {
         &&& (self.nr_pages[order - 1] + 2) * new_size <= self.page_count
         &&& self.free_pages[order - 1] + 2 <= usize::MAX
         &&& self.nr_pages[order - 1] + 2 <= usize::MAX
-        &&& self@.pfn_not_available(pfn, order)
+        &&& self@.pfn_range_is_allocated(pfn, order)
+        &&& self@.marked_order(pfn, order)
         &&& self.free_pages[order as int] == self.nr_pages[order as int] - 1
     }
 
-    pub closed spec fn ens_split_page_ok(&self, new: &Self, pfn: usize, order: usize) -> bool {
+    spec fn ens_split_page_ok(&self, new: &Self, pfn: usize, order: usize) -> bool {
         let free_perms = self@.next;
         let new_free_perms = new@.next;
         let tmp = self.tmp_perms@@;
@@ -726,36 +836,28 @@ impl MemoryRegion {
         &&& new.next_page@ =~= self.next_page@.update(order - 1, pfn)
     }
 
-    pub closed spec fn req_write_page_info(&self, pfn: usize, pi: PageInfo) -> bool {
+    spec fn req_write_page_info(&self, pfn: usize, pi: PageInfo) -> bool {
         &&& self.wf_reserved()
         &&& pfn < self@.reserved_pfn_count() ==> pi === PageInfo::Reserved(ReservedInfo)
+        &&& pfn < self@.page_count()
     }
 
-    pub closed spec fn ens_write_page_info(&self, new: Self, pfn: usize, pi: PageInfo) -> bool {
+    spec fn ens_write_page_info(&self, new: Self, pfn: usize, pi: PageInfo) -> bool {
         &&& self.only_update_reserved(new)
         &&& new@.reserved =~~= self@.reserved.insert(pfn as int, new@.reserved[pfn as int])
         &&& new@.spec_page_info(pfn as int) === Some(pi)
         &&& new.wf_reserved()
     }
 
-    pub closed spec fn req_mark_compound_page(&self, pfn: usize, order: usize) -> bool {
+    spec fn req_mark_compound_page(&self, pfn: usize, order: usize) -> bool {
         &&& self.wf_reserved()
         &&& self.valid_pfn_order(pfn, order)
     }
 
-    pub closed spec fn ens_mark_compound_page(
-        &self,
-        new: Self,
-        pfn: usize,
-        n: usize,
-        order: usize,
-    ) -> bool {
-        let pfn = pfn as int;
+    spec fn ens_mark_compound_page(&self, new: Self, pfn: usize, n: usize, order: usize) -> bool {
+        let pfn_set = set_int_range(pfn + 1, pfn + n);
         &&& self.only_update_reserved(new)
-        &&& new@.reserved =~~= self@.reserved.union_prefer_right(
-            Map::new(|i| pfn < i < pfn + n, |i| new@.reserved[i]),
-        )
-        &&& new@.reserved[pfn] === self@.reserved[pfn]
+        &&& new@.reserved =~~= self@.reserved.union_prefer_right(new@.reserved.restrict(pfn_set))
         &&& new.wf_reserved()
         &&& forall|i|
             #![trigger new@.reserved[i]]
@@ -764,12 +866,7 @@ impl MemoryRegion {
             )
     }
 
-    pub closed spec fn req_init_compound_page(
-        &self,
-        pfn: usize,
-        order: usize,
-        next_pfn: usize,
-    ) -> bool {
+    spec fn req_init_compound_page(&self, pfn: usize, order: usize, next_pfn: usize) -> bool {
         &&& self.valid_pfn_order(pfn, order)
         &&& self.wf_reserved()
     }
@@ -781,9 +878,14 @@ impl MemoryRegion {
         &&& expected_perm === new@
     }
 
-    spec fn only_update_reserved_and_nr(&self, new: &Self) -> bool {
+    spec fn only_update_reserved_and_tmp_nr(&self, new: &Self) -> bool {
         let expected_perm = MemoryRegionTracked { reserved: new@.reserved, ..self@ };
-        let expected_self = MemoryRegion { perms: new.perms, nr_pages: new.nr_pages, ..*self };
+        let expected_self = MemoryRegion {
+            perms: new.perms,
+            nr_pages: new.nr_pages,
+            tmp_perms: new.tmp_perms,
+            ..*self
+        };
         &&& expected_self === *new
         &&& expected_perm === new@
     }
@@ -798,7 +900,7 @@ impl MemoryRegion {
             }
     }
 
-    pub closed spec fn ens_init_compound_page(
+    spec fn ens_init_compound_page(
         &self,
         new: Self,
         pfn: usize,
@@ -806,7 +908,6 @@ impl MemoryRegion {
         next_pfn: usize,
     ) -> bool {
         let n = 1usize << order;
-        let pfn = pfn as int;
         let changes = Map::new(|i| pfn <= i < pfn + n, |i| new@.reserved[i]);
         &&& self.only_update_reserved(new)
         &&& new@.reserved =~~= self@.reserved.union_prefer_right(changes)
@@ -829,7 +930,7 @@ impl MemoryRegion {
         &&& Self::ens_find_neighbor(pfn, order, ret_pfn)
     }
 
-    pub closed spec fn req_allocate_pfn(&self, pfn: usize, order: usize) -> bool {
+    spec fn req_allocate_pfn(&self, pfn: usize, order: usize) -> bool {
         let n = 1usize << order;
         &&& self@.reserved_pfn_count() <= pfn
         &&& pfn % n == 0
@@ -837,23 +938,39 @@ impl MemoryRegion {
         &&& self.wf_mem_state()
     }
 
-    pub closed spec fn ens_allocate_pfn(&self, new: &Self, pfn: usize, order: usize) -> bool {
+    spec fn ens_allocate_pfn(&self, new: &Self, pfn: usize, order: usize) -> bool {
+        &&& self@.ens_allocate_pfn(new@, pfn, order)
         &&& new.tmp_perms@@ === self.tmp_perms@@.push(new.tmp_perms@@.last())
         &&& new.tmp_perms@@.last().wf_vaddr_order(self.spec_get_virt(pfn as int), order as usize)
         &&& new.wf_mem_state()
         &&& new.map() === self.map()
         &&& new.valid_pfn_order(pfn, order)
+        &&& new.nr_pages === self.nr_pages
+        &&& new.free_pages@ === self.free_pages@.update(
+            order as int,
+            (self.free_pages[order as int] - 1) as usize,
+        )
+        &&& new@.pfn_range_is_allocated(
+            pfn,
+            order,
+        )
+        //&&& forall|pfn, order| #[trigger]
+        //    self@.pfn_range_is_allocated(pfn, order) ==> new@.pfn_range_is_allocated(pfn, order)
+
     }
 
-    pub closed spec fn req_try_to_merge_page(&self, pfn: usize, order: usize) -> bool {
+    spec fn req_try_to_merge_page(&self, pfn: usize, order: usize) -> bool {
         &&& self.wf_reserved()
         &&& self.wf_mem_state()
         &&& self.tmp_perms@@.len() >= 1
         &&& self.tmp_perms@@.last().wf_vaddr_order(self.spec_get_virt(pfn as int), order as usize)
         &&& self.valid_pfn_order(pfn, order)
+        &&& self@.marked_order(pfn, order)
+        &&& self.nr_pages[order as int] == self.free_pages[order as int] + 1
+        &&& self@.pfn_range_is_allocated(pfn, order)
     }
 
-    pub closed spec fn ens_try_to_merge_page_ok(
+    spec fn ens_try_to_merge_page_ok(
         &self,
         new: &Self,
         pfn: usize,
@@ -862,16 +979,24 @@ impl MemoryRegion {
     ) -> bool {
         let new_pfn = ret.unwrap();
         let vaddr = new.spec_get_virt(new_pfn as int);
+        let order = order as int;
+        let n1 = (self.nr_pages[order] - 2) as usize;
+        let n2 = (self.nr_pages[order + 1] + 1) as usize;
+        let new_nr_pages = self.nr_pages@.update(order, n1).update(order + 1, n2);
+        let new_free_pages = self.free_pages@.update(order, (self.free_pages[order] - 1) as usize);
         &&& new_pfn == pfn || new_pfn == pfn - (1usize << order)
         &&& new.wf_reserved()
         &&& new.wf_mem_state()
+        &&& self.with_same_mapping(new)
         &&& new.tmp_perms@@.last().wf_vaddr_order(vaddr, (order + 1) as usize)
         &&& new.tmp_perms@@.len() >= 1
         &&& self.valid_pfn_order(new_pfn, (order + 1) as usize)
-        &&& self.only_update_reserved_and_nr(new)
+        &&& new.nr_pages@ === new_nr_pages
+        &&& new.free_pages@ === new_free_pages
+        &&& new@.marked_compound(new_pfn, (order + 1) as usize)
     }
 
-    pub closed spec fn ens_try_to_merge_page(
+    spec fn ens_try_to_merge_page(
         &self,
         new: &Self,
         pfn: usize,
@@ -882,8 +1007,11 @@ impl MemoryRegion {
         &&& ret.is_err() ==> self == new
     }
 
-    pub closed spec fn req_merge_pages(&self, pfn1: usize, pfn2: usize, order: usize) -> bool {
+    spec fn req_merge_pages(&self, pfn1: usize, pfn2: usize, order: usize) -> bool {
+        let pfn = vstd::math::min(pfn1 as int, pfn2 as int);
         &&& self.wf_reserved()
+        &&& self.wf_accounting()
+        &&& self.wf_mem_state()
         &&& self.tmp_perms@@.len() >= 2
         &&& self.tmp_perms@@.last().wf_vaddr_order(self.spec_get_virt(pfn2 as int), order as usize)
         &&& self.tmp_perms@@[self.tmp_perms@@.len() - 2].wf_vaddr_order(
@@ -893,18 +1021,22 @@ impl MemoryRegion {
         &&& self.valid_pfn_order(pfn1, order)
         &&& self.valid_pfn_order(pfn2, order)
         &&& (pfn1 == pfn2 + (1usize << order)) || (pfn1 == pfn2 - (1usize << order))
-        &&& self.valid_pfn_order(
-            vstd::math::min(pfn1 as int, pfn2 as int) as usize,
-            (order + 1) as usize,
-        )
+        &&& self.valid_pfn_order(pfn as usize, (order + 1) as usize)
+        &&& self.nr_pages[order as int] == self.free_pages[order as int] + 2
+        &&& 0 <= order < MAX_ORDER - 1
+        &&& self@.pfn_range_is_allocated(pfn1, order)
+        &&& self@.pfn_range_is_allocated(pfn2, order)
+        &&& self@.marked_order(pfn1, order)
+        &&& self@.marked_order(pfn2, order)
     }
 
-    pub closed spec fn ens_merge_pages(
+    spec fn ens_merge_pages_ok(
         &self,
         new: &Self,
         pfn1: usize,
         pfn2: usize,
         order: usize,
+        ret: usize,
     ) -> bool {
         let order = order as int;
         let pfn = vstd::math::min(pfn1 as int, pfn2 as int);
@@ -912,33 +1044,72 @@ impl MemoryRegion {
         let n2 = (self.nr_pages[order + 1] + 1) as usize;
         let new_nr_pages = self.nr_pages@.update(order, n1).update(order + 1, n2);
         &&& new.wf_mem_state()
-        &&& new.tmp_perms@@ =~= self.tmp_perms@@.take(self.tmp_perms@@.len() - 2).push(
+        &&& ret == pfn
+        &&& new.tmp_perms@@ === self.tmp_perms@@.take(self.tmp_perms@@.len() - 2).push(
             new.tmp_perms@@.last(),
         )
         &&& new.tmp_perms@@.last().wf_vaddr_order(self.spec_get_virt(pfn), (order + 1) as usize)
-        &&& self.only_update_reserved_and_nr(new)
+        &&& self.only_update_reserved_and_tmp_nr(new)
         &&& new.nr_pages@ === new_nr_pages
+        &&& new@.marked_allocated(pfn as usize, (order + 1) as usize)
     }
 
-    pub closed spec fn ens_free_page_order(&self, new: &Self, pfn: usize, order: usize) -> bool {
-        let end = pfn + (1usize << order);
+    spec fn ens_merge_pages(
+        &self,
+        new: &Self,
+        pfn1: usize,
+        pfn2: usize,
+        order: usize,
+        ret: Result<usize, AllocError>,
+    ) -> bool {
+        &&& ret.is_ok()
+        &&& self.ens_merge_pages_ok(new, pfn1, pfn2, order, ret.unwrap())
+    }
+
+    spec fn ens_free_page_order(&self, new: &Self, pfn: usize, order: usize) -> bool {
         &&& new.wf_mem_stat_state()
-        &&& exists|o, i| new@.contained_by_order_idx(pfn, order, o, i)
+        &&& new@.contains_range(pfn, order)
     }
 
-    proof fn lemma_free_page_order(&self, new: &Self, pfn: usize, order: usize)
+    proof fn lemma_derive_contains_range(
+        &self,
+        new: &Self,
+        new_pfn: usize,
+        new_order: usize,
+        pfn: usize,
+        order: usize,
+    )
         requires
-            self.ens_free_page_order(new, pfn, (order + 1) as usize),
-            0 <= order < MAX_ORDER - 1,
+            self.ens_free_page_order(new, new_pfn, new_order),
+            new_pfn == pfn || new_pfn == pfn - (1usize << order),
+            0 <= order < new_order < MAX_ORDER,
         ensures
-            self.ens_free_page_order(new, pfn, order),
+            new@.contains_range(pfn, order),
     {
         broadcast use lemma_bit_usize_shl_values;
 
-        assert((1usize << order) < (1usize << (order + 1)));
-        let (o, i) = new@.choose_order_idx(pfn, (order + 1) as usize);
-        assert(new@.contained_by_order_idx(pfn, (order + 1) as usize, o, i));
+        assert((1usize << order) < (1usize << new_order));
+        let (o, i) = new@.choose_order_idx(new_pfn, new_order);
+        assert(new@.contained_by_order_idx(new_pfn, new_order, o, i));
         assert(new@.contained_by_order_idx(pfn, order, o, i));
+    }
+
+    spec fn req_free_page_raw(&self, pfn: usize, order: usize) -> bool {
+        &&& self.wf_mem_state()
+        &&& self.nr_pages[order as int] == self.free_pages[order as int] + 1
+        &&& self@.marked_not_free(pfn, order)
+        &&& self.tmp_perms@@.last().wf_vaddr_order(self.spec_get_virt(pfn as int), order)
+        &&& self.tmp_perms@@.len() > 0
+        &&& self.valid_pfn_order(pfn, order)
+        &&& self@.pfn_range_is_allocated(pfn, order)
+    }
+
+    spec fn ens_free_page_raw(&self, new: &Self, pfn: usize, order: usize) -> bool {
+        let end = pfn + (1usize << order);
+        let new_count = self.free_pages[order as int] + 1;
+        &&& new.wf_mem_state()
+        &&& new.next_page@ === self.next_page@.update(order as int, pfn)
+        &&& new.free_pages@ === self.free_pages@.update(order as int, new_count as usize)
     }
 }
 

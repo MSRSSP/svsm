@@ -1,7 +1,7 @@
 use vstd::prelude::*;
 
+verus! {
 
-verus!{
 #[allow(missing_debug_implementations)]
 #[verifier::accept_recursive_types(T)]
 pub tracked struct TrackedSeq<T> {
@@ -12,7 +12,7 @@ pub tracked struct TrackedSeq<T> {
 impl<T> TrackedSeq<T> {
     #[verifier::type_invariant]
     pub closed spec fn wf(&self) -> bool {
-        forall |i| 0 <= i < self.size ==> self.map.dom().contains(i)
+        forall|i| 0 <= i < self.size ==> self.map.dom().contains(i)
     }
 
     pub closed spec fn to_seq(&self) -> Seq<T> {
@@ -35,11 +35,11 @@ impl<T> TrackedSeq<T> {
     }
 
     pub proof fn tracked_empty() -> (tracked ret: TrackedSeq<T>)
-    ensures
-        ret.wf(),
-        ret@.len() == 0,
+        ensures
+            ret.wf(),
+            ret@.len() == 0,
     {
-        TrackedSeq{map: Map::tracked_empty(), size: 0}
+        TrackedSeq { map: Map::tracked_empty(), size: 0 }
     }
 
     pub proof fn tracked_push(tracked &mut self, tracked v: T)
@@ -67,4 +67,5 @@ impl<T> TrackedSeq<T> {
         self.map.tracked_remove(self.size as int)
     }
 }
-}
+
+} // verus!
