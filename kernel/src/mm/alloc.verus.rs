@@ -358,6 +358,19 @@ impl<VAddr: SpecVAddrImpl, const N: usize> MemoryRegionTracked<VAddr, N> {
         self.pfn_to_virt.len()
     }
 
+    spec fn contained_by_order_idx(&self, pfn: usize, order: usize, o: int, i: int) -> bool {
+        let end = pfn + (1usize << order);
+        let order = order as int;
+        &&& order <= o < MAX_ORDER
+        &&& 0 <= i < self.next.len()
+        &&& self.next[o][i] <= pfn
+        &&& end <= self.next[o][i] + (1usize << o)
+    }
+
+    spec fn choose_order_idx(&self, pfn: usize, order: usize) -> (int, int) {
+        choose|o, i| self.contained_by_order_idx(pfn, order, o, i)
+    }
+
     spec fn wf_dom(&self) -> bool {
         let avail = self.avail;
         let next = self.next;
@@ -838,7 +851,6 @@ impl MemoryRegion {
         &&& self.tmp_perms@@.len() >= 1
         &&& self.tmp_perms@@.last().wf_vaddr_order(self.spec_get_virt(pfn as int), order as usize)
         &&& self.valid_pfn_order(pfn, order)
-        &&& order < MAX_ORDER - 1
     }
 
     pub closed spec fn ens_try_to_merge_page_ok(
@@ -848,11 +860,13 @@ impl MemoryRegion {
         order: usize,
         ret: Result<usize, AllocError>,
     ) -> bool {
-        let vaddr = new.spec_get_virt(pfn as int);
         let new_pfn = ret.unwrap();
+        let vaddr = new.spec_get_virt(new_pfn as int);
         &&& new_pfn == pfn || new_pfn == pfn - (1usize << order)
         &&& new.wf_reserved()
-        &&& new.tmp_perms@@.last().wf_vaddr_order(vaddr, order)
+        &&& new.wf_mem_state()
+        &&& new.tmp_perms@@.last().wf_vaddr_order(vaddr, (order + 1) as usize)
+        &&& new.tmp_perms@@.len() >= 1
         &&& self.valid_pfn_order(new_pfn, (order + 1) as usize)
         &&& self.only_update_reserved_and_nr(new)
     }
@@ -864,7 +878,8 @@ impl MemoryRegion {
         order: usize,
         ret: Result<usize, AllocError>,
     ) -> bool {
-        ret.is_ok() ==> self.ens_try_to_merge_page_ok(new, pfn, order, ret)
+        &&& ret.is_ok() ==> self.ens_try_to_merge_page_ok(new, pfn, order, ret)
+        &&& ret.is_err() ==> self == new
     }
 
     pub closed spec fn req_merge_pages(&self, pfn1: usize, pfn2: usize, order: usize) -> bool {
@@ -903,6 +918,27 @@ impl MemoryRegion {
         &&& new.tmp_perms@@.last().wf_vaddr_order(self.spec_get_virt(pfn), (order + 1) as usize)
         &&& self.only_update_reserved_and_nr(new)
         &&& new.nr_pages@ === new_nr_pages
+    }
+
+    pub closed spec fn ens_free_page_order(&self, new: &Self, pfn: usize, order: usize) -> bool {
+        let end = pfn + (1usize << order);
+        &&& new.wf_mem_stat_state()
+        &&& exists|o, i| new@.contained_by_order_idx(pfn, order, o, i)
+    }
+
+    proof fn lemma_free_page_order(&self, new: &Self, pfn: usize, order: usize)
+        requires
+            self.ens_free_page_order(new, pfn, (order + 1) as usize),
+            0 <= order < MAX_ORDER - 1,
+        ensures
+            self.ens_free_page_order(new, pfn, order),
+    {
+        broadcast use lemma_bit_usize_shl_values;
+
+        assert((1usize << order) < (1usize << (order + 1)));
+        let (o, i) = new@.choose_order_idx(pfn, (order + 1) as usize);
+        assert(new@.contained_by_order_idx(pfn, (order + 1) as usize, o, i));
+        assert(new@.contained_by_order_idx(pfn, order, o, i));
     }
 }
 

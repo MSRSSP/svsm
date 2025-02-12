@@ -892,9 +892,6 @@ impl MemoryRegion {
         proof! {
             lemma_compound_neighbor(pfn, order, pfn ^ (1usize << order));
         }
-        if order >= MAX_ORDER - 1 {
-            return Err(AllocError::InvalidPageOrder(order));
-        }
 
         #[cfg(not(verus_keep_ghost))]
         assert_eq!(pfn & ((1usize << order) - 1), 0);
@@ -968,6 +965,7 @@ impl MemoryRegion {
             old(self).req_allocate_pfn(pfn, order)
         ensures
             ret.is_ok() ==> old(self).ens_allocate_pfn(self, pfn, order),
+            !ret.is_ok() ==> old(self) === self,
     )]
     #[cfg_attr(verus_keep_ghost, verifier::spinoff_prover)]
     fn allocate_pfn(&mut self, pfn: usize, order: usize) -> Result<(), AllocError> {
@@ -1092,6 +1090,10 @@ impl MemoryRegion {
     )]
     #[cfg_attr(verus_keep_ghost, verifier::spinoff_prover)]
     fn try_to_merge_page(&mut self, pfn: usize, order: usize) -> Result<usize, AllocError> {
+        if order >= MAX_ORDER - 1 {
+            return Err(AllocError::InvalidPageOrder(order));
+        }
+
         let neighbor_pfn = self.compound_neighbor(pfn, order)?;
         let neighbor_page = self.read_page_info(neighbor_pfn);
 
@@ -1117,7 +1119,13 @@ impl MemoryRegion {
     /// Frees a page of a specific order. If merging is successful, it
     /// continues merging until merging is no longer possible. If merging
     /// fails, the page is marked as a free page.
-    #[verus_verify(external_body)]
+    //#[verus_verify(external_body)]
+    #[verus_spec(
+        requires
+            old(self).req_try_to_merge_page(pfn, order),
+        ensures
+            //old(self).ens_free_page_order(self, pfn, order),
+    )]
     fn free_page_order(&mut self, pfn: usize, order: usize) {
         match self.try_to_merge_page(pfn, order) {
             Err(_) => {
