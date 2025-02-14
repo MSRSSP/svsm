@@ -10,6 +10,7 @@
 // - Upon entry to the SVSM (Secure Virtual Machine Monitor) kernel, there exists a set of unique
 //   memory permissions that are predefined and trusted.
 // - Memory permissions are considered unforgeable, ensuring their integrity during execution.
+// - LinearMap is correct and is used for all memory managed by allocator.
 //
 // Note:
 // - No additional specification needs to be trusted here; all assumptions are established
