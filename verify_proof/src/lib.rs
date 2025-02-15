@@ -10,6 +10,9 @@
 use builtin_macros::*;
 
 pub mod bits;
+pub mod nonlinear;
+pub mod set;
+pub mod tseq;
 
 verus! {
 
