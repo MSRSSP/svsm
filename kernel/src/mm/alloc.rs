@@ -14,12 +14,19 @@ use crate::types::{PAGE_SHIFT, PAGE_SIZE};
 use crate::utils::{align_down, align_up, zero_mem_region};
 use core::alloc::{GlobalAlloc, Layout};
 use core::mem::size_of;
+use core::ops::Sub;
 use core::{cmp, ptr, slice};
 
 #[cfg(any(test, fuzzing))]
 use crate::locking::LockGuard;
 
+use vstd::prelude::*;
+
+#[cfg(verus_keep_ghost)]
+include!("alloc.verus.rs");
+
 /// Represents possible errors that can occur during memory allocation.
+#[verus_verify]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AllocError {
     /// The provided page type is invalid.
@@ -45,6 +52,7 @@ impl From<AllocError> for SvsmError {
 }
 
 /// Maximum order of page allocations (up to 128kb)
+#[verus_verify]
 pub const MAX_ORDER: usize = 6;
 
 /// Calculates the order of a given size for page allocation.
@@ -65,6 +73,7 @@ pub const fn get_order(size: usize) -> usize {
 }
 
 /// Enum representing the type of a memory page.
+#[verus_verify]
 #[derive(Clone, Copy, Debug)]
 #[repr(u64)]
 enum PageType {
@@ -93,6 +102,7 @@ impl TryFrom<u64> for PageType {
 }
 
 /// Storage type of a memory page, including encoding and decoding methods
+#[verus_verify]
 #[derive(Clone, Copy, Debug)]
 #[repr(transparent)]
 struct PageStorageType(u64);
@@ -105,7 +115,9 @@ impl PageStorageType {
     const ORDER_MASK: u64 = (1u64 << (Self::NEXT_SHIFT - Self::TYPE_SHIFT)) - 1;
     // Slab item sizes are encoded in a u16
     const SLAB_MASK: u64 = 0xffff;
+}
 
+impl PageStorageType {
     /// Creates a new [`PageStorageType`] with the specified page type.
     ///
     /// # Arguments
@@ -115,6 +127,7 @@ impl PageStorageType {
     /// # Returns
     ///
     /// A new instance of [`PageStorageType`].
+    #[verus_verify(external_body)]
     const fn new(t: PageType) -> Self {
         Self(t as u64)
     }
@@ -128,6 +141,7 @@ impl PageStorageType {
     /// # Returns
     ///
     /// The updated [`PageStorageType`].
+    #[verus_verify(external_body)]
     fn encode_order(self, order: usize) -> Self {
         Self(self.0 | ((order as u64) & Self::ORDER_MASK) << Self::TYPE_SHIFT)
     }
@@ -141,6 +155,7 @@ impl PageStorageType {
     /// # Returns
     ///
     /// The updated [`PageStorageType`].
+    #[verus_verify(external_body)]
     fn encode_next(self, next_page: usize) -> Self {
         Self(self.0 | (next_page as u64) << Self::NEXT_SHIFT)
     }
@@ -154,6 +169,7 @@ impl PageStorageType {
     /// # Returns
     ///
     /// The updated [`PageStorageType`]
+    #[verus_verify(external_body)]
     fn encode_slab(self, slab: u64) -> Self {
         let item_size = slab & Self::SLAB_MASK;
         Self(self.0 | (item_size << Self::TYPE_SHIFT))
@@ -168,37 +184,49 @@ impl PageStorageType {
     /// # Returns
     ///
     /// The updated [`PageStorageType`].
+    #[verus_verify(external_body)]
     fn encode_refcount(self, refcount: u64) -> Self {
         Self(self.0 | refcount << Self::TYPE_SHIFT)
     }
 
     /// Decodes the order of the page.
+    #[verus_verify(external_body)]
     fn decode_order(&self) -> usize {
         ((self.0 >> Self::TYPE_SHIFT) & Self::ORDER_MASK) as usize
     }
 
     /// Decodes the index of the next page.
+    #[verus_verify(external_body)]
     fn decode_next(&self) -> usize {
         ((self.0 & Self::NEXT_MASK) >> Self::NEXT_SHIFT) as usize
     }
 
     /// Decodes the slab
+    #[verus_verify(external_body)]
     fn decode_slab(&self) -> u64 {
         (self.0 >> Self::TYPE_SHIFT) & Self::SLAB_MASK
     }
 
     /// Decodes the reference count.
+    #[verus_verify(external_body)]
     fn decode_refcount(&self) -> u64 {
         self.0 >> Self::TYPE_SHIFT
     }
 
     /// Retrieves the page type from the [`PageStorageType`].
+    #[verus_verify(external_body)]
+    #[verus_spec( ret =>
+        ensures
+            ret.is_ok() == PageType::spec_decode(*self).is_some(),
+            ret.unwrap() === PageType::spec_decode(*self).unwrap(),
+    )]
     fn page_type(&self) -> Result<PageType, AllocError> {
         PageType::try_from(self.0 & Self::TYPE_MASK)
     }
 }
 
 /// Struct representing information about a free memory page.
+#[verus_verify]
 #[derive(Clone, Copy, Debug)]
 struct FreeInfo {
     /// Index of the next free page.
@@ -224,6 +252,7 @@ impl FreeInfo {
 }
 
 /// Struct representing information about an allocated memory page.
+#[verus_verify]
 #[derive(Clone, Copy, Debug)]
 struct AllocatedInfo {
     order: usize,
@@ -243,6 +272,7 @@ impl AllocatedInfo {
 }
 
 /// Struct representing information about a slab memory page.
+#[verus_verify]
 #[derive(Clone, Copy, Debug)]
 struct SlabPageInfo {
     item_size: u64,
@@ -262,6 +292,7 @@ impl SlabPageInfo {
 }
 
 /// Struct representing information about a compound memory page.
+#[verus_verify]
 #[derive(Clone, Copy, Debug)]
 struct CompoundInfo {
     order: usize,
@@ -281,6 +312,7 @@ impl CompoundInfo {
 }
 
 /// Struct representing information about a reserved memory page.
+#[verus_verify]
 #[derive(Clone, Copy, Debug)]
 struct ReservedInfo;
 
@@ -297,6 +329,7 @@ impl ReservedInfo {
 }
 
 /// Struct representing information about a file memory page.
+#[verus_verify]
 #[derive(Clone, Copy, Debug)]
 struct FileInfo {
     /// Reference count of the file page.
@@ -323,6 +356,7 @@ impl FileInfo {
 
 /// Enum representing different types of page information.
 #[derive(Clone, Copy, Debug)]
+#[verus_verify]
 enum PageInfo {
     Free(FreeInfo),
     Allocated(AllocatedInfo),
@@ -332,8 +366,14 @@ enum PageInfo {
     Reserved(ReservedInfo),
 }
 
+#[verus_verify]
 impl PageInfo {
     /// Converts [`PageInfo`] into a [`PageStorageType`].
+    #[verus_verify(external_body)]
+    #[verus_spec(ret =>
+        ensures
+            PageInfo::spec_decode(ret) == Some(self),
+    )]
     fn to_mem(self) -> PageStorageType {
         match self {
             Self::Free(fi) => fi.encode(),
@@ -346,6 +386,12 @@ impl PageInfo {
     }
 
     /// Converts a [`PageStorageType`] into [`PageInfo`].
+    #[verus_verify(external_body)]
+    #[verus_spec(
+        returns Self::spec_decode(mem).unwrap(),
+        opens_invariants none
+        no_unwind when Self::spec_decode(mem).is_some()
+    )]
     fn from_mem(mem: PageStorageType) -> Self {
         let Ok(page_type) = mem.page_type() else {
             panic!("Unknown page type in {:?}", mem);
@@ -363,6 +409,7 @@ impl PageInfo {
 }
 
 /// Represents info about allocated and free pages in different orders.
+#[verus_verify]
 #[derive(Debug, Default, Clone, Copy)]
 pub struct MemInfo {
     total_pages: [usize; MAX_ORDER],
@@ -371,7 +418,8 @@ pub struct MemInfo {
 
 /// Memory region with its physical/virtual addresses, page count, as well
 /// as other details.
-#[derive(Debug, Default)]
+#[verus_verify]
+#[derive(Debug)]
 struct MemoryRegion {
     start_phys: PhysAddr,
     start_virt: VirtAddr,
@@ -379,11 +427,28 @@ struct MemoryRegion {
     nr_pages: [usize; MAX_ORDER],
     next_page: [usize; MAX_ORDER],
     free_pages: [usize; MAX_ORDER],
+    #[cfg(verus_keep_ghost_body)]
+    perms: Tracked<MemoryRegionTracked<VirtAddr, MAX_ORDER>>,
+    #[cfg(verus_keep_ghost_body)]
+    tmp_perms: Tracked<TrackedSeq<RawPerm>>, // (vaddr, order) -> perm
 }
 
+#[verus_verify]
 impl MemoryRegion {
     /// Creates a new [`MemoryRegion`] with default values.
+    #[verus_spec(ret =>
+        ensures true
+            //ret.wf()
+    )]
     const fn new() -> Self {
+        verus_extra_stmts! {
+            let mut perms = Tracked(None);
+            let mut tmp_perms = Tracked(None);
+        }
+        proof! {
+            *perms.borrow_mut() = Some(MemoryRegionTracked::tracked_new());
+            *tmp_perms.borrow_mut() = Some(TrackedSeq::tracked_empty());
+        }
         Self {
             start_phys: PhysAddr::null(),
             start_virt: VirtAddr::null(),
@@ -391,11 +456,15 @@ impl MemoryRegion {
             nr_pages: [0; MAX_ORDER],
             next_page: [0; MAX_ORDER],
             free_pages: [0; MAX_ORDER],
+            #[cfg(verus_keep_ghost_body)]
+            perms: vstd::pervasive::tracked_exec_unwrap(perms),
+            #[cfg(verus_keep_ghost_body)]
+            tmp_perms: vstd::pervasive::tracked_exec_unwrap(tmp_perms),
         }
     }
-
     /// Converts a physical address within this memory region to a virtual address.
     #[expect(dead_code)]
+    #[verus_verify(external_body)]
     fn phys_to_virt(&self, paddr: PhysAddr) -> Option<VirtAddr> {
         let end_phys = self.start_phys + (self.page_count * PAGE_SIZE);
 
@@ -415,6 +484,13 @@ impl MemoryRegion {
 
     /// Converts a virtual address to a physical address within the memory region.
     #[expect(dead_code)]
+    #[verus_spec(ret =>
+        requires
+            self.wf_params(),
+        ensures
+            ret.is_some() == self.map().to_paddr(vaddr).is_some(),
+            ret.is_some() ==> ret.unwrap()@ == self.map().to_paddr(vaddr).unwrap(),
+    )]
     fn virt_to_phys(&self, vaddr: VirtAddr) -> Option<PhysAddr> {
         let offset = self.get_virt_offset(vaddr)?;
         Some(self.start_phys + offset)
@@ -428,19 +504,45 @@ impl MemoryRegion {
     /// The caller must provide a valid pfn, otherwise the returned pointer is
     /// undefined, as the compiler is allowed to optimize assuming there will
     /// be no arithmetic overflows.
-    unsafe fn page_info_mut_ptr(&mut self, pfn: usize) -> *mut PageStorageType {
+    /*unsafe fn page_info_mut_ptr(&mut self, pfn: usize) -> *mut PageStorageType {
         unsafe { self.start_virt.as_mut_ptr::<PageStorageType>().add(pfn) }
+    }*/
+
+    #[verus_spec(ret =>
+        requires
+            pfn < self.page_count,
+            self.wf_params(),
+        ensures
+            ret.addr() == self.spec_page_info_addr(pfn as int)@,
+    )]
+    fn page_info_pptr(&self, pfn: usize) -> vstd::simple_pptr::PPtr<PageStorageType> {
+        proof! {broadcast use lemma_bit_usize_shl_values;}
+        let offset = pfn * size_of::<PageStorageType>();
+        self.start_virt.const_add(offset).as_pptr()
     }
 
-    /// Gets a pointer to the page information for a given page frame number.
-    ///
-    /// # Safety
-    ///
-    /// The caller must provide a valid pfn, otherwise the returned pointer is
-    /// undefined, as the compiler is allowed to optimize assuming there will
-    /// be no arithmetic overflows.
-    unsafe fn page_info_ptr(&self, pfn: usize) -> *const PageStorageType {
-        unsafe { self.start_virt.as_ptr::<PageStorageType>().add(pfn) }
+    /// Gets the page information for a given page frame number.
+    /// The permission-protected access replaces the unsafe page_info_ptr()
+    #[verus_spec(ret =>
+        requires
+            self.wf_reserved(),
+            self.wf_params(),
+            pfn < self.page_count,
+        ensures
+            Some(*ret) == self@.spec_page_storage_type(pfn as int)
+    )]
+    #[cfg_attr(verus_keep_ghost, verifier::spinoff_prover)]
+    fn get_page_storage_type(&self, pfn: usize) -> &PageStorageType {
+        proof! {
+            assert(self@.reserved.dom().contains(pfn as int));
+            assert(self@.reserved[pfn as int].addr() == self@.spec_page_info_addr(pfn as int)@);
+            assert(self@.reserved[pfn as int].addr() == self.spec_page_info_addr(pfn as int)@);
+            let info = self@.spec_page_info(pfn as int);
+        }
+
+        self.page_info_pptr(pfn).borrow(verus_exec_expr!(Tracked(
+            self.perms.borrow().reserved.tracked_borrow(pfn as int)
+        )))
     }
 
     /// Checks if a page frame number is valid.
@@ -448,49 +550,113 @@ impl MemoryRegion {
     /// # Panics
     ///
     /// Panics if the page frame number is invalid.
+    #[verus_spec(
+        ensures pfn < self.page_count
+        no_unwind when pfn < self.page_count
+    )]
+    #[cfg_attr(verus_keep_ghost, verifier::spinoff_prover)]
     fn check_pfn(&self, pfn: usize) {
         if pfn >= self.page_count {
             panic!("Invalid Page Number {}", pfn);
         }
     }
 
-    /// Calculates the end virtual address of the memory region.
-    fn end_virt(&self) -> VirtAddr {
-        self.start_virt + (self.page_count * PAGE_SIZE)
-    }
-
     /// Writes page information for a given page frame number.
+    #[verus_spec(
+        requires
+            old(self).req_write_page_info(pfn, pi),
+        ensures
+            old(self).ens_write_page_info(*self, pfn, pi),
+    )]
     fn write_page_info(&mut self, pfn: usize, pi: PageInfo) {
         self.check_pfn(pfn);
 
         let info: PageStorageType = pi.to_mem();
         // SAFETY: we have checked that the pfn is valid via check_pfn() above.
-        unsafe { self.page_info_mut_ptr(pfn).write(info) };
+        //unsafe { self.page_info_mut_ptr(pfn).write(info) };
+        verus_extra_stmts! {
+            let tracked mut perm = self.perms.borrow_mut().reserved.tracked_remove(pfn as int);
+        }
+
+        self.page_info_pptr(pfn)
+            .write(verus_exec_expr! {Tracked(&mut perm)}, info);
+        proof! {
+            self.perms.borrow_mut().reserved.tracked_insert(pfn as int, perm);
+        }
     }
 
     /// Reads page information for a given page frame number.
+    #[verus_spec(ret =>
+        requires
+            self.wf_reserved(),
+            pfn < self.page_count, // self.check_pfn(pfn) is not necessary.
+        ensures
+            self.ens_read_page_info(pfn, ret),
+    )]
+    #[cfg_attr(verus_keep_ghost, verifier::spinoff_prover)]
     fn read_page_info(&self, pfn: usize) -> PageInfo {
         self.check_pfn(pfn);
 
         // SAFETY: we have checked that the pfn is valid via check_pfn() above.
-        let info = unsafe { self.page_info_ptr(pfn).read() };
+        // let info = unsafe { self.page_info_ptr(pfn).read() };
+        let info = *self.get_page_storage_type(pfn);
         PageInfo::from_mem(info)
     }
 
     /// Gets the virtual offset of a virtual address within the memory region.
+    #[verus_spec(ret=>
+        requires
+            self.wf_params(),
+        ensures
+            ret.is_some() ==> ret.unwrap() == vaddr.offset() - self.start_virt.offset(),
+            ret.is_some() == self.map().to_paddr(vaddr).is_some(),
+    )]
     fn get_virt_offset(&self, vaddr: VirtAddr) -> Option<usize> {
-        (self.start_virt <= vaddr && vaddr < self.end_virt()).then(|| vaddr - self.start_virt)
+        if self.start_virt <= vaddr {
+            proof! {
+                assert(self.start_virt@ <= vaddr@);
+            }
+        }
+        (self.start_virt <= vaddr && (vaddr - self.start_virt) < self.page_count * PAGE_SIZE)
+            .then(verus_exec_expr!(|| -> (ret: usize) requires vaddr.offset() > self.start_virt.offset(), ensures ret == vaddr.offset() - self.start_virt.offset() {vaddr.sub(self.start_virt)}))
     }
 
     /// Gets the page frame number for a given virtual address.
+    #[verus_spec(ret=>
+        requires self.wf_params(),
+        ensures
+            ret.is_ok() ==> ret.unwrap() == self.spec_get_pfn(vaddr).unwrap(),
+            ret.is_ok() == self.spec_get_pfn(vaddr).is_some(),
+            ret.is_ok() && vaddr@ % 0x1000 == 0 ==> self.spec_get_virt(ret.unwrap() as int) == vaddr,
+    )]
     fn get_pfn(&self, vaddr: VirtAddr) -> Result<usize, AllocError> {
+        proof! {
+            broadcast use MemoryRegion::lemma_get_pfn_get_virt;
+        }
         self.get_virt_offset(vaddr)
-            .map(|off| off / PAGE_SIZE)
+            .map(verus_exec_expr! {
+                |off: usize|
+                -> (ret: usize)
+                ensures ret == off / PAGE_SIZE
+                {off / PAGE_SIZE}
+            })
             .ok_or(AllocError::InvalidHeapAddress(vaddr))
     }
 
     /// Gets the next available page frame number for a given order.
+    #[verus_spec(ret =>
+        requires
+            order < MAX_ORDER,
+            old(self).wf(),
+        ensures
+            self.wf(),
+            old(self).ens_get_next_page(&*self, order, ret),
+    )]
+    #[cfg_attr(verus_keep_ghost, verifier::spinoff_prover)]
     fn get_next_page(&mut self, order: usize) -> Result<usize, AllocError> {
+        proof! {
+            broadcast use lemma_bit_usize_shl_values, lemma_wf_next_page_info;
+        }
         let pfn = self.next_page[order];
 
         if pfn == 0 {
@@ -499,30 +665,57 @@ impl MemoryRegion {
 
         let pg = self.read_page_info(pfn);
         let PageInfo::Free(fi) = pg else {
+            proof! {assert(false); } // prove it is unreachable
             panic!(
                 "Unexpected page type in MemoryRegion::get_next_page() {:?}",
                 pg
             );
         };
-
         self.next_page[order] = fi.next_page;
-
+        proof! {
+            assert(self@.wf());
+            let tracked perm = self.perms.borrow_mut().tracked_pop_next(order);
+            self.tmp_perms.borrow_mut().tracked_push(perm);
+            assert forall |o: int, i: int| 0<= o < MAX_ORDER && 0 <= i < self@.next[o].len()
+            implies pfn_disjoint(#[trigger]self@.next[o][i], o as usize, pfn, order as usize)
+            by {
+                old(self)@.lemma_unique_pfn(o, i, order as int, self@.next[order as int].len() as int);
+            }
+        }
         self.free_pages[order] -= 1;
 
         Ok(pfn)
     }
 
     /// Marks a compound page and updates page information for neighboring pages.
+    //#[verus_verify(external_body)]
+    #[verus_spec(
+        requires old(self).req_mark_compound_page(pfn, order),
+        ensures
+            old(self).ens_mark_compound_page(*self, pfn, 1usize << order, order),
+            self@.marked_compound(pfn, order),
+    )]
+    #[cfg_attr(verus_keep_ghost, verifier::loop_isolation(false))]
     fn mark_compound_page(&mut self, pfn: usize, order: usize) {
+        proof! {broadcast use lemma_bit_usize_shl_values;}
         let nr_pages: usize = 1 << order;
         let compound = PageInfo::Compound(CompoundInfo { order });
+        #[cfg_attr(verus_keep_ghost, verus_spec(
+            invariant
+                old(self).ens_mark_compound_page(*self, pfn, i, order)
+        ))]
         for i in 1..nr_pages {
             self.write_page_info(pfn + i, compound);
         }
     }
 
     /// Initializes a compound page with given page frame numbers and order.
+    #[verus_spec(
+        requires old(self).req_init_compound_page(pfn, order, next_pfn),
+        ensures old(self).ens_init_compound_page(*self, pfn, order, next_pfn),
+    )]
     fn init_compound_page(&mut self, pfn: usize, order: usize, next_pfn: usize) {
+        proof! {broadcast use lemma_bit_usize_shl_values;}
         let head = PageInfo::Free(FreeInfo {
             next_page: next_pfn,
             order,
@@ -532,8 +725,22 @@ impl MemoryRegion {
     }
 
     /// Splits a page into two pages of the next lower order.
+    #[verus_spec(ret =>
+        requires
+            old(self).req_split_page(pfn, order),
+        ensures
+            old(self).ens_split_page_ok(&*self, pfn, order),
+            self.wf(),
+            ret.is_ok(),
+    )]
+    #[cfg_attr(verus_keep_ghost, verifier::spinoff_prover)]
+    #[cfg_attr(verus_keep_ghost, verifier::rlimit(10))]
     fn split_page(&mut self, pfn: usize, order: usize) -> Result<(), AllocError> {
+        proof! { broadcast use lemma_bit_usize_shl_values; }
         if !(1..MAX_ORDER).contains(&order) {
+            proof! {
+                assert(!(vstd::std_specs::cmp::spec_ge(&order, &1usize) && vstd::std_specs::cmp::spec_lt(&order, &MAX_ORDER)));
+            }
             return Err(AllocError::InvalidPageOrder(order));
         }
 
@@ -541,35 +748,97 @@ impl MemoryRegion {
         let pfn1 = pfn;
         let pfn2 = pfn + (1usize << new_order);
 
+        proof! {
+            self@.reserved().lemma_pfn_dom_len_with_one(pfn, order);
+            self@.reserved().lemma_pfn_dom_pair(new_order, order);
+            self.lemma_accounting(order);
+            self.lemma_accounting(new_order);
+            //assert(self.nr_pages[new_order as int] * (1usize << new_order)  + self.nr_pages[order as int] * (1usize << order) <= self.page_count);
+            let vaddr1 = self.map().lemma_get_virt(pfn1);
+            let vaddr2 = self.map().lemma_get_virt(pfn2);
+            let tracked p = self.tmp_perms.borrow_mut().tracked_pop();
+            let size = (1usize << order) * PAGE_SIZE;
+            let new_size = (1usize << new_order) * PAGE_SIZE;
+            vaddr1.lemma_valid_small_size(new_size as nat, size as nat);
+            let tracked perms = p.split(vaddr1.region_to_dom(new_size as nat));
+            let tracked p1 = perms.0;
+            let tracked p2 = perms.1;
+            lemma_wf_perms(self.perms@);
+            self@.pg_params().lemma_valid_pfn_order_split(pfn1, order);
+            self.perms.borrow_mut().tracked_push(new_order, pfn2, p2);
+            self.perms.borrow_mut().tracked_push(new_order, pfn1, p1);
+        }
+
         let next_pfn = self.next_page[new_order];
         self.init_compound_page(pfn1, new_order, pfn2);
         self.init_compound_page(pfn2, new_order, next_pfn);
         self.next_page[new_order] = pfn1;
-
         // Do the accounting
         self.nr_pages[order] -= 1;
         self.nr_pages[new_order] += 2;
         self.free_pages[new_order] += 2;
 
+        proof! {
+            vstd::set_lib::lemma_int_range(pfn as int, pfn + (1usize << order));
+            old(self)@.reserved().lemma_pfn_dom_update(self@.reserved(), set_int_range(pfn as int, pfn + (1usize << order)), order, new_order);
+            old(self).lemma_nr_page_add(self, -1, order);
+            old(self).lemma_nr_page_add(self, 2, new_order);
+            let oldlen = old(self)@.next[new_order as int].len() as int;
+            assert(self@.wf_info()) by {
+                assert(self@.wf_at(new_order as int, oldlen));
+                assert(self@.wf_at(new_order as int, oldlen + 1));
+                assert forall|o, i| 0 <= o < MAX_ORDER && 0 <= i < self@.next[o].len()
+                implies self@.wf_at(o, i) by {
+                    if i < old(self)@.next[o].len() {
+                        assert(old(self)@.wf_at(o, i));
+                        assert(self@.wf_at(o, i));
+                    }
+                }
+                old(self)@.reserved().lemma_reserved_info_split(self@.reserved(), pfn, order);
+            }
+            assert(self.wf_params()) by {
+                let n = 1usize << order;
+                let order = order as int;
+                let n = n as int;
+                assert(old(self).nr_pages[order] * n <= self.page_count);
+                assert(self.nr_pages[order] < old(self).nr_pages[order]);
+                lemma_mul_inequality(self.nr_pages[order] as int, old(self).nr_pages[order] as int, n);
+            }
+        }
+
         Ok(())
     }
 
     /// Refills the free page list for a given order.
+    #[cfg_attr(verus_keep_ghost, verifier::spinoff_prover)]
+    #[verus_spec(ret =>
+        requires
+            old(self).wf(),
+            0 <= order <= MAX_ORDER,
+        ensures
+            old(self).ens_refill_page_list(*self, ret.is_ok(), order),
+    )]
     fn refill_page_list(&mut self, order: usize) -> Result<(), AllocError> {
-        let next_page = *self
-            .next_page
+        proof! {
+            broadcast use lemma_page_size, lemma_wf_next_page_info, lemma_bit_usize_shl_values;
+        }
+        let next_page = *(&self.next_page)
             .get(order)
             .ok_or(AllocError::InvalidPageOrder(order))?;
         if next_page != 0 {
             return Ok(());
         }
-
         self.refill_page_list(order + 1)?;
+
         let pfn = self.get_next_page(order + 1)?;
+        proof! {
+            assert(2 * (1usize << order) == 1usize << (order + 1) as usize);
+        }
         self.split_page(pfn, order + 1)
     }
 
     /// Allocates pages with a specific order and page information.
+    #[verus_verify(external_body)]
     fn allocate_pages_info(&mut self, order: usize, pg: PageInfo) -> Result<VirtAddr, AllocError> {
         self.refill_page_list(order)?;
         let pfn = self.get_next_page(order)?;
@@ -578,17 +847,20 @@ impl MemoryRegion {
     }
 
     /// Allocates pages with a specific order.
+    #[verus_verify(external_body)]
     fn allocate_pages(&mut self, order: usize) -> Result<VirtAddr, AllocError> {
         let pg = PageInfo::Allocated(AllocatedInfo { order });
         self.allocate_pages_info(order, pg)
     }
 
     /// Allocates a single page.
+    #[verus_verify(external_body)]
     fn allocate_page(&mut self) -> Result<VirtAddr, AllocError> {
         self.allocate_pages(0)
     }
 
     /// Allocates a zeroed page.
+    #[verus_verify(external_body)]
     fn allocate_zeroed_page(&mut self) -> Result<VirtAddr, AllocError> {
         let vaddr = self.allocate_page()?;
 
@@ -603,9 +875,9 @@ impl MemoryRegion {
     }
 
     /// Allocates a slab page.
+    #[verus_verify(external_body)]
     fn allocate_slab_page(&mut self, item_size: u16) -> Result<VirtAddr, AllocError> {
         self.refill_page_list(0)?;
-
         let pfn = self.get_next_page(0)?;
         let pg = PageInfo::Slab(SlabPageInfo {
             item_size: u64::from(item_size),
@@ -615,12 +887,14 @@ impl MemoryRegion {
     }
 
     /// Allocates a file page with initial reference count.
+    #[verus_verify(external_body)]
     fn allocate_file_page(&mut self) -> Result<VirtAddr, AllocError> {
         let pg = PageInfo::File(FileInfo::new(1));
         self.allocate_pages_info(0, pg)
     }
 
     /// Gets a file page and increments its reference count.
+    #[verus_verify(external_body)]
     fn get_file_page(&mut self, vaddr: VirtAddr) -> Result<(), AllocError> {
         let pfn = self.get_pfn(vaddr)?;
         let page = self.read_page_info(pfn);
@@ -636,6 +910,7 @@ impl MemoryRegion {
     }
 
     /// Releases a file page and decrements its reference count.
+    #[verus_verify(external_body)]
     fn put_file_page(&mut self, vaddr: VirtAddr) -> Result<(), AllocError> {
         let pfn = self.get_pfn(vaddr)?;
         let page = self.read_page_info(pfn);
@@ -657,11 +932,23 @@ impl MemoryRegion {
     }
 
     /// Finds the neighboring page frame number for a compound page.
+    #[verus_spec(ret =>
+        requires
+            self.valid_pfn_order(pfn, order),
+        ensures
+            ret.is_ok() ==> self.ens_compound_neighbor_ok(pfn, order, ret.unwrap()),
+    )]
+    #[cfg_attr(verus_keep_ghost, verifier::spinoff_prover)]
     fn compound_neighbor(&self, pfn: usize, order: usize) -> Result<usize, AllocError> {
+        proof! {
+            broadcast use lemma_compound_neighbor;
+            assert(pfn % (1usize << order) as usize ==  0);
+        }
         if order >= MAX_ORDER - 1 {
             return Err(AllocError::InvalidPageOrder(order));
         }
 
+        #[cfg(not(verus_keep_ghost))]
         assert_eq!(pfn & ((1usize << order) - 1), 0);
         let pfn = pfn ^ (1usize << order);
         if pfn >= self.page_count {
@@ -672,33 +959,67 @@ impl MemoryRegion {
     }
 
     /// Merges two pages of the same order into a new compound page.
+    //#[verus_verify(external_body)]
+    #[verus_spec(ret =>
+        requires
+            old(self).req_merge_pages(pfn1, pfn2, order),
+        ensures
+            old(self).ens_merge_pages(self, pfn1, pfn2, order, ret),
+    )]
+    #[cfg_attr(verus_keep_ghost, verifier::spinoff_prover)]
+    #[cfg_attr(verus_keep_ghost, verifier::rlimit(10))]
     fn merge_pages(&mut self, pfn1: usize, pfn2: usize, order: usize) -> Result<usize, AllocError> {
         if order >= MAX_ORDER - 1 {
             return Err(AllocError::InvalidPageOrder(order));
         }
 
-        let nr_pages: usize = 1 << (order + 1);
+        let new_order = order + 1;
         let pfn = pfn1.min(pfn2);
 
+        proof! {
+            broadcast use lemma_bit_usize_shl_values;
+            self@.reserved().lemma_pfn_dom_len_with_two(pfn1, pfn2, order);
+            self.lemma_accounting(new_order);
+            assert(self@.reserved().pfn_dom(order).len() >= (1usize <<order));
+            tracked_merge(self.tmp_perms.borrow_mut(), self.map(), pfn1, pfn2, order)
+        }
+
         // Write new compound head
-        let pg = PageInfo::Allocated(AllocatedInfo { order: order + 1 });
+        let pg = PageInfo::Allocated(AllocatedInfo { order: new_order });
         self.write_page_info(pfn, pg);
 
         // Write compound pages
-        let pg = PageInfo::Compound(CompoundInfo { order: order + 1 });
-        for i in 1..nr_pages {
-            self.write_page_info(pfn + i, pg);
-        }
+        self.mark_compound_page(pfn, new_order);
 
         // Do the accounting - none of the pages is free yet, so free_pages is
         // not updated here.
         self.nr_pages[order] -= 2;
-        self.nr_pages[order + 1] += 1;
-
+        self.nr_pages[new_order] += 1;
+        proof! {
+            vstd::set_lib::lemma_int_range(pfn as int, pfn + (1usize << new_order));
+            old(self)@.reserved().lemma_pfn_dom_update(self@.reserved(), set_int_range(pfn as int, pfn + (1usize << new_order)), order, new_order);
+            old(self).lemma_nr_page_add(self, -2, order);
+            old(self).lemma_nr_page_add(self, 1, new_order);
+            assert forall|o, i| 0 <= o < MAX_ORDER && 0 <= i < self@.next[o].len()
+                implies self@.wf_at(o, i) by {
+                    if i < old(self)@.next[o].len() {
+                        assert(old(self)@.wf_at(o, i));
+                    }
+                }
+            old(self)@.reserved().lemma_reserved_info_merge(self@.reserved(), pfn, order);
+        }
         Ok(pfn)
     }
 
     /// Gets the next free page frame number from the free list.
+    #[verus_spec(ret =>
+        requires
+            self.wf_reserved(),
+            pfn < self.page_count, // self.check_pfn(pfn) is not necessary.
+        ensures
+            self@.get_free_info(pfn as int).is_some(),
+            self@.get_free_info(pfn as int).unwrap().next_page == ret,
+    )]
     fn next_free_pfn(&self, pfn: usize, order: usize) -> usize {
         let page = self.read_page_info(pfn);
         let PageInfo::Free(fi) = page else {
@@ -717,7 +1038,27 @@ impl MemoryRegion {
     /// # Panics
     ///
     /// Panics if `order` is greater than [`MAX_ORDER`].
+    #[verus_spec(ret =>
+        requires
+            old(self).req_allocate_pfn(pfn, order)
+        ensures
+            ret.is_ok() ==> old(self).ens_allocate_pfn(self, pfn, order),
+            !ret.is_ok() ==> old(self) === self,
+    )]
+    #[cfg_attr(verus_keep_ghost, verifier::spinoff_prover)]
+    #[cfg_attr(verus_keep_ghost, verifier::rlimit(4))]
     fn allocate_pfn(&mut self, pfn: usize, order: usize) -> Result<(), AllocError> {
+        verus_extra_stmts! {
+            let ghost mut idx_ = self@.next[order as int].len() - 1;
+            let ghost mut perms_ = self@;
+        }
+        proof! {
+            broadcast use ReservedPerms::lemma_reserved_info_remove;
+            if idx_ >= 0 {
+                assert(self@.wf_at(order as int, idx_));
+                self@.lemma_next_index_of(pfn, order, idx_);
+            }
+        }
         let first_pfn = self.next_page[order];
 
         // Handle special cases first
@@ -732,7 +1073,24 @@ impl MemoryRegion {
 
         // Now walk the list
         let mut old_pfn = first_pfn;
+        proof! { idx_ = idx_ - 1; }
+
+        #[cfg_attr(verus_keep_ghost, verus_spec(
+            invariant
+                self === old(self),
+                self.req_allocate_pfn(pfn, order),
+                self.req_allocate_pfn(old_pfn, order),
+                old_pfn != pfn,
+                old_pfn == self@.next[order as int][idx_ + 1],
+                -1 <= idx_ < self@.next[order as int].len() - 1,
+        ))]
         loop {
+            proof! {
+                assert(self@.wf_at(order as int, idx_ + 1));
+                if idx_ >= 0 {
+                    assert(self@.wf_at(order as int, idx_));
+                }
+            }
             let current_pfn = self.next_free_pfn(old_pfn, order);
             if current_pfn == 0 {
                 return Err(AllocError::OutOfMemory);
@@ -740,9 +1098,15 @@ impl MemoryRegion {
 
             if current_pfn != pfn {
                 old_pfn = current_pfn;
+                proof! { idx_ = idx_ - 1; }
                 continue;
             }
 
+            proof! {
+                let tracked p = self.perms.borrow_mut().tracked_remove(order as int, idx_);
+                self.tmp_perms.borrow_mut().tracked_push(p);
+                perms_ = self@;
+            }
             let next_pfn = self.next_free_pfn(current_pfn, order);
             let pg = PageInfo::Free(FreeInfo {
                 next_page: next_pfn,
@@ -754,6 +1118,24 @@ impl MemoryRegion {
             self.write_page_info(current_pfn, pg);
 
             self.free_pages[order] -= 1;
+            proof! {
+                assert(old(self)@.reserved().pfn_dom(order) =~= self@.reserved().pfn_dom(order));
+                reveal(MemoryRegionTracked::wf_perms);
+                old(self)@.lemma_next_index_of(pfn, order, idx_);
+                assert forall |o: int, i: int| 0<= o < MAX_ORDER && 0 <= i < self@.next[o].len()
+                implies pfn_disjoint(#[trigger]self@.next[o][i], o as usize, pfn, order)
+                 by {
+                    if o != order  || i < idx_ {
+                        old(self)@.lemma_unique_pfn(o, i, order as int, idx_);
+                        old(self)@.lemma_unique_pfn(o, i, order as int, idx_ + 1);
+                    } else if i >= idx_ + 1 {
+                        old(self)@.lemma_unique_pfn(o, i + 1, order as int, idx_);
+                        old(self)@.lemma_unique_pfn(o, i + 1, order as int, idx_ + 1);
+                    }
+                }
+                old(self)@.reserved().lemma_reserved_info_remove(self@.reserved(), pfn, old_pfn, order);
+                old(self)@.lemma_wf_info_after_remove(self@, order, idx_);
+            }
 
             return Ok(());
         }
@@ -764,7 +1146,20 @@ impl MemoryRegion {
     /// # Panics
     ///
     /// Panics if `order` is greater than [`MAX_ORDER`].
+    #[verus_spec(
+        requires
+            old(self).req_free_page_raw(pfn, order)
+        ensures
+            old(self).ens_free_page_raw(self, pfn, order)
+    )]
+    #[cfg_attr(verus_keep_ghost, verifier::spinoff_prover)]
     fn free_page_raw(&mut self, pfn: usize, order: usize) {
+        proof! {
+            broadcast use lemma_bit_usize_shl_values;
+            vstd::set_lib::lemma_int_range(pfn as int, pfn + (1usize << order));
+            self@.lemma_free_pfn_dom_exclude(order as int, Set::empty());
+            self.perms.borrow_mut().tracked_push(order, pfn, self.tmp_perms.borrow_mut().tracked_pop());
+        }
         let old_next = self.next_page[order];
         let pg = PageInfo::Free(FreeInfo {
             next_page: old_next,
@@ -775,12 +1170,35 @@ impl MemoryRegion {
         self.next_page[order] = pfn;
 
         self.free_pages[order] += 1;
+        proof! {
+            assert(self@.wf_info()) by {
+                assert(self@.wf_at(order as int, old(self)@.next[order as int].len() as int));
+                assert forall|o, i| 0 <= o < MAX_ORDER && 0 <= i < self@.next[o].len()
+                implies self@.wf_at(o, i) by {
+                    if i < old(self)@.next[o].len() {
+                        assert(old(self)@.wf_at(o, i));
+                    }
+                }
+                old(self)@.reserved().lemma_reserved_info_update(self@.reserved(), pfn, order);
+            }
+        }
     }
 
     /// Attempts to merge a given page with its neighboring page.
     /// If successful, returns the new page frame number after merging.
     /// If unsuccessful, the page remains unmerged, and an error is returned.
+    #[verus_spec(ret =>
+        requires
+            old(self).req_try_to_merge_page(pfn, order),
+        ensures
+            old(self).ens_try_to_merge_page(self, pfn, order, ret),
+    )]
+    #[cfg_attr(verus_keep_ghost, verifier::spinoff_prover)]
     fn try_to_merge_page(&mut self, pfn: usize, order: usize) -> Result<usize, AllocError> {
+        if order >= MAX_ORDER - 1 {
+            return Err(AllocError::InvalidPageOrder(order));
+        }
+
         let neighbor_pfn = self.compound_neighbor(pfn, order)?;
         let neighbor_page = self.read_page_info(neighbor_pfn);
 
@@ -794,6 +1212,13 @@ impl MemoryRegion {
 
         self.allocate_pfn(neighbor_pfn, order)?;
 
+        proof! {
+            broadcast use lemma_bit_usize_shl_values, MemoryRegionTracked::lemma_pfn_range_is_allocated;
+            let i = old(self)@.next[order as int].index_of(neighbor_pfn);
+            assert(old(self)@.wf_at(order as int, i));
+            assert(old(self).free_pages[order as int] > 0);
+        }
+
         let new_pfn = self.merge_pages(pfn, neighbor_pfn, order)?;
 
         Ok(new_pfn)
@@ -802,39 +1227,77 @@ impl MemoryRegion {
     /// Frees a page of a specific order. If merging is successful, it
     /// continues merging until merging is no longer possible. If merging
     /// fails, the page is marked as a free page.
+    //#[verus_verify(external_body)]
+    #[verus_spec(
+        requires
+            old(self).req_try_to_merge_page(pfn, order),
+        ensures
+            old(self).ens_free_page_order(self, pfn, order),
+    )]
+    #[cfg_attr(verus_keep_ghost, verifier::spinoff_prover)]
     fn free_page_order(&mut self, pfn: usize, order: usize) {
+        proof! {
+            broadcast use  MemoryRegionTracked::lemma_pfn_range_is_allocated;
+        }
         match self.try_to_merge_page(pfn, order) {
             Err(_) => {
                 self.free_page_raw(pfn, order);
             }
             Ok(new_pfn) => {
                 self.free_page_order(new_pfn, order + 1);
+                proof! {
+                    old(self).lemma_derive_contains_range(self, new_pfn, (order + 1) as usize, pfn, order);
+                    assert(self@.contains_range(pfn, order));
+                }
             }
         }
     }
 
     /// Frees a page based on its virtual address, determining the page
     /// order and freeing accordingly.
+    #[verus_spec(
+        requires
+            old(self).req_free_page(vaddr),
+        ensures
+            old(self).ens_free_page(self, vaddr),
+    )]
     fn free_page(&mut self, vaddr: VirtAddr) {
         let Ok(pfn) = self.get_pfn(vaddr) else {
             return;
         };
 
+        proof! {
+            reveal(ReservedPerms::wf_page_info);
+            broadcast use lemma_bit_usize_shl_values;
+        }
         let res = self.read_page_info(pfn);
 
         match res {
             PageInfo::Allocated(ai) => {
+                proof! {
+                    assert(self@.reserved().wf_page_info_at(pfn));
+                }
                 self.free_page_order(pfn, ai.order);
             }
             PageInfo::Slab(_si) => {
+                proof! {
+                    assert(self@.reserved().wf_page_info_at(pfn));
+                }
                 self.free_page_order(pfn, 0);
             }
-            PageInfo::Compound(ci) => {
+            // TODO: check if vmsa pages are freed properly.
+            /*PageInfo::Compound(ci) => {
+                proof!{
+                    assert(self@.reserved().wf_page_info_at(pfn));
+                }
                 let mask = (1usize << ci.order) - 1;
                 let start_pfn = pfn & !mask;
                 self.free_page_order(start_pfn, ci.order);
-            }
+            }*/
             PageInfo::File(_) => {
+                proof! {
+                    assert(self@.reserved().wf_page_info_at(pfn));
+                }
                 self.free_page_order(pfn, 0);
             }
             _ => {
@@ -845,6 +1308,7 @@ impl MemoryRegion {
 
     /// Retrieves information about memory, including total and free pages
     /// in different orders.
+    #[verus_verify(external_body)]
     fn memory_info(&self) -> MemInfo {
         MemInfo {
             total_pages: self.nr_pages,
@@ -855,6 +1319,7 @@ impl MemoryRegion {
     /// Initializes memory by marking certain pages as reserved and the rest
     /// as allocated. It then frees all pages and organizes them into their
     /// respective order buckets.
+    #[verus_verify(external_body)]
     fn init_memory(&mut self) {
         let size = size_of::<PageStorageType>();
         let meta_pages = align_up(self.page_count * size, PAGE_SIZE) / PAGE_SIZE;
@@ -1199,6 +1664,7 @@ pub fn memory_info() -> MemInfo {
 
 /// Represents a slab memory page, used for efficient allocation of
 /// fixed-size objects.
+#[verus_verify]
 #[derive(Debug, Default)]
 struct SlabPage<const N: u16> {
     vaddr: VirtAddr,
@@ -1251,6 +1717,7 @@ impl<const N: u16> SlabPage<N> {
     }
 
     /// Get the virtual address of the next [`SlabPage`]
+    #[verus_spec]
     fn get_next_page(&self) -> VirtAddr {
         self.next_page
     }
