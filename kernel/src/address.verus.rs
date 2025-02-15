@@ -5,6 +5,8 @@
 // Author: Ziqiao Zhou <ziqiaozhou@microsoft.com>
 //
 use verify_external::convert::{from_spec, FromSpec};
+use verify_external::hw_spec::SpecVAddrImpl;
+use vstd::std_specs::cmp::{SpecPartialEqOp, SpecPartialOrdOp};
 use vstd::std_specs::ops::{SpecAddOp, SpecSubOp};
 
 use crate::utils::util::{align_down_spec, align_up_spec, proof_align_up};
@@ -36,6 +38,8 @@ broadcast group vaddr_impl_proof {
 pub broadcast group group_addr_proofs {
     VirtAddr::property_canonical,
     VirtAddr::lemma_wf,
+    VirtAddr::reveal_closed_cmp_op_spec,
+    VirtAddr::reveal_closed_eq_op_spec,
 }
 
 broadcast use vaddr_impl_proof;
@@ -140,11 +144,6 @@ impl View for VirtAddr {
     }
 }
 
-pub assume_specification[ VirtAddr::eq ](vaddr1: &VirtAddr, vaddr2: &VirtAddr) -> (ret: bool)
-    ensures
-        ret == (vaddr1@ == vaddr2@),
-;
-
 impl VirtAddr {
     /// Canonical form addresses run from 0 through 00007FFF'FFFFFFFF,
     /// and from FFFF8000'00000000 through FFFFFFFF'FFFFFFFF.
@@ -153,7 +152,27 @@ impl VirtAddr {
         self.is_low() || self.is_high()
     }
 
-    /// Property:
+    /// In derived(PartialCmp), a closed spec is created.
+    /// Call this proof if using PartialCmp logic is used outside.
+    pub broadcast proof fn reveal_closed_cmp_op_spec(&self, rhs: &Self)
+        ensures
+            #[trigger] vstd::std_specs::cmp::spec_partial_cmp(self, rhs) == (self@.spec_partial_cmp(
+                &rhs@,
+            )),
+    {
+        vstd::std_specs::cmp::axiom_partial_cmp(self, rhs);
+    }
+
+    pub broadcast proof fn reveal_closed_eq_op_spec(&self, rhs: &Self)
+        ensures
+            #[trigger] vstd::std_specs::cmp::spec_partial_eq(self, rhs) == (self@.spec_partial_eq(
+                &rhs@,
+            )),
+    {
+        vstd::std_specs::cmp::axiom_partial_eq(self, rhs);
+    }
+
+    /// @Property:
     /// A valid virtual address have a canonical form where the upper bits
     /// are either all zeroes or all ones.
     pub broadcast proof fn property_canonical(&self)
@@ -284,6 +303,37 @@ impl FromSpec<VirtAddr> for InnerAddr {
 impl FromSpec<VirtAddr> for u64 {
     open spec fn from_spec(v: VirtAddr) -> Self {
         v@ as u64
+    }
+}
+
+/// @Property: address can be identified by an integer.
+impl SpecVAddrImpl for VirtAddr {
+    #[verifier(inline)]
+    open spec fn spec_int_addr(&self) -> Option<int> {
+        Some(self@ as int)
+    }
+
+    #[verifier(inline)]
+    open spec fn region_to_dom(&self, size: nat) -> Set<int> {
+        if self.is_canonical() {
+            Set::new(
+                |v: int|
+                    exists|addr: VirtAddr|
+                        addr@ == v && v <= usize::MAX && addr.is_canonical() && self.offset()
+                            <= addr.offset() < self.offset() + size,
+            )
+        } else {
+            Set::empty()
+        }
+    }
+
+    proof fn lemma_unique(v1: &Self, v2: &Self) {
+    }
+
+    proof fn lemma_vaddr_region(&self) {
+    }
+
+    proof fn lemma_valid_small_size(&self, size1: nat, size2: nat) {
     }
 }
 
