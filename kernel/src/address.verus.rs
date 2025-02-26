@@ -181,12 +181,11 @@ impl VirtAddr {
     /// and from FFFF8000'00000000 through FFFFFFFF'FFFFFFFF.
     #[verifier::type_invariant]
     pub open spec fn is_canonical(&self) -> bool {
-        &&& spec_is_vaddr(self@ as int)
-        &&& self.offset() < VADDR_RANGE_SIZE
+        self.is_low() || self.is_high()
     }
 
-    // In derived(PartialCmp), a closed spec is created due to private field.
-    // To use PartialCmp outside of this module, use this proof.
+    /// In derived(PartialCmp), a closed spec is created.
+    /// Call this proof if using PartialCmp logic is used outside.
     pub broadcast proof fn reveal_closed_cmp_op_spec(&self, rhs: &Self)
         ensures
             #[trigger] vstd::std_specs::cmp::spec_partial_cmp(self, rhs) == (self@.spec_partial_cmp(
