@@ -14,6 +14,7 @@ fn main() {
     println!("cargo::rustc-check-cfg=cfg(fuzzing)");
     println!("cargo::rustc-check-cfg=cfg(test_in_svsm)");
     println!("cargo::rustc-check-cfg=cfg(verus_keep_ghost)");
+    println!("cargo::rustc-check-cfg=cfg(verus_keep_ghost_body)");
     println!("cargo::rustc-check-cfg=cfg(RUST_VERSION_AFTER_VERUS)");
 
     // Stage 2
@@ -51,10 +52,9 @@ fn init_verify() {
         println!("cargo:rustc-env=VERUS_ARGS=--no-verify");
     } else {
         let verus_args = [
-            "--rlimit=1",
+            "--rlimit=4",
             "--expand-errors",
             "--multiple-errors=5",
-            "--triggers-silent",
             "--no-auto-recommends-check",
             "--trace",
             "-Z unstable-options",

@@ -296,7 +296,7 @@ macro_rules! bit_set_clear_mask {
                 (a & m) & m == a & m,
                 a & m <= m,
                 a & m <= a,
-                a == add(a & m, a & !m),
+                a == (a & m) + (a & !m),
         {}
         }
     };
@@ -353,6 +353,10 @@ bit_not_properties! {usize, u64, spec_bit_usize_not_properties, lemma_bit_usize_
 bit_set_clear_mask! {usize, u64, lemma_bit_usize_or_mask, lemma_bit_usize_and_mask}
 bit_and_mask_is_mod! {usize, lemma_bit_usize_and_mask_is_mod}
 
+bit_shl_values! {u32, u32, 1usize, lemma_bit_u32_shl_values}
+bit_not_properties! {u32, u32, spec_bit_u32_not_properties, lemma_bit_u32_not_is_sub}
+bit_set_clear_mask! {u32, u32, lemma_bit_u32_or_mask, lemma_bit_u32_and_mask}
+bit_and_mask_is_mod! {u32, lemma_bit_u32_and_mask_is_mod}
 verus! {
 
 pub broadcast proof fn lemma_pow2_eq_bit_value(n: nat)
@@ -382,3 +386,19 @@ pub broadcast proof fn lemma_bit_usize_shr_is_div(v: usize, n: usize)
 }
 
 } // verus!
+macro_rules! bit_xor_neighbor {
+    ($typ:ty, $pname: ident) => {
+        verus!{
+        #[verifier::bit_vector]
+        pub proof fn $pname(pfn: $typ, order: $typ)
+        requires
+            pfn & sub((1u8 as $typ) << order, 1) == 0,
+        ensures
+            ((pfn & sub((1u8 as $typ) << add(order, 1), 1)) == 0) ==>  (pfn ^ ((1u8 as $typ) << order)) == add(pfn, ((1u8 as $typ) << order)),
+            ((pfn & sub((1u8 as $typ) << add(order, 1), 1)) != 0) ==>  (pfn ^ ((1u8 as $typ) << order)) == sub(pfn, ((1u8 as $typ) << order)),
+        {}
+        }
+    };
+}
+
+bit_xor_neighbor! {usize, lemma_bit_usize_xor_neighbor}
