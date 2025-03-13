@@ -1258,8 +1258,11 @@ impl MemoryRegion {
     /// Frees a page based on its virtual address, determining the page
     /// order and freeing accordingly.
     #[verus_spec(
+        with
+            Tracked(p): Tracked<RawPerm>,
+            Tracked(pi): Tracked<SharedTypedPerm<PageStorageType>>
         requires
-            old(self).req_free_page(vaddr),
+            old(self).req_free_page(vaddr, p, pi),
         ensures
             old(self).ens_free_page(self, vaddr),
     )]
@@ -1655,6 +1658,9 @@ fn put_file_page(vaddr: VirtAddr) -> Result<(), SvsmError> {
 }
 
 /// Free the page at the given virtual address.
+#[verus_spec(
+    with Tracked(p): Tracked<RawPerm>, Tracked<Shared<>>
+)]
 pub fn free_page(vaddr: VirtAddr) {
     ROOT_MEM.lock().free_page(vaddr)
 }

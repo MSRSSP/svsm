@@ -20,6 +20,8 @@ pub mod convert;
 
 pub mod hw_spec;
 
+pub mod memory;
+
 use builtin_macros::*;
 
 verus! {

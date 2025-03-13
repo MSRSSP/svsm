@@ -19,6 +19,7 @@ use crate::types::lemma_page_size;
 use crate::utils::util::spec_align_up;
 use verify_external::convert::FromSpec;
 use verify_external::hw_spec::{SpecMemMapTr, SpecVAddrImpl};
+use verify_external::memory::SharedTypedPerm;
 use verify_proof::bits::{
     lemma_bit_usize_and_mask_is_mod, lemma_bit_usize_shl_values, lemma_bit_usize_xor_neighbor,
 };
@@ -723,6 +724,29 @@ impl MemoryRegion {
         Self::spec_map_page_info_addr(self.map(), pfn)
     }
 
+    spec fn wf_allocated_perm_info(&self, vaddr: VirtAddr, p: RawPerm, pi: Map<int, SharedTypedPerm<PageStorageType>>) -> bool {
+        let size = (1usize << order) * PAGE_SIZE;
+        let pfn_opt = self.spec_get_pfn(vaddr);
+        let pfn = pfn_opt.unwrap();
+        let info = spec_page_info(pi[pfn]@.perm);
+        let order = info.unwrap().get_order();
+        let head_pfn = find_pfn_head(pfn, order);
+        let head_vaddr_opt = self.spec_try_get_virt(head_pfn);
+        let head_vaddr = head_vaddr_opt.unwrap();
+        &&& pfn_opt.is_some()
+        &&& head_vaddr_opt.is_some()
+        &&& p.dom() === head_vaddr.region_to_dom(size)
+        &&& forall |pfn| p.dom().contains(self.spec_try_get_virt(pfn)) ==>
+            pi.dom().contains(pfn)
+        &&& forall |i| pi.dom().contains(i) ==> {
+            let info = spec_page_info(pi[i]@.perm);
+            &&& !matches!(info, None | Some(PageInfo::Free(_)))
+            &&& info.get_order() = order
+            &&& pi[i].ref_id == 2
+        }
+        &&& 1usize << order ==  pi.len()
+    }
+
     spec fn wf_nr_pages(&self) -> bool {
         /*&&& forall|order|
             0 <= order < MAX_ORDER ==> #[trigger] self.free_pages[order] <= self.nr_pages[order]*/
@@ -1186,14 +1210,14 @@ impl MemoryRegion {
         &&& new@.contains_range(pfn, order)
     }
 
-    spec fn req_free_page(&self, vaddr: VirtAddr) -> bool {
+    spec fn req_free_page(&self, vaddr: VirtAddr, p: RawPerm, pi: SharedTypedPerm<PageStorageType>) -> bool {
         let pfn = self.spec_get_pfn(vaddr).unwrap();
         let order = self@.reserved().spec_page_info(pfn).unwrap().get_order();
         &&& self.wf()
         &&& vaddr.is_canonical()
         &&& vaddr@ % 0x1000 == 0
-        &&& self.tmp_perms@@.len() >= 1
-        &&& self.tmp_perms@@.last().wf_vaddr_order(vaddr, order)
+        &&& p.wf_vaddr_order(vaddr, order)
+        &&& self.wf_allocated_perm_info(vaddr, p, pi)
     }
 
     spec fn ens_free_page(&self, new: &Self, vaddr: VirtAddr) -> bool {
