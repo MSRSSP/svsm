@@ -13,6 +13,7 @@ pub mod bits;
 pub mod nonlinear;
 pub mod set;
 pub mod tseq;
+pub mod frac_perm;
 
 verus! {
 
