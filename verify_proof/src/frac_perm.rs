@@ -68,7 +68,8 @@ impl SumTrait for nat {
 
 } // verus!
 // ANCHOR: fields
-tokenized_state_machine!(RefCounter<Perm> {
+#[cfg(verus_keep_ghost)]
+tokenized_state_machine!(frac_inner<Perm> {
     fields {
         #[sharding(storage_option)]
         pub storage: Option<Perm>,
@@ -276,15 +277,15 @@ tokenized_state_machine!(RefCounter<Perm> {
 
 #[cfg(verus_keep_ghost)]
 verus! {
-
+#[allow(missing_debug_implementations)]
 pub tracked struct TrackedReaderCounter<T> {
-    pub counter: RefCounter::counter<T>,
+    pub counter: frac_inner::counter<T>,
 }
-
+#[allow(missing_debug_implementations)]
 struct TrackedReaderCounterInv;
 
 impl<T> TrackedReaderCounter<T> {
-    pub open spec fn wf(&self, inst: RefCounter::Instance<T>, total: nat) -> bool {
+    pub open spec fn wf(&self, inst: frac_inner::Instance<T>, total: nat) -> bool {
         &&& inst.id() == self.counter.instance_id()
     }
 }
@@ -293,10 +294,10 @@ struct_with_invariants!{
 /// A `tracked ghost` container that you can put a ghost object in.
 /// A `Shared<T>` is duplicable and lets you get a `&T` out.
 pub tracked struct FracPerm<T> {
-    tracked inst: RefCounter::Instance<T>,
-    tracked reader: RefCounter::reader<T>,
-    tracked frac: RefCounter::frac<T>,
-    tracked inv_shares: Shared<LocalInvariant<_, TrackedReaderCounter<T>, _>>,
+    tracked inst: frac_inner::Instance<T>,
+    tracked reader: frac_inner::reader<T>,
+    tracked frac: frac_inner::frac<T>,
+    tracked inv_shares: Shared<AtomicInvariant<_, TrackedReaderCounter<T>, _>>,
     ghost shares: nat,
     ghost total: nat,
 }
@@ -346,11 +347,11 @@ impl<T> FracPerm<T> {
             s@ == t,
     {
         let tracked (Tracked(inst), Tracked(counter), Tracked(mut readers), Tracked(mut fracs)) =
-            RefCounter::Instance::initialize_once(t, total, Some(t));
+            frac_inner::Instance::initialize_once(t, total, Some(t));
         let tracked reader = readers.remove(t);
         let tracked frac = fracs.remove(total);
         let shares = total;
-        let tracked inv = LocalInvariant::new((inst, total), TrackedReaderCounter { counter }, 0);
+        let tracked inv = AtomicInvariant::new((inst, total), TrackedReaderCounter { counter }, 0);
         let tracked inv_shares = Shared::new(inv);
         FracPerm { inst, reader, frac, inv_shares, shares, total }
     }
@@ -387,7 +388,7 @@ impl<T> FracPerm<T> {
         let tracked mut reader2;
         let tracked mut frac1;
         let tracked mut frac2;
-        open_local_invariant_in_proof!(
+        open_atomic_invariant_in_proof!(
             credit => inv_shares.borrow() => g => {
             let tracked (Tracked(r), Tracked(f1), Tracked(f2)) = inst.do_share(shares, n, &mut g.counter, &reader, frac);
             reader1 = reader;
@@ -438,7 +439,7 @@ impl<T> FracPerm<T> {
         let tracked FracPerm { mut inst, mut reader, mut frac, mut shares, total, mut inv_shares } =
             self;
         let oldself = self;
-        open_local_invariant_in_proof!(
+        open_atomic_invariant_in_proof!(
             credit => inv_shares.borrow() => g => {
                 assert(g.wf(inst, total));
                 let old_counter = g.counter.value();
@@ -463,13 +464,43 @@ impl<T> FracPerm<T> {
         let tracked mut ret;
         let tracked FracPerm { mut inst, mut reader, mut frac, mut shares, total, mut inv_shares } =
             self;
-        open_local_invariant_in_proof!(
+        open_atomic_invariant_in_proof!(
             credit => inv_shares.borrow() => g => {
                 ret = inst.take(&mut g.counter, reader, frac)
             }
         );
         ret
     }
+}
+
+#[allow(missing_debug_implementations)]
+struct DataWithGhostId<T> {
+    val: T,
+    id: Ghost<vstd::tokens::InstanceId>
+}
+
+use vstd::raw_ptr::PointsTo;
+
+impl<T> FracPerm<PointsTo<DataWithGhostId<T>>> {
+    spec fn wf_id(&self) -> bool {
+        &&& self@.opt_value().is_init()
+        &&& self.id() === self@.value().id@
+        &&& self.well_formed()
+    }
+}
+
+//global size_of DataWithGhostId<T> == size_of::<T>();
+
+proof fn test<T>(tracked fp1: FracPerm<PointsTo<DataWithGhostId<T>>>, tracked fp2: FracPerm<PointsTo<DataWithGhostId<T>>>)
+requires
+    fp1@.ptr() == fp2@.ptr(),
+    fp1.wf_id(),
+    fp2.wf_id(),
+    size_of::<DataWithGhostId<T>>() > 0,
+ensures
+    fp1.id() == fp2.id(),
+{
+    fp1.borrow().is_same(fp2.borrow());
 }
 
 } // verus!
