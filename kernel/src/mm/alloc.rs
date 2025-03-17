@@ -568,12 +568,14 @@ impl MemoryRegion {
         ensures
             old(self).ens_write_page_info(*self, pfn, pi),
     )]
+    #[allow(clippy::needless_pass_by_ref_mut)]
     fn write_page_info(&mut self, pfn: usize, pi: PageInfo) {
         self.check_pfn(pfn);
 
         let info: PageStorageType = pi.to_mem();
         // SAFETY: we have checked that the pfn is valid via check_pfn() above.
         //unsafe { self.page_info_mut_ptr(pfn).write(info) };
+        let ptr = self.start_virt.as_mut_ptr::<PageStorageType>();
         verus_extra_stmts! {
             let tracked mut perm = self.perms.borrow_mut().reserved.tracked_remove(pfn as int);
         }
