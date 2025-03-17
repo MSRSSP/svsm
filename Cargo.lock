@@ -206,7 +206,7 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
- "syn_verus",
+ "syn_verus 2.0.96 (git+https://github.com/verus-lang/verus?rev=879fb64)",
  "synstructure",
 ]
 
@@ -886,7 +886,7 @@ version = "0.2.29"
 source = "git+https://github.com/verus-lang/verus?rev=4c33486#4c334862da47cde404a0962713da442f6d00aa2d"
 dependencies = [
  "proc-macro2",
- "syn_verus",
+ "syn_verus 2.0.96 (git+https://github.com/verus-lang/verus?rev=879fb64)",
 ]
 
 [[package]]
@@ -1067,7 +1067,18 @@ dependencies = [
  "indexmap",
  "proc-macro2",
  "quote",
- "syn_verus",
+ "syn_verus 2.0.96 (git+https://github.com/verus-lang/verus?rev=879fb64)",
+]
+
+[[package]]
+name = "state_machines_macros"
+version = "0.1.0"
+source = "git+https://github.com/verus-lang/verus?rev=d0afa89#d0afa891828313427b4013abb184a8fbb34b604c"
+dependencies = [
+ "indexmap",
+ "proc-macro2",
+ "quote",
+ "syn_verus 2.0.96 (git+https://github.com/verus-lang/verus?rev=d0afa89)",
 ]
 
 [[package]]
@@ -1141,6 +1152,16 @@ dependencies = [
 name = "syn_verus"
 version = "2.0.96"
 source = "git+https://github.com/verus-lang/verus?rev=4c33486#4c334862da47cde404a0962713da442f6d00aa2d"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "unicode-ident",
+]
+
+[[package]]
+name = "syn_verus"
+version = "2.0.96"
+source = "git+https://github.com/verus-lang/verus?rev=d0afa89#d0afa891828313427b4013abb184a8fbb34b604c"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1291,7 +1312,7 @@ dependencies = [
  "builtin_macros",
  "paste",
  "seq-macro",
- "state_machines_macros",
+ "state_machines_macros 0.1.0 (git+https://github.com/verus-lang/verus?rev=d0afa89)",
  "vstd",
 ]
 
@@ -1308,7 +1329,7 @@ source = "git+https://github.com/verus-lang/verus?rev=4c33486#4c334862da47cde404
 dependencies = [
  "builtin",
  "builtin_macros",
- "state_machines_macros",
+ "state_machines_macros 0.1.0 (git+https://github.com/verus-lang/verus?rev=879fb64)",
 ]
 
 [[package]]
