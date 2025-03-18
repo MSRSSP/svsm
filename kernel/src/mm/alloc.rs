@@ -665,7 +665,7 @@ impl MemoryRegion {
             let tracked perm = self.perms.borrow_mut().tracked_pop_next(order);
             self.tmp_perms.borrow_mut().tracked_push(perm);
             assert forall |o: int, i: int| 0<= o < MAX_ORDER && 0 <= i < self@.next[o].len()
-            implies pfn_disjoint(#[trigger]self@.next[o][i], o as usize, pfn, order as usize)
+            implies order_disjoint(#[trigger]self@.next[o][i], o as usize, pfn, order as usize)
             by {
                 old(self)@.lemma_unique_pfn(o, i, order as int, self@.next[order as int].len() as int);
             }
@@ -715,13 +715,14 @@ impl MemoryRegion {
     #[verus_spec(ret =>
         requires
             old(self).req_split_page(pfn, order),
+            old(self)@.marked_order(pfn, order),
         ensures
             old(self).ens_split_page_ok(&*self, pfn, order),
             self.wf(),
             ret.is_ok(),
             false,
     )]
-    #[verus_verify(spinoff_prover, rlimit(10))]
+    #[verus_verify(spinoff_prover, rlimit(15))]
     fn split_page(&mut self, pfn: usize, order: usize) -> Result<(), AllocError> {
         if !(1..MAX_ORDER).contains(&order) {
             return Err(AllocError::InvalidPageOrder(order));
@@ -732,11 +733,10 @@ impl MemoryRegion {
         let pfn2 = pfn + (1usize << new_order);
 
         proof! {
-            self@.reserved().lemma_pfn_dom_len_with_one(pfn, order);
-            self@.reserved().lemma_pfn_dom_pair(new_order, order);
+            broadcast use ReservedPerms::lemma_pfn_dom_len_with_one, ReservedPerms::lemma_pfn_dom_pair;
+            //self@.reserved().lemma_pfn_dom_pair(new_order, order);
             self.lemma_accounting(order);
             self.lemma_accounting(new_order);
-            //assert(self.nr_pages[new_order as int] * (1usize << new_order)  + self.nr_pages[order as int] * (1usize << order) <= self.page_count);
             let vaddr1 = self.map().lemma_get_virt(pfn1);
             let vaddr2 = self.map().lemma_get_virt(pfn2);
             let tracked p = self.tmp_perms.borrow_mut().tracked_pop();
@@ -792,7 +792,7 @@ impl MemoryRegion {
     }
 
     /// Refills the free page list for a given order.
-    #[verus_verify(spinoff_prover)]
+    #[verus_verify(spinoff_prover, rlimit(2))]
     #[verus_spec(ret =>
         requires
             old(self).wf(),
@@ -979,11 +979,13 @@ impl MemoryRegion {
             old(self).lemma_nr_page_add(self, 1, new_order);
             assert forall|o, i| 0 <= o < MAX_ORDER && 0 <= i < self@.next[o].len()
                 implies self@.wf_at(o, i) by {
+
                     if i < old(self)@.next[o].len() {
                         assert(old(self)@.wf_at(o, i));
                     }
                 }
             old(self)@.reserved().lemma_reserved_info_merge(self@.reserved(), pfn, order);
+            self.perms.borrow().lemma_tmp_perm_disjoint(self, self.tmp_perms.borrow_mut(), pfn, new_order);
         }
         Ok(pfn)
     }
@@ -1097,7 +1099,7 @@ impl MemoryRegion {
                 reveal(MemoryRegionTracked::wf_perms);
                 old(self)@.lemma_next_index_of(pfn, order, idx_);
                 assert forall |o: int, i: int| 0<= o < MAX_ORDER && 0 <= i < self@.next[o].len()
-                implies pfn_disjoint(#[trigger]self@.next[o][i], o as usize, pfn, order)
+                implies order_disjoint(#[trigger]self@.next[o][i], o as usize, pfn, order)
                  by {
                     if o != order  || i < idx_ {
                         old(self)@.lemma_unique_pfn(o, i, order as int, idx_);
@@ -1166,7 +1168,7 @@ impl MemoryRegion {
         ensures
             old(self).ens_try_to_merge_page(self, pfn, order, ret),
     )]
-    #[verus_verify(spinoff_prover)]
+    #[verus_verify(spinoff_prover, rlimit(2))]
     fn try_to_merge_page(&mut self, pfn: usize, order: usize) -> Result<usize, AllocError> {
         if order >= MAX_ORDER - 1 {
             return Err(AllocError::InvalidPageOrder(order));
@@ -1186,7 +1188,7 @@ impl MemoryRegion {
         self.allocate_pfn(neighbor_pfn, order)?;
 
         proof! {
-            broadcast use MemoryRegionTracked::lemma_pfn_range_is_allocated;
+            self.perms.borrow().lemma_tmp_perm_disjoint(self, self.tmp_perms.borrow_mut(), neighbor_pfn, order);
             let i = old(self)@.next[order as int].index_of(neighbor_pfn);
             assert(old(self)@.wf_at(order as int, i));
             assert(old(self).free_pages[order as int] > 0);
@@ -1209,9 +1211,6 @@ impl MemoryRegion {
     )]
     #[verus_verify(spinoff_prover)]
     fn free_page_order(&mut self, pfn: usize, order: usize) {
-        proof! {
-            broadcast use  MemoryRegionTracked::lemma_pfn_range_is_allocated;
-        }
         match self.try_to_merge_page(pfn, order) {
             Err(_) => {
                 self.free_page_raw(pfn, order);
@@ -1228,8 +1227,9 @@ impl MemoryRegion {
     /// Frees a page based on its virtual address, determining the page
     /// order and freeing accordingly.
     #[verus_spec(
+        with Tracked(perm): Tracked<RawPerm>
         requires
-            old(self).req_free_page(vaddr),
+            old(self).req_free_page(vaddr, perm),
         ensures
             old(self).ens_free_page(self, vaddr),
     )]
@@ -1238,10 +1238,15 @@ impl MemoryRegion {
             return;
         };
 
+        let res = self.read_page_info(pfn);
+
         proof! {
             reveal(ReservedPerms::wf_page_info);
+            self.tmp_perms.borrow_mut().tracked_push(perm);
+            if matches!(res, PageInfo::Allocated(_) | PageInfo::Slab(_) | PageInfo::File(_)) {
+                self.perms.borrow().lemma_tmp_perm_disjoint(self, self.tmp_perms.borrow_mut(), pfn, res.get_order());
+            }
         }
-        let res = self.read_page_info(pfn);
 
         match res {
             PageInfo::Allocated(ai) => {
@@ -1250,7 +1255,7 @@ impl MemoryRegion {
             PageInfo::Slab(_si) => {
                 self.free_page_order(pfn, 0);
             }
-            // VmsaPage should nbe safe to use without reaching here.
+            // VmsaPage should be safe to use without reaching here.
             /*PageInfo::Compound(ci) => {
                 proof!{
                     assert(self@.reserved().wf_page_info_at(pfn));

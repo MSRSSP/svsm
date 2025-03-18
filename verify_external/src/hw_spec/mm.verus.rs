@@ -8,12 +8,14 @@ pub trait SpecVAddrImpl {
     /// To a set of integer adddresses
     spec fn region_to_dom(&self, size: nat) -> Set<int>;
 
-    proof fn lemma_vaddr_region(&self)
+    proof fn lemma_vaddr_region_len(&self, size: nat)
         requires
-            (self.spec_int_addr().is_some() && self.region_to_dom(1).len() > 0),
+            self.spec_int_addr().is_some(),
+            size > 0,
         ensures
-            self.region_to_dom(1).contains(self.spec_int_addr().unwrap()),
-    ;
+            self.region_to_dom(size).finite(),
+            self.region_to_dom(1).len() > 0 <==> self.region_to_dom(1).contains(self.spec_int_addr().unwrap()),
+            self.region_to_dom(size).len() >= self.region_to_dom(1).len();
 
     /// Unique when casting to int address
     proof fn lemma_unique(v1: &Self, v2: &Self)
