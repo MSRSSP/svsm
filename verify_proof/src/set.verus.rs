@@ -108,10 +108,15 @@ pub proof fn lemma_sets_to_set_contains<A>(seq: Seq<Set<A>>, a: A)
     }
 }
 
+#[verifier(inline)]
+pub open spec fn spec_int_range_disjoint(start1: int, end1: int, start2: int, end2: int) -> bool {
+    (end1 <= start2 || end2 <= start1)
+}
+
 pub broadcast proof fn lemma_int_range_disjoint(start1: int, end1: int, start2: int, end2: int)
     ensures
         (#[trigger] set_int_range(start1, end1)).disjoint(#[trigger] set_int_range(start2, end2))
-            <==> ((end1 <= start2 || end2 <= start1) || !(start1 < end1 && start2 < end2)),
+            <==> spec_int_range_disjoint(start1, end1, start2, end2),
 {
     let s1 = set_int_range(start1, end1);
     let s2 = set_int_range(start2, end2);

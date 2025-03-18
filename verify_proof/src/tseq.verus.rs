@@ -21,6 +21,13 @@ impl<T> TrackedSeq<T> {
         Seq::new(self.size as nat, |i| self.map[i])
     }
 
+    pub broadcast proof fn lemma_eq(&self, other: &Self)
+    ensures
+        (#[trigger]self@ == #[trigger]other@) <==> (self == other)
+    {
+        assert((self@ =~= other@) <==> (self.map =~= other.map));
+    }
+
     #[verifier(inline)]
     pub open spec fn view(&self) -> Seq<T> {
         self.to_seq()

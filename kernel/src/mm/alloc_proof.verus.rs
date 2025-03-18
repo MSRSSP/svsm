@@ -22,6 +22,148 @@ use verify_proof::nonlinear::lemma_align_down_properties;
 
 global size_of PageStorageType == 8;
 
+proof fn is_disjoint(tracked p1: &mut RawPerm, p2: &RawPerm)
+    ensures
+        *old(p1) == *p1,
+        p1.dom().disjoint(p2.dom()),
+{
+    admit();
+}
+
+impl MemoryRegionTracked<VirtAddr, MAX_ORDER> {
+    #[verifier::spinoff_prover]
+    proof fn lemma_pfn_range_disjoint_rec1(
+        tracked &self,
+        mr: &MemoryRegion,
+        tracked perm: &mut RawPerm,
+        pfn: usize,
+        order: usize,
+        o: int,
+        n: nat,
+    )
+        requires
+            mr.wf(),
+            mr@ == *self,
+            old(perm).wf_vaddr_order(mr.spec_get_virt(pfn as int), order),
+            self.valid_pfn_order(pfn, order),
+            0 <= order < MAX_ORDER,
+            0 <= o < MAX_ORDER,
+            n <= self.next[o].len(),
+        ensures
+            forall|i|
+                0 <= i < n ==> addr_order_disjoint(
+                    #[trigger] self.next[o][i],
+                    o as usize,
+                    pfn,
+                    order,
+                ),
+            *old(perm) == *perm,
+        decreases n,
+    {
+        broadcast use lemma_bit_usize_shl_values;
+
+        let next = self.next;
+        if n > 0 {
+            let i = n - 1;
+            let p = self.next[o][i];
+            let start1 = mr.spec_get_virt(pfn as int)@ as int;
+            let end1 = start1 + (1usize << order);
+            assert(self.wf_at(o, i));
+            let pfn2 = self.next[o][i];
+            let start2 = mr.spec_get_virt(pfn2 as int)@ as int;
+            let end2 = start2 + (1usize << o);
+            mr.map().lemma_get_virt(pfn);
+            mr.map().lemma_get_virt(pfn2);
+            let perm2 = self.avail.tracked_borrow((o, i));
+            is_disjoint(perm, perm2);
+            assert(perm.dom().contains(start1));
+            assert(perm2.dom().contains(start2));
+            assert(addr_order_disjoint(#[trigger] self.next[o][n - 1], o as usize, pfn, order));
+            self.lemma_pfn_range_disjoint_rec1(mr, perm, pfn, order, o, (n - 1) as nat);
+        }
+    }
+
+    #[verifier::spinoff_prover]
+    proof fn lemma_pfn_range_disjoint_rec2(
+        tracked &self,
+        mr: &MemoryRegion,
+        tracked perm: &mut RawPerm,
+        pfn: usize,
+        order: usize,
+        max_order: int,
+    )
+        requires
+            mr.wf(),
+            mr@ == *self,
+            self.valid_pfn_order(pfn, order),
+            old(perm).wf_vaddr_order(mr.spec_get_virt(pfn as int), order),
+            0 <= order < MAX_ORDER,
+            0 <= max_order <= MAX_ORDER,
+        ensures
+            forall|o, i|
+                0 <= o < max_order && 0 <= i < self.next[o].len() ==> addr_order_disjoint(
+                    #[trigger] self.next[o][i],
+                    o as usize,
+                    pfn,
+                    order,
+                ),
+            *old(perm) == *perm,
+        decreases max_order,
+    {
+        if max_order > 0 {
+            let o = max_order - 1;
+            self.lemma_pfn_range_disjoint_rec1(mr, perm, pfn, order, o, self.next[o].len());
+            self.lemma_pfn_range_disjoint_rec2(mr, perm, pfn, order, max_order - 1);
+        }
+    }
+
+    #[verifier::spinoff_prover]
+    proof fn lemma_perm_not_in_allocator(
+        tracked &self,
+        mr: &MemoryRegion,
+        tracked perm: &mut RawPerm,
+        pfn: usize,
+        order: usize,
+    )
+        requires
+            mr.wf(),
+            mr@ == *self,
+            self.valid_pfn_order(pfn, order),
+            #[trigger] old(perm).wf_vaddr_order(mr.spec_get_virt(pfn as int), order),
+            0 <= order < MAX_ORDER,
+        ensures
+            self.pfn_range_is_allocated(pfn, order),
+            *old(perm) == *perm,
+    {
+        self.lemma_pfn_range_disjoint_rec2(mr, perm, pfn, order, MAX_ORDER as int);
+    }
+
+    #[verifier::spinoff_prover]
+    proof fn lemma_tmp_perm_disjoint(
+        tracked &self,
+        mr: &MemoryRegion,
+        tracked tmp_perms: &mut TrackedSeq<RawPerm>,
+        pfn: usize,
+        order: usize,
+    )
+        requires
+            mr.wf(),
+            mr@ == *self,
+            self.valid_pfn_order(pfn, order),
+            old(tmp_perms).len() > 0,
+            old(tmp_perms).last().wf_vaddr_order(mr.spec_get_virt(pfn as int), order),
+            0 <= order < MAX_ORDER,
+        ensures
+            self.pfn_range_is_allocated(pfn, order),
+            *tmp_perms == *old(tmp_perms),
+    {
+        let tracked mut perm = tmp_perms.tracked_pop();
+        self.lemma_perm_not_in_allocator(mr, &mut perm, pfn, order);
+        tmp_perms.tracked_push(perm);
+        assert(tmp_perms@ =~= old(tmp_perms)@);
+    }
+}
+
 #[verifier(inline)]
 spec fn no_dup_idx(next: Seq<Seq<usize>>, o1: int, i: int, o2: int, j: int) -> bool {
     0 <= o1 < next.len() && 0 <= o2 < next.len() && 0 <= i < next[o1].len() && 0 <= j
@@ -69,6 +211,7 @@ proof fn tracked_merge(
     let size = 1usize << order;
     let tracked p2 = tmp_perms.tracked_pop();
     let tracked p1 = tmp_perms.tracked_pop();
+
     let tracked p = if pfn1 < pfn2 {
         assert(pfn2 == pfn1 + size);
         p1.join(p2)
@@ -715,7 +858,7 @@ impl<VAddr: SpecVAddrImpl, const N: usize> MemoryRegionTracked<VAddr, N> {
             {
                 &&& 0 <= o < N
                 &&& 0 <= i < next[o].len()
-            } implies pfn_disjoint(#[trigger] next[o][i], o as usize, pfn, order) by {
+            } implies addr_order_disjoint(#[trigger] next[o][i], o as usize, pfn, order) by {
             let p = self.next[o][i];
             assert(self.wf_at(o, i));
         }
