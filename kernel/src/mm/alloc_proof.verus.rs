@@ -1038,7 +1038,6 @@ impl<VAddr: SpecVAddrImpl, const N: usize> MemoryRegionTracked<VAddr, N> {
     {
         broadcast use lemma_wf_perms;
 
-        reveal(FreePerms::wf);
         let order = order as int;
         let tracked p = self.tracked_remove(order, self.next[order].len() - 1);
         let next = self.next;
@@ -1070,7 +1069,6 @@ impl<VAddr: SpecVAddrImpl, const N: usize> MemoryRegionTracked<VAddr, N> {
                 perm,
             ),
     {
-        reveal(FreePerms::wf);
         assert(self.wf_perms()) by {
             broadcast use lemma_wf_perms;
 
@@ -1144,7 +1142,6 @@ broadcast proof fn lemma_wf_perms<VAddr: SpecVAddrImpl, const N: usize>(
     ensures
         #[trigger] m.wf_perms(),
 {
-    reveal(FreePerms::wf);
     let l = m.next;
     assert forall|o, i| 0 <= o < N && 0 <= i < l[o].len() implies #[trigger] m.wf_freep(o, i) by {
         assert(m.wf_at(o, i))

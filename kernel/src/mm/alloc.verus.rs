@@ -142,7 +142,6 @@ impl<VAddr: SpecVAddrImpl, const N: usize> FreePerms<VAddr, N> {
         &&& perm.wf_vaddr_order(vaddr, order as usize)
     }
 
-    #[verifier(opaque)]
     spec fn wf(&self) -> bool {
         forall|order, i|
             0 <= order < N && 0 <= i < self.next[order].len() ==> #[trigger] self.wf_at(order, i)
