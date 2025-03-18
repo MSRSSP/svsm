@@ -722,12 +722,13 @@ impl MemoryRegion {
     #[verus_spec(ret =>
         requires
             old(self).req_split_page(pfn, order),
+            old(self)@.marked_order(pfn, order),
         ensures
             old(self).ens_split_page_ok(&*self, pfn, order),
             self.wf(),
             ret.is_ok(),
     )]
-    #[verus_verify(spinoff_prover, rlimit(10))]
+    #[verus_verify(spinoff_prover, rlimit(15))]
     fn split_page(&mut self, pfn: usize, order: usize) -> Result<(), AllocError> {
         if !(1..MAX_ORDER).contains(&order) {
             return Err(AllocError::InvalidPageOrder(order));
@@ -738,11 +739,10 @@ impl MemoryRegion {
         let pfn2 = pfn + (1usize << new_order);
 
         proof! {
-            self@.reserved().lemma_pfn_dom_len_with_one(pfn, order);
-            self@.reserved().lemma_pfn_dom_pair(new_order, order);
+            broadcast use ReservedPerms::lemma_pfn_dom_len_with_one, ReservedPerms::lemma_pfn_dom_pair;
+            //self@.reserved().lemma_pfn_dom_pair(new_order, order);
             self.lemma_accounting(order);
             self.lemma_accounting(new_order);
-            //assert(self.nr_pages[new_order as int] * (1usize << new_order)  + self.nr_pages[order as int] * (1usize << order) <= self.page_count);
             let vaddr1 = self.map().lemma_get_virt(pfn1);
             let vaddr2 = self.map().lemma_get_virt(pfn2);
             let tracked p = self.tmp_perms.borrow_mut().tracked_pop();

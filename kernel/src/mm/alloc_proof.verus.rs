@@ -164,19 +164,6 @@ impl MemoryRegionTracked<VirtAddr, MAX_ORDER> {
     }
 }
 
-#[verifier(inline)]
-spec fn no_dup_idx(next: Seq<Seq<usize>>, o1: int, i: int, o2: int, j: int) -> bool {
-    0 <= o1 < next.len() && 0 <= o2 < next.len() && 0 <= i < next[o1].len() && 0 <= j
-        < next[o2].len() && (o1, i) !== (o2, j)
-}
-
-spec fn no_dup_pair(next: Seq<Seq<usize>>, o1: int, i: int, o2: int, j: int) -> bool {
-    no_dup_idx(next, o1, i, o2, j) ==> set_int_range(
-        next[o1][i] as int,
-        next[o1][i] + (1usize << o1),
-    ).disjoint(set_int_range(next[o2][j] as int, next[o2][j] + (1usize << o2)))
-}
-
 #[verifier::rlimit(4)]
 proof fn tracked_merge(
     tracked tmp_perms: &mut TrackedSeq<RawPerm>,
@@ -223,24 +210,6 @@ proof fn tracked_merge(
 }
 
 impl<const N: usize> ReservedPerms<N> {
-    #[verifier::spinoff_prover]
-    proof fn lemma_pfn_dom_no_update(&self, new: Self)
-        requires
-            self.wf_dom(),
-            new.wf_dom(),
-            self.page_count() == new.page_count(),
-            forall|pfn: int|
-                0 <= pfn < self.page_count() ==> (#[trigger] self.spec_page_info(
-                    pfn as usize,
-                )).unwrap().get_order() == new.spec_page_info(pfn as usize).unwrap().get_order(),
-        ensures
-            forall|order| new.pfn_dom(order) === #[trigger] self.pfn_dom(order),
-    {
-        assert forall|order| new.pfn_dom(order) == #[trigger] self.pfn_dom(order) by {
-            assert(new.pfn_dom(order) =~= self.pfn_dom(order));
-        }
-    }
-
     #[verifier::spinoff_prover]
     proof fn lemma_pfn_dom_update(&self, new: Self, pfn_set: Set<int>, order1: usize, order2: usize)
         requires
@@ -313,13 +282,13 @@ impl<const N: usize> ReservedPerms<N> {
     }
 
     #[verifier::spinoff_prover]
-    proof fn lemma_pfn_dom_pair(&self, order1: usize, order2: usize)
+    broadcast proof fn lemma_pfn_dom_pair(&self, order1: usize, order2: usize)
         requires
             self.wf_dom(),
             order1 != order2,
         ensures
             self.pfn_dom(order1).disjoint(self.pfn_dom(order2)),
-            (self.pfn_dom(order1) + self.pfn_dom(order2)).subset_of(
+            (#[trigger]self.pfn_dom(order1) + #[trigger]self.pfn_dom(order2)).subset_of(
                 set_int_range(0, self.page_count() as int),
             ),
             self.pfn_dom(order1).len() + self.pfn_dom(order2).len() <= self.page_count(),
@@ -842,29 +811,6 @@ impl<VAddr: SpecVAddrImpl, const N: usize> MemoryRegionTracked<VAddr, N> {
     }
 
     #[verifier::spinoff_prover]
-    broadcast proof fn lemma_pfn_range_is_allocated(&self, pfn: usize, order: usize)
-        requires
-            #[trigger] self.marked_not_free(pfn, order),
-            self.marked_order(pfn, order),
-            self.wf(),
-            0 <= order < 64,
-        ensures
-            self.pfn_range_is_allocated(pfn, order),
-    {
-        broadcast use lemma_bit_usize_shl_values;
-
-        let next = self.next;
-        assert forall|o, i|
-            {
-                &&& 0 <= o < N
-                &&& 0 <= i < next[o].len()
-            } implies addr_order_disjoint(#[trigger] next[o][i], o as usize, pfn, order) by {
-            let p = self.next[o][i];
-            assert(self.wf_at(o, i));
-        }
-    }
-
-    #[verifier::spinoff_prover]
     proof fn lemma_free_pfn_dom_finite(&self, order: int)
         requires
             0 <= order < self.next.len(),
@@ -1014,25 +960,6 @@ impl<VAddr: SpecVAddrImpl, const N: usize> MemoryRegionTracked<VAddr, N> {
         assert(perms.spec_page_info(pfn1 as int) !== c2);
         assert(perms.spec_page_info(pfn2 as int) !== c1);
         lemma_int_range_disjoint(pfn1 as int, pfn1 + n1, pfn2 as int, pfn2 + n2)
-    }
-
-    #[verifier::spinoff_prover]
-    proof fn lemma_unique_pfn_forall(&self, order: int, idx: int)
-        requires
-            self.wf(),
-            0 <= idx < self.next[order].len(),
-            0 <= order < N,
-        ensures
-            forall|o, i| #![trigger self.next[o][i]] no_dup_pair(self.next, order, idx, o, i),
-    {
-        let pfn = self.next[order][idx];
-        assert(self.wf_at(order, idx));
-        let next = self.next;
-        assert forall|o, i| #![trigger next[o][i]] no_dup_pair(next, order, idx, o, i) by {
-            if no_dup_idx(next, order, idx, o, i) {
-                self.lemma_unique_pfn(o, i, order as int, idx);
-            }
-        }
     }
 
     #[verifier::spinoff_prover]

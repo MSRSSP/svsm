@@ -762,14 +762,28 @@ impl MemoryRegion {
     }
 
     #[verifier::spinoff_prover]
-    proof fn lemma_accounting(&self, order: usize)
+    broadcast proof fn lemma_accounting_basic(&self, order: usize)
         requires
             self.wf_nr_pages(),
             self.wf_params(),
             self@.reserved().wf(),
             0 <= order < MAX_ORDER,
         ensures
-            self.nr_pages[order as int] * (1usize << order) <= self.page_count,
+            (#[trigger]self.nr_pages[order as int]) * (1usize << order) <= self.page_count,
+            self.nr_pages[order as int] <= self.page_count,
+    {
+        self.lemma_accounting(order)
+    }
+
+    #[verifier::spinoff_prover]
+    broadcast proof fn lemma_accounting(&self, order: usize)
+        requires
+            self.wf_nr_pages(),
+            self.wf_params(),
+            self@.reserved().wf(),
+            0 <= order < MAX_ORDER,
+        ensures
+            (#[trigger]self.nr_pages[order as int]) * (1usize << order) <= self.page_count,
             self.nr_pages[order as int] <= self.page_count,
             self.nr_pages[order as int] == self@.reserved().pfn_dom(order).len() / (1usize
                 << order) as nat,
