@@ -66,7 +66,7 @@ tokenized_state_machine!(frac_inner<Perm> {
         pub storage: Option<Perm>,
 
         #[sharding(multiset)]
-        pub reader: Multiset<(Perm, nat)>,  // read token and number of shares
+        pub reader: Multiset<(Option<Perm>, nat)>,  // read token and number of shares
 
         #[sharding(constant)]
         pub total: nat,                     // maximum number of shares, must be sum of readers
@@ -79,38 +79,49 @@ tokenized_state_machine!(frac_inner<Perm> {
 
     #[invariant]
     pub fn frac_agrees_total(&self) -> bool {
-        self.storage.is_some() ==> sum(self.reader) == self.total
+        sum(self.reader) == self.total
     }
 
     #[invariant]
     pub fn reader_agrees_storage(&self) -> bool {
-        forall |v| #[trigger] self.reader.count(v) > 0 ==> self.storage == Some(v.0)
+        forall |v| #[trigger] self.reader.count(v) > 0 ==> self.storage == v.0
     }
 
     init!{
-        initialize_once(x: Perm, total: nat) {
+        initialize_once(total: nat) {
             require total > 0;
-            init storage = Option::Some(x);
-            init reader = Multiset::empty().insert((x, total));
+            init storage = Option::None;
+            init reader = Multiset::empty().insert((Option::None, total));
             init total = total;
         }
     }
 
     #[inductive(initialize_once)]
-    fn initialize_once_inductive(post: Self, x: Perm, total: nat) {
-        let frac = Multiset::empty().insert((x, total));
-        lemma_sum(frac, (x, total));
+    fn initialize_once_inductive(post: Self, total: nat) {
+        let frac = Multiset::empty().insert((Option::<Perm>::None, total));
+        lemma_sum(frac, (Option::None, total));
     }
 
     property! {
-        reader_guard(x: Perm, shares: nat) {
+        is_same(p1: (Option<Perm>, nat), p2: (Option<Perm>, nat)) {
+            have reader >= {p1};
+            have reader >= {p2};
+            birds_eye let r1 = pre.reader.contains(p1);
+            birds_eye let r2 = pre.reader.contains(p2);
+            assert p1.0 == p2.0;
+        }
+    }
+
+    property! {
+        reader_guard(x: Option<Perm>, shares: nat) {
+            require x.is_some();
             have reader >= {(x, shares)};
-            guard storage >= Some(x);
+            guard storage >= Some(x.unwrap());
         }
     }
 
     transition! {
-        do_share(x: Perm, shares: nat, new_shares: nat) {
+        do_share(x: Option<Perm>, shares: nat, new_shares: nat) {
             remove reader -= {(x, shares)};
             require(0 < new_shares < shares);
             add reader += {(x, new_shares)};
@@ -118,15 +129,27 @@ tokenized_state_machine!(frac_inner<Perm> {
         }
     }
 
+
+    #[inductive(do_share)]
+    fn do_share_inductive(pre: Self, post: Self, x: Option<Perm>, shares: nat, new_shares: nat) {
+        let reader1 = pre.reader.remove((x, shares));
+        let reader2 = reader1.insert((x, new_shares));
+        lemma_sum(pre.reader, (x, shares));
+        lemma_sum_insert(reader1, (x, new_shares));
+        lemma_sum_insert(reader2, (x, (shares - new_shares) as nat));
+    }
+
     transition! {
-        take(x: Perm) {
+        take(x: Option<Perm>) {
             remove reader -= {(x, pre.total)};
-            withdraw storage -= Some(x);
+            require x.is_some();
+            add reader += {(None, pre.total)};
+            withdraw storage -= Some(x.unwrap());
         }
     }
 
     #[inductive(take)]
-    fn take_inductive(pre: Self, post: Self, x: Perm) {
+    fn take_inductive(pre: Self, post: Self, x: Option<Perm>) {
         lemma_sum(pre.reader, (x, pre.total));
         let reader1 = pre.reader.remove((x, pre.total));
         assert(reader1.len() == 0) by {
@@ -135,19 +158,37 @@ tokenized_state_machine!(frac_inner<Perm> {
                 lemma_sum(reader1, e);
             }
         }
-    }
-
-    #[inductive(do_share)]
-    fn do_share_inductive(pre: Self, post: Self, x: Perm, shares: nat, new_shares: nat) {
-        let reader1 = pre.reader.remove((x, shares));
-        let reader2 = reader1.insert((x, new_shares));
-        lemma_sum(pre.reader, (x, shares));
-        lemma_sum_insert(reader1, (x, new_shares));
-        lemma_sum_insert(reader2, (x, (shares - new_shares) as nat));
+        lemma_sum_insert(reader1, (None, pre.total));
     }
 
     transition!{
-        merge(x: Perm, shares1: nat, shares2: nat) {
+        update(x: Option<Perm>) {
+            remove reader -= {(None, pre.total)};
+            require x.is_some();
+            add reader += {(x, pre.total)};
+            deposit storage += Some(x.unwrap());
+        }
+    }
+
+    #[inductive(update)]
+    fn update_inductive(pre: Self, post: Self, x: Option<Perm>) {
+        let oldx = None;
+        assert(sum(pre.reader) == pre.total);
+        lemma_sum(pre.reader, (oldx, pre.total));
+        assert(pre.storage.is_none());
+        let reader1 = pre.reader.remove((oldx, pre.total));
+        assert(sum(reader1) == 0);
+        if (reader1.len() != 0) {
+            let e = reader1.choose();
+            axiom_choose_count(reader1);
+            lemma_sum(reader1, e);
+        }
+        lemma_sum_insert(reader1, (x, pre.total));
+    }
+
+
+    transition!{
+        merge(x: Option<Perm>, shares1: nat, shares2: nat) {
             let new_shares = (shares1 + shares2) as nat;
             remove reader -= {(x, shares1)};
             remove reader -= {(x, shares2)};
@@ -156,7 +197,7 @@ tokenized_state_machine!(frac_inner<Perm> {
     }
 
     #[inductive(merge)]
-    fn merge_inductive(pre: Self, post: Self, x: Perm, shares1: nat, shares2: nat) {
+    fn merge_inductive(pre: Self, post: Self, x: Option<Perm>, shares1: nat, shares2: nat) {
         let new_shares = (shares1 + shares2) as nat;
         let reader1 = pre.reader.remove((x, shares1));
         let reader2 = reader1.remove((x, shares2));
@@ -169,27 +210,28 @@ tokenized_state_machine!(frac_inner<Perm> {
 #[cfg(verus_keep_ghost)]
 verus! {
 
-struct_with_invariants!{
 /// A `tracked ghost` container that you can put a ghost object in.
 /// A `Shared<T>` is duplicable and lets you get a `&T` out.
 pub tracked struct FracPerm<T> {
     tracked inst: frac_inner::Instance<T>,
     tracked reader: frac_inner::reader<T>,
-    ghost t: T,
-}
-spec fn wf(self) -> bool {
-    predicate {
-        self.reader.instance_id() == self.inst.id()
-    }
-}
 }
 
 impl<T> FracPerm<T> {
+    pub closed spec fn wf(self) -> bool {
+        self.reader.instance_id() == self.inst.id()
+    }
+
+    pub closed spec fn valid(&self) -> bool {
+        &&& self@.is_some()
+        &&& self.wf()
+    }
+
     pub closed spec fn id(self) -> InstanceId {
         self.inst.id()
     }
 
-    pub closed spec fn view(self) -> T {
+    pub closed spec fn view(self) -> Option<T> {
         self.reader.element().0
     }
 
@@ -201,29 +243,37 @@ impl<T> FracPerm<T> {
         self.inst.total()
     }
 
-    pub closed spec fn well_formed(&self) -> bool {
-        self.wf()
-    }
-
-    pub proof fn new(tracked t: T, total: nat) -> (tracked s: Self)
+    pub proof fn new(total: nat) -> (tracked s: Self)
         requires
             total > 0,
         ensures
-            s@ == t,
+            s@.is_none(),
     {
         let tracked (Tracked(inst), Tracked(mut readers)) =
-            frac_inner::Instance::initialize_once(t, total, Some(t));
-        let tracked reader = readers.remove((t, total));
+            frac_inner::Instance::initialize_once(total, None);
+        let tracked reader = readers.remove((None, total));
         FracPerm { inst, reader }
     }
 
     pub proof fn borrow(tracked &self) -> (tracked t: &T)
         requires
-            self.well_formed(),
+            self.wf(),
+            self.valid(),
         ensures
-            *t == self@,
+            Some(*t) == self@,
     {
         self.inst.reader_guard(self.view(), self.shares(), &self.reader)
+    }
+
+    pub proof fn is_same(tracked &self, tracked other: &Self)
+    requires
+        self.wf(),
+        other.wf(),
+        self.id() == other.id(),
+    ensures
+        self@ == other@,
+    {
+        self.inst.is_same((self@, self.shares()), (other@, other.shares()), &self.reader,&other.reader);
     }
 
     pub proof fn share(tracked self, n: nat) -> (tracked ret: (
@@ -231,11 +281,11 @@ impl<T> FracPerm<T> {
         Self,
     ))
         requires
-            self.well_formed(),
+            self.wf(),
             0 < n < self.shares(),
         ensures
-            ret.0.well_formed(),
-            ret.1.well_formed(),
+            ret.0.wf(),
+            ret.1.wf(),
             self@ == ret.0@,
             self@ == ret.1@,
             self.id() == ret.0.id(),
@@ -259,30 +309,37 @@ impl<T> FracPerm<T> {
         tracked other: Self,
     ) -> (tracked ret: Self)
         requires
-            self.well_formed(),
-            other.well_formed(),
+            self.wf(),
+            other.wf(),
             self@ == other@,
             self.id() == other.id(),
-            self.shares() < self.total(),
             self.shares() + other.shares() <= self.total(),
         ensures
             ret@ == self@,
             ret.shares() == self.shares() + other.shares(),
-            ret.well_formed(),
+            ret.wf(),
+            ret.id() == self.id(),
     {
         let tracked (new_reader) = self.inst.merge(self.view(), self.shares(), other.shares(), self.reader, other.reader);
         FracPerm { inst: self.inst, reader: new_reader }
     }
 
-    pub proof fn extract(tracked self) -> (tracked ret: T)
+    pub proof fn extract(tracked self) -> (tracked ret: (T, Self))
         requires
-            self.well_formed(),
+            self.wf(),
+            self.valid(),
             self.shares() == self.total(),
         ensures
-            ret == self@,
+            Some(ret.0) == self@,
+            ret.1.id() == self.id(),
+            ret.1.wf(),
+            !ret.1.valid(),
     {
         let tracked FracPerm { mut inst, mut reader } = self;
-        inst.take(reader.element().0, reader)
+        let tracked (Tracked(ret), Tracked(reader)) = inst.take(reader.element().0, reader);
+
+        (ret, FracPerm{inst, reader})
+
     }
 }
 
@@ -290,34 +347,11 @@ impl<T> FracPerm<T> {
 
 verus!{
 
-#[allow(missing_debug_implementations)]
-struct DataWithGhostId<T> {
-    val: T,
-    id: Ghost<vstd::tokens::InstanceId>
-}
-
-use vstd::raw_ptr::PointsTo;
-
-impl<T> FracPerm<PointsTo<DataWithGhostId<T>>> {
-    spec fn wf_id(&self) -> bool {
-        &&& self@.opt_value().is_init()
-        &&& self.id() === self@.value().id@
-        &&& self.well_formed()
+impl<T> FracPerm<vstd::raw_ptr::PointsTo<T>> {
+    pub open spec fn addr(&self) -> int 
+    recommends self.valid()
+    {
+        self@.unwrap().ptr()@.addr as int
     }
 }
-
-/// Store instance_id in memory and use it to ensure we have the same 
-/// instance_id if the FracPerm points to the same memory address.
-proof fn test<T>(tracked fp1: FracPerm<PointsTo<DataWithGhostId<T>>>, tracked fp2: FracPerm<PointsTo<DataWithGhostId<T>>>)
-requires
-    fp1@.ptr() == fp2@.ptr(),
-    fp1.wf_id(),
-    fp2.wf_id(),
-    size_of::<DataWithGhostId<T>>() > 0,
-ensures
-    fp1.id() == fp2.id(),
-{
-    fp1.borrow().is_same(fp2.borrow());
-}
-
 } // verus!

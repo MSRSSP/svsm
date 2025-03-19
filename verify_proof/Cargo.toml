@@ -14,9 +14,10 @@ paste = "1.0"
 seq-macro = "0.3"
 
 [lints]
-workspace = true
 
 [features]
 default = []
 noverify = []
 verus = ["builtin"]
+
+
