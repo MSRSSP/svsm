@@ -672,7 +672,7 @@ impl MemoryRegion {
             let tracked perm = self.perms.borrow_mut().tracked_pop_next(order);
             self.tmp_perms.borrow_mut().tracked_push(perm);
             assert forall |o: int, i: int| 0<= o < MAX_ORDER && 0 <= i < self@.next[o].len()
-            implies addr_order_disjoint(#[trigger]self@.next[o][i], o as usize, pfn, order as usize)
+            implies order_disjoint(#[trigger]self@.next[o][i], o as usize, pfn, order as usize)
             by {
                 old(self)@.lemma_unique_pfn(o, i, order as int, self@.next[order as int].len() as int);
             }
@@ -1104,7 +1104,7 @@ impl MemoryRegion {
                 reveal(MemoryRegionTracked::wf_perms);
                 old(self)@.lemma_next_index_of(pfn, order, idx_);
                 assert forall |o: int, i: int| 0<= o < MAX_ORDER && 0 <= i < self@.next[o].len()
-                implies addr_order_disjoint(#[trigger]self@.next[o][i], o as usize, pfn, order)
+                implies order_disjoint(#[trigger]self@.next[o][i], o as usize, pfn, order)
                  by {
                     if o != order  || i < idx_ {
                         old(self)@.lemma_unique_pfn(o, i, order as int, idx_);

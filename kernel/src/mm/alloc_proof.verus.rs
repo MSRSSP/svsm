@@ -51,12 +51,7 @@ impl MemoryRegionTracked<VirtAddr, MAX_ORDER> {
             n <= self.next[o].len(),
         ensures
             forall|i|
-                0 <= i < n ==> addr_order_disjoint(
-                    #[trigger] self.next[o][i],
-                    o as usize,
-                    pfn,
-                    order,
-                ),
+                0 <= i < n ==> order_disjoint(#[trigger] self.next[o][i], o as usize, pfn, order),
             *old(perm) == *perm,
         decreases n,
     {
@@ -78,7 +73,7 @@ impl MemoryRegionTracked<VirtAddr, MAX_ORDER> {
             is_disjoint(perm, perm2);
             assert(perm.dom().contains(start1));
             assert(perm2.dom().contains(start2));
-            assert(addr_order_disjoint(#[trigger] self.next[o][n - 1], o as usize, pfn, order));
+            assert(order_disjoint(#[trigger] self.next[o][n - 1], o as usize, pfn, order));
             self.lemma_pfn_range_disjoint_rec1(mr, perm, pfn, order, o, (n - 1) as nat);
         }
     }
@@ -101,7 +96,7 @@ impl MemoryRegionTracked<VirtAddr, MAX_ORDER> {
             0 <= max_order <= MAX_ORDER,
         ensures
             forall|o, i|
-                0 <= o < max_order && 0 <= i < self.next[o].len() ==> addr_order_disjoint(
+                0 <= o < max_order && 0 <= i < self.next[o].len() ==> order_disjoint(
                     #[trigger] self.next[o][i],
                     o as usize,
                     pfn,
@@ -288,7 +283,7 @@ impl<const N: usize> ReservedPerms<N> {
             order1 != order2,
         ensures
             self.pfn_dom(order1).disjoint(self.pfn_dom(order2)),
-            (#[trigger]self.pfn_dom(order1) + #[trigger]self.pfn_dom(order2)).subset_of(
+            (#[trigger] self.pfn_dom(order1) + #[trigger] self.pfn_dom(order2)).subset_of(
                 set_int_range(0, self.page_count() as int),
             ),
             self.pfn_dom(order1).len() + self.pfn_dom(order2).len() <= self.page_count(),

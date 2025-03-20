@@ -54,7 +54,7 @@ pub type RawPerm = PointsToRaw;
 
 pub type TypedPerm<T> = PointsTo<T>;
 
-spec fn addr_order_disjoint(start1: usize, order1: usize, start2: usize, order2: usize) -> bool {
+spec fn order_disjoint(start1: usize, order1: usize, start2: usize, order2: usize) -> bool {
     let end1 = start1 + (1usize << order1);
     let end2 = start2 + (1usize << order2);
     //(end1 <= start2 || end2 <= start1)
@@ -428,13 +428,9 @@ impl<VAddr: SpecVAddrImpl, const N: usize> MemoryRegionTracked<VAddr, N> {
 
     pub closed spec fn pfn_range_is_allocated(&self, pfn: usize, order: usize) -> bool {
         let next = self.next;
-        forall|o, i|
-            0 <= o < N && 0 <= i < next[o].len() ==> addr_order_disjoint(
-                #[trigger] next[o][i],
-                o as usize,
-                pfn,
-                order,
-            )
+        forall|o: usize, i|
+            #![trigger next[o as int][i]]
+            0 <= o < N && 0 <= i < next[o as int].len() ==> order_disjoint(next[o as int][i], o, pfn, order)
     }
 
     spec fn next_page(&self, i: int) -> int {
@@ -769,7 +765,7 @@ impl MemoryRegion {
             self@.reserved().wf(),
             0 <= order < MAX_ORDER,
         ensures
-            (#[trigger]self.nr_pages[order as int]) * (1usize << order) <= self.page_count,
+            (#[trigger] self.nr_pages[order as int]) * (1usize << order) <= self.page_count,
             self.nr_pages[order as int] <= self.page_count,
     {
         self.lemma_accounting(order)
@@ -783,7 +779,7 @@ impl MemoryRegion {
             self@.reserved().wf(),
             0 <= order < MAX_ORDER,
         ensures
-            (#[trigger]self.nr_pages[order as int]) * (1usize << order) <= self.page_count,
+            (#[trigger] self.nr_pages[order as int]) * (1usize << order) <= self.page_count,
             self.nr_pages[order as int] <= self.page_count,
             self.nr_pages[order as int] == self@.reserved().pfn_dom(order).len() / (1usize
                 << order) as nat,
