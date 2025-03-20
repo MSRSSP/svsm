@@ -1,5 +1,5 @@
 use vstd::prelude::*;
-use vstd::set_lib::{lemma_len_subset, set_int_range};
+use vstd::set_lib::set_int_range;
 
 verus! {
 
@@ -140,6 +140,28 @@ pub broadcast proof fn lemma_int_range(lo: int, hi: int)
     vstd::set_lib::lemma_int_range(lo, hi);
 }
 
+pub broadcast proof fn lemma_len_filter<A>(s: Set<A>, f: spec_fn(A) -> bool)
+requires
+    s.finite(),
+ensures
+    (#[trigger]s.filter(f)).finite(),
+    s.filter(f).len() <= s.len(),
+{
+    s.lemma_len_filter(f)
+}
+
+pub broadcast proof fn lemma_len_subset<A>(s1: Set<A>, s2: Set<A>)
+    requires
+        s2.finite(),
+        #[trigger]s1.subset_of(s2),
+    ensures
+        s1.len() <= s2.len(),
+        s1.finite(),
+{
+    vstd::set_lib::lemma_len_subset(s1, s2)
+}
+
+
 pub broadcast proof fn lemma_set_filter_disjoint_len<A>(s: Set<A>, f: spec_fn(A) -> bool, s2: Set<A>)
 requires
     s.finite(),
@@ -147,6 +169,7 @@ requires
     #[trigger]s.filter(f).disjoint(s2),
 ensures
     s.filter(f).len() + s2.len() <= s.len(),
+    s.filter(f).len() + s2.len() == (s.filter(f) + s2).len()
 {
     s.lemma_len_filter(f);
     lemma_len_subset(s2, s);
