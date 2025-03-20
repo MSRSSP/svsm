@@ -22,6 +22,11 @@ use verify_proof::nonlinear::lemma_align_down_properties;
 
 global size_of PageStorageType == 8;
 
+broadcast group set_len_group {
+    verify_proof::set::lemma_set_filter_disjoint_len,
+    verify_proof::set::lemma_int_range,
+}
+
 proof fn is_disjoint(tracked p1: &mut RawPerm, p2: &RawPerm)
     ensures
         *old(p1) == *p1,
@@ -52,6 +57,10 @@ impl MemoryRegionTracked<VirtAddr, MAX_ORDER> {
         ensures
             forall|i|
                 0 <= i < n ==> order_disjoint(#[trigger] self.next[o][i], o as usize, pfn, order),
+            forall|i|
+                0 <= i < n ==> (#[trigger] self.free_pfn_dom_at(o, i)).disjoint(
+                    order_set(pfn, order),
+                ),
             *old(perm) == *perm,
         decreases n,
     {
@@ -74,6 +83,7 @@ impl MemoryRegionTracked<VirtAddr, MAX_ORDER> {
             assert(perm.dom().contains(start1));
             assert(perm2.dom().contains(start2));
             assert(order_disjoint(#[trigger] self.next[o][n - 1], o as usize, pfn, order));
+            assert(self.free_pfn_dom_at(o, i).disjoint(order_set(pfn, order)));
             self.lemma_pfn_range_disjoint_rec1(mr, perm, pfn, order, o, (n - 1) as nat);
         }
     }
@@ -102,18 +112,22 @@ impl MemoryRegionTracked<VirtAddr, MAX_ORDER> {
                     pfn,
                     order,
                 ),
+            forall|o: usize|
+                #![trigger self.next[o as int]]
+                0 <= o < max_order ==> self.free_order_dom(o).disjoint(order_set(pfn, order)),
             *old(perm) == *perm,
         decreases max_order,
     {
         if max_order > 0 {
             let o = max_order - 1;
             self.lemma_pfn_range_disjoint_rec1(mr, perm, pfn, order, o, self.next[o].len());
+            assert(self.free_order_dom(o as usize).disjoint(order_set(pfn, order)));
             self.lemma_pfn_range_disjoint_rec2(mr, perm, pfn, order, max_order - 1);
         }
     }
 
     #[verifier::spinoff_prover]
-    proof fn lemma_perm_not_in_allocator(
+    proof fn lemma_perm_disjoint(
         tracked &self,
         mr: &MemoryRegion,
         tracked perm: &mut RawPerm,
@@ -129,6 +143,7 @@ impl MemoryRegionTracked<VirtAddr, MAX_ORDER> {
         ensures
             self.pfn_range_is_allocated(pfn, order),
             *old(perm) == *perm,
+            self.free_dom().disjoint(order_set(pfn, order)),
     {
         self.lemma_pfn_range_disjoint_rec2(mr, perm, pfn, order, MAX_ORDER as int);
     }
@@ -150,10 +165,11 @@ impl MemoryRegionTracked<VirtAddr, MAX_ORDER> {
             0 <= order < MAX_ORDER,
         ensures
             self.pfn_range_is_allocated(pfn, order),
-            *tmp_perms == *old(tmp_perms),
+            tmp_perms@ == old(tmp_perms)@,
+            self.free_dom().disjoint(order_set(pfn, order)),
     {
         let tracked mut perm = tmp_perms.tracked_pop();
-        self.lemma_perm_not_in_allocator(mr, &mut perm, pfn, order);
+        self.lemma_perm_disjoint(mr, &mut perm, pfn, order);
         tmp_perms.tracked_push(perm);
         assert(tmp_perms@ =~= old(tmp_perms)@);
     }

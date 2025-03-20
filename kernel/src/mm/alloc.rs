@@ -798,7 +798,7 @@ impl MemoryRegion {
     }
 
     /// Refills the free page list for a given order.
-    #[verus_verify(spinoff_prover)]
+    #[verus_verify(spinoff_prover, rlimit(2))]
     #[verus_spec(ret =>
         requires
             old(self).wf(),

@@ -54,6 +54,10 @@ pub type RawPerm = PointsToRaw;
 
 pub type TypedPerm<T> = PointsTo<T>;
 
+spec fn order_set(start: usize, order: usize) -> Set<int> {
+    set_int_range(start as int, start as int + (1usize << order))
+}
+
 spec fn order_disjoint(start1: usize, order1: usize, start2: usize, order2: usize) -> bool {
     let end1 = start1 + (1usize << order1);
     let end2 = start2 + (1usize << order2);
@@ -410,6 +414,32 @@ impl<VAddr: SpecVAddrImpl, const N: usize> MemoryRegionTracked<VAddr, N> {
         seq_sets_to_set(self.free_pfn_dom_seq(order))
     }
 
+    #[verifier(inline)]
+    spec fn free_dom(&self) -> Set<int> {
+        self.full_pfn_dom().filter(
+            |pfn: int|
+                exists|o: int, idx: int|
+                    #![trigger self.next[o][idx]]
+                    0 <= o < N && 0 <= idx < self.next[o].len() && self.free_pfn_dom_at(
+                        o,
+                        idx,
+                    ).contains(pfn),
+        )
+    }
+
+    #[verifier(inline)]
+    spec fn free_order_dom(&self, order: usize) -> Set<int> {
+        self.full_pfn_dom().filter(
+            |pfn: int|
+                exists|idx: int|
+                    #![trigger self.next[order as int][idx]]
+                    0 <= idx < self.next[order as int].len() && self.free_pfn_dom_at(
+                        order as int,
+                        idx,
+                    ).contains(pfn),
+        )
+    }
+
     spec fn free_pfn_dom_at(&self, order: int, idx: int) -> Set<int> {
         let size = 1usize << order;
         let pfn = self.next[order][idx];
@@ -430,7 +460,17 @@ impl<VAddr: SpecVAddrImpl, const N: usize> MemoryRegionTracked<VAddr, N> {
         let next = self.next;
         forall|o: usize, i|
             #![trigger next[o as int][i]]
-            0 <= o < N && 0 <= i < next[o as int].len() ==> order_disjoint(next[o as int][i], o, pfn, order)
+            0 <= o < N && 0 <= i < next[o as int].len() ==> order_disjoint(
+                next[o as int][i],
+                o,
+                pfn,
+                order,
+            )
+    }
+
+    #[verifier(inline)]
+    spec fn free_dom_disjoint(&self, pfn: usize, order: usize) -> bool {
+        self.free_dom().disjoint(order_set(pfn, order))
     }
 
     spec fn next_page(&self, i: int) -> int {
