@@ -23,10 +23,7 @@ use verify_proof::bits::{
     lemma_bit_usize_and_mask_is_mod, lemma_bit_usize_shl_values, lemma_bit_usize_xor_neighbor,
 };
 use verify_proof::nonlinear::lemma_modulus_add_sub_m;
-use verify_proof::set::{
-    lemma_int_range_disjoint, lemma_sets_to_set_contains, lemma_sets_to_set_finite_iff,
-    lemma_sets_to_set_fixed_len, seq_sets_are_disjoint, seq_sets_to_set, spec_int_range_disjoint,
-};
+use verify_proof::set::{lemma_int_range_disjoint, seq_sets_to_set, spec_int_range_disjoint};
 use verify_proof::tseq::TrackedSeq;
 use vstd::arithmetic::mul::group_mul_properties;
 use vstd::arithmetic::mul::{lemma_mul_inequality, lemma_mul_ordering};
@@ -42,6 +39,7 @@ broadcast group alloc_broadcast_group {
     crate::address::group_addr_proofs,
     lemma_bit_usize_shl_values,
     lemma_page_size,
+    set_len_group,
 }
 
 broadcast use alloc_broadcast_group;
@@ -54,6 +52,7 @@ pub type RawPerm = PointsToRaw;
 
 pub type TypedPerm<T> = PointsTo<T>;
 
+#[verifier(inline)]
 spec fn order_set(start: usize, order: usize) -> Set<int> {
     set_int_range(start as int, start as int + (1usize << order))
 }
@@ -148,7 +147,7 @@ impl<VAddr: SpecVAddrImpl, const N: usize> FreePerms<VAddr, N> {
     }
 
     spec fn wf(&self) -> bool {
-        forall|order, i|
+        &&& forall|order, i|
             0 <= order < N && 0 <= i < self.next[order].len() ==> #[trigger] self.wf_at(order, i)
     }
 }
@@ -407,43 +406,135 @@ impl<VAddr: SpecVAddrImpl, const N: usize> MemoryRegionTracked<VAddr, N> {
     }
 
     spec fn free_pfn_dom_seq(&self, order: int) -> Seq<Set<int>> {
-        Seq::new(self.free_pfn_len(order), |idx| self.free_pfn_dom_at(order, idx))
+        Seq::new(self.free_pfn_len(order), |idx| self.free_dom_at(order as usize, idx))
     }
 
     spec fn free_pfn_dom(&self, order: int) -> Set<int> {
         seq_sets_to_set(self.free_pfn_dom_seq(order))
     }
 
-    #[verifier(inline)]
     spec fn free_dom(&self) -> Set<int> {
         self.full_pfn_dom().filter(
             |pfn: int|
-                exists|o: int, idx: int|
-                    #![trigger self.next[o][idx]]
-                    0 <= o < N && 0 <= idx < self.next[o].len() && self.free_pfn_dom_at(
-                        o,
-                        idx,
-                    ).contains(pfn),
+                exists|o: usize, idx: int|
+                    #![trigger self.next[o as int][idx]]
+                    self.free_dom_at(o, idx).contains(pfn) && 0 <= idx < self.next[o as int].len()
+                        && 0 <= o < N,
         )
     }
 
-    #[verifier(inline)]
-    spec fn free_order_dom(&self, order: usize) -> Set<int> {
+    spec fn free_order_dom_rec(&self, order: usize, len: nat) -> Set<int> {
         self.full_pfn_dom().filter(
             |pfn: int|
-                exists|idx: int|
-                    #![trigger self.next[order as int][idx]]
-                    0 <= idx < self.next[order as int].len() && self.free_pfn_dom_at(
-                        order as int,
-                        idx,
-                    ).contains(pfn),
+                (exists|idx: int|
+                    0 <= idx < len && (#[trigger] self.free_dom_at(order, idx)).contains(pfn)),
         )
     }
 
-    spec fn free_pfn_dom_at(&self, order: int, idx: int) -> Set<int> {
+    spec fn free_order_dom(&self, order: usize) -> Set<int> {
+        self.free_order_dom_rec(order, self.next[order as int].len())
+    }
+
+    #[verifier::spinoff_prover]
+    proof fn lemma_free_order_at(&self, order: usize, idx: int)
+        requires
+            0 <= idx < self.next[order as int].len(),
+            0 <= order < N,
+            self.wf(),
+        ensures
+            self.free_dom_at(order, idx).subset_of(self.free_order_dom(order)),
+            self.free_dom_at(order, idx).subset_of(self.full_pfn_dom()),
+    {
+        let s1 = self.free_order_dom(order);
+        let s2 = self.free_dom_at(order, idx);
+        assert forall|e| s2.contains(e) implies s1.contains(e) by {
+            assert(self.free_dom_at(order, idx).contains(e));
+            assert(self.wf_at(order as int, idx));
+            assert(self.full_pfn_dom().contains(e));
+        }
+    }
+
+    #[verifier::spinoff_prover]
+    proof fn lemma_free_order_dom_rec(&self, order: usize, len: nat)
+        requires
+            self.wf(),
+            0 <= order < N,
+            len <= self.next[order as int].len(),
+        ensures
+            self.free_order_dom_rec(order, len).len() == len * (1usize << order),
+        decreases len,
+    {
         let size = 1usize << order;
-        let pfn = self.next[order][idx];
-        set_int_range(pfn as int, pfn + size)
+        if len > 0 {
+            let idx = len - 1;
+            let next_list = self.next[order as int][idx];
+            let s = self.free_order_dom_rec(order, len);
+            let s1 = self.free_order_dom_rec(order, idx as nat);
+            let s2 = self.free_dom_at(order, idx);
+            assert forall|e| s.contains(e) implies s1.contains(e) || s2.contains(e) by {}
+            assert forall|e| s1.contains(e) implies (s.contains(e) && !s2.contains(e)) by {
+                let i = choose|i: int|
+                    #![trigger self.next[order as int][i]]
+                    0 <= i < idx && self.free_dom_at(order, i).contains(e);
+                assert(0 <= i < idx);
+                assert(self.free_dom_at(order, i).contains(e));
+                self.lemma_unique_pfn(order as int, i, order as int, idx);
+            }
+
+            self.lemma_free_order_at(order, idx);
+
+            assert(s =~= s1 + s2);
+            self.lemma_free_order_dom_rec(order, idx as nat);
+            assert(s1.disjoint(s2));
+            assert(s.len() == s1.len() + s2.len());
+            assert(len * size == idx * size + size) by {
+                broadcast use group_mul_properties;
+
+            }
+            assert(s2.len() == size);
+            assert(s.len() == len * size);
+        } else {
+            assert(0 * (1usize << order) == 0);
+            assert(self.free_order_dom_rec(order, 0).is_empty());
+        }
+    }
+
+    #[verifier::spinoff_prover]
+    proof fn lemma_free_order_dom_subset(&self, order: usize)
+        requires
+            self.wf(),
+            0 <= order < N <= 64,
+        ensures
+            self.free_order_dom(order).subset_of(self.free_dom()),
+    {
+        assert(self.free_order_dom(order).subset_of(self.free_dom()));
+    }
+
+    #[verifier::spinoff_prover]
+    proof fn lemma_free_order_dom(&self, order: usize)
+        requires
+            self.wf(),
+            0 <= order < N <= 64,
+        ensures
+            self.free_order_dom(order).len() == self.next[order as int].len() * (1usize << order),
+            self.free_order_dom(order).len() >= self.next[order as int].len(),
+            self.free_order_dom(order).len() <= self.free_dom().len(),
+    {
+        broadcast use set_len_group, lemma_mul_ordering;
+
+        assert(1usize << order >= 1) by {
+            broadcast use lemma_bit_usize_shl_values;
+
+        }
+        self.lemma_free_order_dom_subset(order);
+        self.lemma_free_order_dom_rec(order, self.next[order as int].len());
+    }
+
+    spec fn free_dom_at(&self, order: usize, idx: int) -> Set<int> {
+        set_int_range(
+            self.next[order as int][idx] as int,
+            self.next[order as int][idx] + (1usize << order),
+        )
     }
 
     #[verifier(inline)]
@@ -516,6 +607,10 @@ impl<VAddr: SpecVAddrImpl, const N: usize> MemoryRegionTracked<VAddr, N> {
         self.pfn_to_virt.len()
     }
 
+    pub closed spec fn max_free_page_count(&self) -> nat {
+        (self.page_count() - self.reserved_pfn_count()) as nat
+    }
+
     #[verifier(inline)]
     spec fn contained_by_order_idx(&self, pfn: usize, order: usize, o: int, i: int) -> bool {
         &&& self.next[o][i] <= pfn
@@ -532,6 +627,7 @@ impl<VAddr: SpecVAddrImpl, const N: usize> MemoryRegionTracked<VAddr, N> {
         choose|o, i| self.contained_by_order_idx(pfn, order, o, i)
     }
 
+    #[verifier(inline)]
     spec fn full_pfn_dom(&self) -> Set<int> {
         set_int_range(self.reserved_pfn_count() as int, self.page_count() as int)
     }
@@ -632,6 +728,7 @@ impl<VAddr: SpecVAddrImpl, const N: usize> MemoryRegionTracked<VAddr, N> {
 
     spec fn wf_info(&self) -> bool {
         let next = self.next;
+        &&& forall|order| 0 <= order < N ==> (#[trigger] self.next[order]).no_duplicates()
         &&& forall|order, i| 0 <= order < N && 0 <= i < next[order].len() ==> self.wf_at(order, i)
         &&& self.wf_info_content()
     }
@@ -1079,6 +1176,7 @@ impl MemoryRegion {
             }
     }
 
+    #[verifier(inline)]
     spec fn ens_init_compound_page(
         &self,
         new: Self,

@@ -680,18 +680,19 @@ impl MemoryRegion {
     #[verus_spec(
         requires old(self).req_mark_compound_page(pfn, order),
         ensures
-            old(self).ens_mark_compound_page(*self, pfn, 1usize << order, order),
+            old(self).ens_mark_compound_page(*self, pfn, (1usize << order), order),
             self@.marked_compound(pfn, order),
     )]
     #[verus_verify(rlimit(2))]
-    #[cfg_attr(verus_keep_ghost, verifier::loop_isolation(false))]
+    //#[cfg_attr(verus_keep_ghost, verifier::loop_isolation(false))]
     fn mark_compound_page(&mut self, pfn: usize, order: usize) {
         let nr_pages: usize = 1 << order;
         let compound = PageInfo::Compound(CompoundInfo { order });
         #[cfg_attr(verus_keep_ghost, verus_spec(
             invariant
-                old(self).ens_mark_compound_page(*self, pfn, i, order)
+                old(self).ens_mark_compound_page(*self, pfn, i, order),
         ))]
+        #[cfg_attr(verus_keep_ghost, verifier::loop_isolation(false))]
         for i in 1..nr_pages {
             self.write_page_info(pfn + i, compound);
         }
@@ -733,7 +734,8 @@ impl MemoryRegion {
         let pfn2 = pfn + (1usize << new_order);
 
         proof! {
-            broadcast use ReservedPerms::lemma_pfn_dom_len_with_one, ReservedPerms::lemma_pfn_dom_pair;
+            //self@.reserved().lemma_pfn_dom_len_with_one()
+            //broadcast use ReservedPerms::lemma_pfn_dom_len_with_one;
             //self@.reserved().lemma_pfn_dom_pair(new_order, order);
             self.lemma_accounting(order);
             self.lemma_accounting(new_order);
@@ -743,16 +745,19 @@ impl MemoryRegion {
             let size = (1usize << order) * PAGE_SIZE;
             let new_size = (1usize << new_order) * PAGE_SIZE;
             vaddr1.lemma_valid_small_size(new_size as nat, size as nat);
-            let tracked perms = p.split(vaddr1.region_to_dom(new_size as nat));
+            let tracked (mut p1, mut p2) = p.split(vaddr1.region_to_dom(new_size as nat));
             lemma_wf_perms(self.perms@);
             self@.pg_params().lemma_valid_pfn_order_split(pfn1, order);
-            self.perms.borrow_mut().tracked_push(new_order, pfn2, perms.1);
-            self.perms.borrow_mut().tracked_push(new_order, pfn1, perms.0);
+            self.perms.borrow().lemma_perm_disjoint(self, &mut p1, pfn1, new_order);
+            self.perms.borrow().lemma_perm_disjoint(self, &mut p2, pfn2, new_order);
+            self.perms.borrow_mut().tracked_push(new_order, pfn2, p2);
+            self.perms.borrow_mut().tracked_push(new_order, pfn1, p1);
         }
 
         let next_pfn = self.next_page[new_order];
         self.init_compound_page(pfn1, new_order, pfn2);
         self.init_compound_page(pfn2, new_order, next_pfn);
+        
         self.next_page[new_order] = pfn1;
 
         // Do the accounting
@@ -760,32 +765,22 @@ impl MemoryRegion {
         self.nr_pages[new_order] += 2;
         self.free_pages[new_order] += 2;
 
+
+        //proof_mr_forall_wf_at!(self);
         proof! {
-            vstd::set_lib::lemma_int_range(pfn as int, pfn + (1usize << order));
-            old(self)@.reserved().lemma_pfn_dom_update(self@.reserved(), set_int_range(pfn as int, pfn + (1usize << order)), order, new_order);
+            old(self)@.reserved().lemma_pfn_dom_update(self@.reserved(), order_set(pfn, new_order), order, new_order);
             old(self).lemma_nr_page_add(self, -1, order);
             old(self).lemma_nr_page_add(self, 2, new_order);
             let oldlen = old(self)@.next[new_order as int].len() as int;
-            assert(self@.wf_info()) by {
-                assert(self@.wf_at(new_order as int, oldlen));
-                assert(self@.wf_at(new_order as int, oldlen + 1));
-                assert forall|o, i| 0 <= o < MAX_ORDER && 0 <= i < self@.next[o].len()
-                implies self@.wf_at(o, i) by {
-                    if i < old(self)@.next[o].len() {
-                        assert(old(self)@.wf_at(o, i));
-                        assert(self@.wf_at(o, i));
-                    }
-                }
-                old(self)@.reserved().lemma_reserved_info_split(self@.reserved(), pfn, order);
-            }
-            assert(self.wf_params()) by {
+            old(self)@.reserved().lemma_reserved_info_split(self@.reserved(), pfn, order);
+            /*assert(self.wf_params()) by {
                 let n = 1usize << order;
                 let order = order as int;
                 let n = n as int;
                 assert(old(self).nr_pages[order] * n <= self.page_count);
                 assert(self.nr_pages[order] < old(self).nr_pages[order]);
-                lemma_mul_inequality(self.nr_pages[order] as int, old(self).nr_pages[order] as int, n);
-            }
+                //lemma_mul_inequality(self.nr_pages[order] as int, old(self).nr_pages[order] as int, n);
+            }*/
         }
 
         Ok(())
@@ -972,21 +967,15 @@ impl MemoryRegion {
         // not updated here.
         self.nr_pages[order] -= 2;
         self.nr_pages[new_order] += 1;
+        proof_mr_forall_wf_at!(self);
         proof! {
-            vstd::set_lib::lemma_int_range(pfn as int, pfn + (1usize << new_order));
-            old(self)@.reserved().lemma_pfn_dom_update(self@.reserved(), set_int_range(pfn as int, pfn + (1usize << new_order)), order, new_order);
+            old(self)@.reserved().lemma_pfn_dom_update(self@.reserved(), order_set(pfn, new_order), order, new_order);
             old(self).lemma_nr_page_add(self, -2, order);
             old(self).lemma_nr_page_add(self, 1, new_order);
-            assert forall|o, i| 0 <= o < MAX_ORDER && 0 <= i < self@.next[o].len()
-                implies self@.wf_at(o, i) by {
-
-                    if i < old(self)@.next[o].len() {
-                        assert(old(self)@.wf_at(o, i));
-                    }
-                }
             old(self)@.reserved().lemma_reserved_info_merge(self@.reserved(), pfn, order);
             self.perms.borrow().lemma_tmp_perm_disjoint(self, self.tmp_perms.borrow_mut(), pfn, new_order);
         }
+
         Ok(pfn)
     }
 
@@ -1131,9 +1120,10 @@ impl MemoryRegion {
     #[verus_verify(spinoff_prover, rlimit(2))]
     fn free_page_raw(&mut self, pfn: usize, order: usize) {
         proof! {
-            vstd::set_lib::lemma_int_range(pfn as int, pfn + (1usize << order));
-            self@.lemma_free_pfn_dom_exclude(order as int, Set::empty());
-            self.perms.borrow_mut().tracked_push(order, pfn, self.tmp_perms.borrow_mut().tracked_pop());
+            self.perms@.lemma_free_order_dom(order);
+            let tracked mut perm = self.tmp_perms.borrow_mut().tracked_pop();
+            self.perms.borrow().lemma_perm_disjoint(self, &mut perm, pfn, order);
+            self.perms.borrow_mut().tracked_push(order, pfn, perm);
         }
         let old_next = self.next_page[order];
         let pg = PageInfo::Free(FreeInfo {
@@ -1145,6 +1135,7 @@ impl MemoryRegion {
         self.next_page[order] = pfn;
 
         self.free_pages[order] += 1;
+        proof_mr_forall_wf_at!(self);
         proof! {
             assert(self@.wf_info()) by {
                 assert(self@.wf_at(order as int, old(self)@.next[order as int].len() as int));
@@ -1168,7 +1159,7 @@ impl MemoryRegion {
         ensures
             old(self).ens_try_to_merge_page(self, pfn, order, ret),
     )]
-    #[verus_verify(spinoff_prover, rlimit(2))]
+    #[verus_verify(spinoff_prover, rlimit(4))]
     fn try_to_merge_page(&mut self, pfn: usize, order: usize) -> Result<usize, AllocError> {
         if order >= MAX_ORDER - 1 {
             return Err(AllocError::InvalidPageOrder(order));
