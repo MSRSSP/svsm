@@ -1,5 +1,5 @@
 use vstd::prelude::*;
-use vstd::set_lib::set_int_range;
+use vstd::set_lib::{lemma_len_subset, set_int_range};
 
 verus! {
 
@@ -116,7 +116,7 @@ pub open spec fn spec_int_range_disjoint(start1: int, end1: int, start2: int, en
 pub broadcast proof fn lemma_int_range_disjoint(start1: int, end1: int, start2: int, end2: int)
     ensures
         (#[trigger] set_int_range(start1, end1)).disjoint(#[trigger] set_int_range(start2, end2))
-            <==> spec_int_range_disjoint(start1, end1, start2, end2),
+            <==> (spec_int_range_disjoint(start1, end1, start2, end2) || !(start1 < end1 && start2 < end2)),
 {
     let s1 = set_int_range(start1, end1);
     let s2 = set_int_range(start2, end2);
@@ -128,6 +128,33 @@ pub broadcast proof fn lemma_int_range_disjoint(start1: int, end1: int, start2: 
         assert(s2.contains(start2));
         assert(s1.contains(start2) || s2.contains(start1));
     }
+}
+
+pub broadcast proof fn lemma_int_range(lo: int, hi: int)
+    requires
+        lo <= hi,
+    ensures
+        (#[trigger]set_int_range(lo, hi)).finite(),
+        set_int_range(lo, hi).len() == hi - lo,
+{
+    vstd::set_lib::lemma_int_range(lo, hi);
+}
+
+pub broadcast proof fn lemma_set_filter_disjoint_len<A>(s: Set<A>, f: spec_fn(A) -> bool, s2: Set<A>)
+requires
+    s.finite(),
+    s2.subset_of(s),
+    #[trigger]s.filter(f).disjoint(s2),
+ensures
+    s.filter(f).len() + s2.len() <= s.len(),
+{
+    s.lemma_len_filter(f);
+    lemma_len_subset(s2, s);
+    let s1 = s.filter(f);
+    let new = s1 + s2;
+    vstd::set_lib::lemma_set_disjoint_lens(s1, s2);
+    lemma_len_subset(new, s);
+    
 }
 
 } // verus!
