@@ -6,6 +6,7 @@
 //
 use verify_external::convert::{from_spec, FromSpec};
 use verify_external::hw_spec::SpecVAddrImpl;
+use vstd::set_lib::set_int_range;
 use vstd::std_specs::cmp::{SpecPartialEqOp, SpecPartialOrdOp};
 use vstd::std_specs::ops::{SpecAddOp, SpecSubOp};
 
@@ -330,7 +331,18 @@ impl SpecVAddrImpl for VirtAddr {
     proof fn lemma_unique(v1: &Self, v2: &Self) {
     }
 
-    proof fn lemma_vaddr_region(&self) {
+    proof fn lemma_vaddr_region_len(&self, size: nat)
+        ensures
+            self.is_canonical() ==> self.region_to_dom(size).len() > 0,
+    {
+        if self.is_canonical() {
+            assert(self.region_to_dom(size).contains(self@ as int));
+        }
+        self.lemma_valid_small_size(1, size);
+        vstd::set_lib::lemma_int_range(0, usize::MAX + 1);
+        vstd::set_lib::lemma_len_subset(self.region_to_dom(1), set_int_range(0, usize::MAX + 1));
+        vstd::set_lib::lemma_len_subset(self.region_to_dom(size), set_int_range(0, usize::MAX + 1));
+        vstd::set_lib::lemma_len_subset(self.region_to_dom(1), self.region_to_dom(size));
     }
 
     proof fn lemma_valid_small_size(&self, size1: nat, size2: nat) {
