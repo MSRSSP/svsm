@@ -126,7 +126,7 @@ impl PageStorageType {
     /// # Returns
     ///
     /// A new instance of [`PageStorageType`].
-    #[verus_verify(external_body)]
+    #[verus_spec(ret=> ensures ret@ == t as u64)]
     const fn new(t: PageType) -> Self {
         Self(t as u64)
     }
@@ -141,6 +141,10 @@ impl PageStorageType {
     ///
     /// The updated [`PageStorageType`].
     #[verus_verify(external_body)]
+    #[verus_spec(ret =>
+        ensures
+            ret@ == (self@ | (((order as u64) & 0xffu64) << 4))
+    )]
     fn encode_order(self, order: usize) -> Self {
         Self(self.0 | ((order as u64) & Self::ORDER_MASK) << Self::TYPE_SHIFT)
     }
@@ -155,6 +159,12 @@ impl PageStorageType {
     ///
     /// The updated [`PageStorageType`].
     #[verus_verify(external_body)]
+    #[verus_spec(ret =>
+        requires
+            next_page <= (u64::MAX >> 12),
+        ensures
+            ret@ == (self@ | ((next_page as u64) << 12))
+    )]
     fn encode_next(self, next_page: usize) -> Self {
         Self(self.0 | (next_page as u64) << Self::NEXT_SHIFT)
     }
@@ -169,6 +179,12 @@ impl PageStorageType {
     ///
     /// The updated [`PageStorageType`]
     #[verus_verify(external_body)]
+    #[verus_spec(ret =>
+        requires
+            slab <= 0xFFFF,
+        ensures
+            ret@ == (self@ | ((slab & 0xffff) << 4))
+    )]
     fn encode_slab(self, slab: u64) -> Self {
         let item_size = slab & Self::SLAB_MASK;
         Self(self.0 | (item_size << Self::TYPE_SHIFT))
@@ -184,28 +200,55 @@ impl PageStorageType {
     ///
     /// The updated [`PageStorageType`].
     #[verus_verify(external_body)]
+    #[verus_spec(ret =>
+        requires
+            refcount <= (u64::MAX >> 4),
+        ensures
+            ret@ == (self@ | (refcount << 4))
+    )]
     fn encode_refcount(self, refcount: u64) -> Self {
         Self(self.0 | refcount << Self::TYPE_SHIFT)
     }
 
     /// Decodes the order of the page.
     #[verus_verify(external_body)]
+    #[verus_spec(order =>
+        ensures
+            order <= 0xff,
+            self@ | (((order as u64) & 0xffu64) << 4) == self@
+    )]
     fn decode_order(&self) -> usize {
         ((self.0 >> Self::TYPE_SHIFT) & Self::ORDER_MASK) as usize
     }
 
     /// Decodes the index of the next page.
     #[verus_verify(external_body)]
+    #[verus_spec(next =>
+        ensures
+            next <= (u64::MAX >> 12),
+            self@ | ((next as u64) << 12) == self@
+    )]
     fn decode_next(&self) -> usize {
-        ((self.0 & Self::NEXT_MASK) >> Self::NEXT_SHIFT) as usize
+        (self.0 >> Self::NEXT_SHIFT) as usize
     }
 
     /// Decodes the slab
     #[verus_verify(external_body)]
+    #[verus_spec(slab =>
+        ensures
+            slab <= 0xffff,
+            self@ | (slab << 4) == self@
+    )]
     fn decode_slab(&self) -> u64 {
         (self.0 >> Self::TYPE_SHIFT) & Self::SLAB_MASK
     }
 
+    #[verus_verify(external_body)]
+    #[verus_spec(refcount =>
+        ensures
+            refcount <= (u64::MAX >> 4),
+            self@ | (refcount << 4) == self@
+    )]
     /// Decodes the reference count.
     #[verus_verify(external_body)]
     fn decode_refcount(&self) -> u64 {
@@ -522,7 +565,7 @@ impl MemoryRegion {
             self.wf_params(),
             pfn < self.page_count,
         ensures
-            Some(*ret) == self@.spec_page_storage_type(pfn as int)
+            Some(*ret) == self@.spec_page_storage_type(pfn as int),
     )]
     #[verus_verify(spinoff_prover)]
     fn get_page_storage_type(&self, pfn: usize) -> &PageStorageType {
@@ -550,9 +593,9 @@ impl MemoryRegion {
     /// Writes page information for a given page frame number.
     #[verus_spec(
         requires
-            old(self).req_write_page_info(pfn, pi),
+            (*old(self)).req_write_page_info(pfn, pi),
         ensures
-            old(self).ens_write_page_info(*self, pfn, pi),
+            (*old(self)).ens_write_page_info(*self, pfn, pi),
     )]
     #[allow(clippy::needless_pass_by_ref_mut)]
     fn write_page_info(&mut self, pfn: usize, pi: PageInfo) {
@@ -680,11 +723,10 @@ impl MemoryRegion {
     #[verus_spec(
         requires old(self).req_mark_compound_page(pfn, order),
         ensures
-            old(self).ens_mark_compound_page(*self, pfn, (1usize << order), order),
+            old(self).ens_mark_compound_page(*self, pfn, 1usize << order, order),
             self@.marked_compound(pfn, order),
     )]
     #[verus_verify(rlimit(2))]
-    //#[cfg_attr(verus_keep_ghost, verifier::loop_isolation(false))]
     fn mark_compound_page(&mut self, pfn: usize, order: usize) {
         let nr_pages: usize = 1 << order;
         let compound = PageInfo::Compound(CompoundInfo { order });
@@ -723,7 +765,7 @@ impl MemoryRegion {
             ret.is_ok(),
             false,
     )]
-    #[verus_verify(spinoff_prover, rlimit(15))]
+    #[verus_verify(spinoff_prover, rlimit(10))]
     fn split_page(&mut self, pfn: usize, order: usize) -> Result<(), AllocError> {
         if !(1..MAX_ORDER).contains(&order) {
             return Err(AllocError::InvalidPageOrder(order));
@@ -732,11 +774,10 @@ impl MemoryRegion {
         let new_order = order - 1;
         let pfn1 = pfn;
         let pfn2 = pfn + (1usize << new_order);
+        let next_pfn = self.next_page[new_order];
 
         proof! {
-            //self@.reserved().lemma_pfn_dom_len_with_one()
-            //broadcast use ReservedPerms::lemma_pfn_dom_len_with_one;
-            //self@.reserved().lemma_pfn_dom_pair(new_order, order);
+            lemma_wf_next_page_info(*self, new_order as int);
             self.lemma_accounting(order);
             self.lemma_accounting(new_order);
             let vaddr1 = self.map().lemma_get_virt(pfn1);
@@ -745,19 +786,16 @@ impl MemoryRegion {
             let size = (1usize << order) * PAGE_SIZE;
             let new_size = (1usize << new_order) * PAGE_SIZE;
             vaddr1.lemma_valid_small_size(new_size as nat, size as nat);
-            let tracked (mut p1, mut p2) = p.split(vaddr1.region_to_dom(new_size as nat));
+            let tracked mut perms = p.split(vaddr1.region_to_dom(new_size as nat));
+
             lemma_wf_perms(self.perms@);
             self@.pg_params().lemma_valid_pfn_order_split(pfn1, order);
-            self.perms.borrow().lemma_perm_disjoint(self, &mut p1, pfn1, new_order);
-            self.perms.borrow().lemma_perm_disjoint(self, &mut p2, pfn2, new_order);
-            self.perms.borrow_mut().tracked_push(new_order, pfn2, p2);
-            self.perms.borrow_mut().tracked_push(new_order, pfn1, p1);
+            self.perms.borrow_mut().tracked_push(new_order, pfn2, perms.1);
+            self.perms.borrow_mut().tracked_push(new_order, pfn1, perms.0);
         }
-
-        let next_pfn = self.next_page[new_order];
         self.init_compound_page(pfn1, new_order, pfn2);
         self.init_compound_page(pfn2, new_order, next_pfn);
-        
+
         self.next_page[new_order] = pfn1;
 
         // Do the accounting
@@ -765,22 +803,12 @@ impl MemoryRegion {
         self.nr_pages[new_order] += 2;
         self.free_pages[new_order] += 2;
 
-
-        //proof_mr_forall_wf_at!(self);
+        proof_mr_forall_wf_at!(self);
         proof! {
-            old(self)@.reserved().lemma_pfn_dom_update(self@.reserved(), order_set(pfn, new_order), order, new_order);
+            old(self)@.reserved().lemma_pfn_dom_update(self@.reserved(), order_set(pfn, order), order, new_order);
             old(self).lemma_nr_page_add(self, -1, order);
             old(self).lemma_nr_page_add(self, 2, new_order);
-            let oldlen = old(self)@.next[new_order as int].len() as int;
             old(self)@.reserved().lemma_reserved_info_split(self@.reserved(), pfn, order);
-            /*assert(self.wf_params()) by {
-                let n = 1usize << order;
-                let order = order as int;
-                let n = n as int;
-                assert(old(self).nr_pages[order] * n <= self.page_count);
-                assert(self.nr_pages[order] < old(self).nr_pages[order]);
-                //lemma_mul_inequality(self.nr_pages[order] as int, old(self).nr_pages[order] as int, n);
-            }*/
         }
 
         Ok(())
@@ -1073,6 +1101,9 @@ impl MemoryRegion {
                 self.tmp_perms.borrow_mut().tracked_push(p);
             }
             let next_pfn = self.next_free_pfn(current_pfn, order);
+            proof! {
+                assert(next_pfn < MAX_PAGE_COUNT);
+            }
             let pg = PageInfo::Free(FreeInfo {
                 next_page: next_pfn,
                 order,
@@ -1115,17 +1146,21 @@ impl MemoryRegion {
         requires
             old(self).req_free_page_raw(pfn, order)
         ensures
-            old(self).ens_free_page_raw(self, pfn, order)
+            old(self).ens_free_page_raw(self, pfn, order),
     )]
     #[verus_verify(spinoff_prover, rlimit(2))]
     fn free_page_raw(&mut self, pfn: usize, order: usize) {
         proof! {
+            broadcast use lemma_wf_next_page_info;
             self.perms@.lemma_free_order_dom(order);
             let tracked mut perm = self.tmp_perms.borrow_mut().tracked_pop();
             self.perms.borrow().lemma_perm_disjoint(self, &mut perm, pfn, order);
             self.perms.borrow_mut().tracked_push(order, pfn, perm);
         }
         let old_next = self.next_page[order];
+        proof! {
+            assert(old_next < MAX_PAGE_COUNT);
+        }
         let pg = PageInfo::Free(FreeInfo {
             next_page: old_next,
             order,

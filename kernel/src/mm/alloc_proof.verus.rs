@@ -346,10 +346,10 @@ impl<const N: usize> ReservedPerms<N> {
         requires
             self.wf_dom(),
             0 <= order < N,
-            0 <= size <= 1usize << order,
+            0 <= size <= (1usize << order),
             self.valid_pfn_order(pfn, order),
             forall|i: usize|
-                pfn <= i < pfn + size ==> #[trigger] self.spec_page_info(i).unwrap().get_order()
+                (pfn <= i < pfn + size) ==> (#[trigger] self.spec_page_info(i)).unwrap().get_order()
                     == order,
         ensures
             self.pfn_dom(order).filter(|i| pfn <= i < pfn + size).len() == size,
@@ -363,6 +363,10 @@ impl<const N: usize> ReservedPerms<N> {
             self.lemma_marked_order_len_rec(pfn, order, size - 1);
             let s3 = set_int_range(pfn + size - 1, pfn + size);
             vstd::set_lib::lemma_int_range(pfn + size - 1, pfn + size);
+            let i = pfn + size - 1;
+            assert((pfn <= (i as usize) < pfn + size));
+            assert(self.spec_page_info(i as usize).unwrap().get_order()
+            == order);
             assert(s1 =~= s2 + s3);
             self.lemma_pfn_dom(order);
             vstd::set_lib::lemma_set_disjoint_lens(s2, s3);
@@ -535,6 +539,7 @@ impl<const N: usize> ReservedPerms<N> {
     }
 
     #[verifier::spinoff_prover]
+    #[verifier::rlimit(2)]
     proof fn lemma_reserved_info_content_higher_pfn(
         &self,
         new: Self,
@@ -912,6 +917,7 @@ impl<VAddr: SpecVAddrImpl, const N: usize> MemoryRegionTracked<VAddr, N> {
         };
         assert(ret.reserved.dom() =~= set_int_range(0, 0));
         reveal(ReservedPerms::wf_page_info);
+        assert(ret.pfn_to_virt.len() == 0);
         ret
     }
 
@@ -1064,7 +1070,7 @@ broadcast proof fn lemma_wf_next_page_info(mr: MemoryRegion, order: int)
         0 <= order < MAX_ORDER,
     ensures
         #![trigger mr.next_page[order]]
-        mr.next_page[order] > 0 ==> mr@.wf_next(order),
+        mr@.wf_next(order),
         mr.next_page[order] == 0 || mr.next_page[order] < mr.page_count,
         (mr@.next_page(order) == 0) == (mr.free_pages[order] == 0),
         (mr@.next_next_page(order) == 0) ==> (mr.free_pages[order] <= 1),

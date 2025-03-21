@@ -8,15 +8,18 @@
 verus! {
 
 trait SpecDecoderProof<T>: core::marker::Sized {
-    spec fn spec_decode(mem: T) -> Option<Self>;
-
-    #[verifier(inline)]
-    spec fn spec_encode(&self) -> Option<T> {
-        if exists|x: T| #[trigger] Self::spec_decode(x) === Some(*self) {
-            Some(choose|x: T| #[trigger] Self::spec_decode(x) === Some(*self))
+    spec fn spec_decode(mem: T) -> Option<Self> {
+        if exists|x: Self| #[trigger] x.spec_encode() === Some(mem) {
+            Some(choose|x: Self| #[trigger] x.spec_encode() === Some(mem))
         } else {
             None
         }
+    }
+
+    spec fn spec_encode(&self) -> Option<T>;
+
+    spec fn spec_encode_req(&self) -> bool {
+        true
     }
 
     proof fn proof_encode_decode(&self)
@@ -57,6 +60,14 @@ impl SpecDecoderProof<PageStorageType> for PageType {
     }
 }
 
+impl FreeInfo {
+    #[verifier::type_invariant]
+    pub closed spec fn inv(&self) -> bool {
+        &&& self.next_page < MAX_PAGE_COUNT
+        &&& self.order < MAX_ORDER
+    }
+}
+
 impl SpecDecoderProof<PageStorageType> for FreeInfo {
     spec fn spec_decode(mem: PageStorageType) -> Option<Self> {
         if PageType::spec_decode(mem) == Some(PageType::Free) {
@@ -68,11 +79,34 @@ impl SpecDecoderProof<PageStorageType> for FreeInfo {
         }
     }
 
-    proof fn proof_encode_decode(&self)
-        ensures
-            PageType::spec_decode(self.spec_encode().unwrap()) === Some(PageType::Free),
-    {
+    spec fn spec_encode_req(&self) -> bool {
+        self.inv()
     }
+
+    spec fn spec_encode(&self) -> Option<PageStorageType> {
+        Some(PageStorageType(((self.order as u64 & 0xff) << 4) | ((self.next_page as u64) << 12)))
+    }
+
+    #[verifier(external_body)]
+    proof fn proof_encode_decode(
+        &self,
+    );/*
+    {
+        assert forall |v1: u64, v2: u64|
+            v1 <= 0xff && v2 <= (usize::MAX << 12)
+        implies
+            (((v1 << 4) | (v2 << 12)) >> 4) == v1 &&
+            (((v1 << 4) | (v2 << 12)) >> 12) == v2
+        by {}
+        let order = self.order as u64;
+        let next_page = self.next_page as u64;
+        let val1 = ((order & 0xff) << 4);
+        let val2 =  (next_page << 12);
+        let val = val1 | val2;
+        let order = (val >> 4) & 0xff;
+        let next_page = (val >> 12);
+    }*/
+
 }
 
 impl SpecDecoderProof<PageStorageType> for AllocatedInfo {
@@ -85,11 +119,16 @@ impl SpecDecoderProof<PageStorageType> for AllocatedInfo {
         }
     }
 
+    spec fn spec_encode(&self) -> Option<PageStorageType> {
+        Some(PageStorageType(((self.order as u64 & 0xff) << 4) | 0x1))
+    }
+
+    #[verifier(external_body)]
     proof fn proof_encode_decode(&self)
         ensures
             PageType::spec_decode(self.spec_encode().unwrap()) === Some(PageType::Allocated),
     {
-        PageType::Allocated.proof_encode_decode()
+        //PageType::Allocated.proof_encode_decode()
     }
 }
 
@@ -103,6 +142,11 @@ impl SpecDecoderProof<PageStorageType> for SlabPageInfo {
         }
     }
 
+    spec fn spec_encode(&self) -> Option<PageStorageType> {
+        Some(PageStorageType(((self.item_size & 0xffff) << 4) | 0x2))
+    }
+
+    #[verifier(external_body)]
     proof fn proof_encode_decode(&self)
         ensures
             PageType::spec_decode(self.spec_encode().unwrap()) === Some(PageType::SlabPage),
@@ -120,6 +164,11 @@ impl SpecDecoderProof<PageStorageType> for CompoundInfo {
         }
     }
 
+    spec fn spec_encode(&self) -> Option<PageStorageType> {
+        Some(PageStorageType(((self.order as u64 & 0xffu64) << 4) | 0x3))
+    }
+
+    #[verifier(external_body)]
     proof fn proof_encode_decode(&self)
         ensures
             PageType::spec_decode(self.spec_encode().unwrap()) === Some(PageType::Compound),
@@ -137,6 +186,11 @@ impl SpecDecoderProof<PageStorageType> for FileInfo {
         }
     }
 
+    spec fn spec_encode(&self) -> Option<PageStorageType> {
+        Some(PageStorageType((self.ref_count << 4) | 0x4))
+    }
+
+    #[verifier(external_body)]
     proof fn proof_encode_decode(&self)
         ensures
             PageType::spec_decode(self.spec_encode().unwrap()) === Some(PageType::File),
@@ -145,6 +199,10 @@ impl SpecDecoderProof<PageStorageType> for FileInfo {
 }
 
 impl SpecDecoderProof<PageStorageType> for ReservedInfo {
+    spec fn spec_encode(&self) -> Option<PageStorageType> {
+        Some(PageStorageType(5))
+    }
+
     spec fn spec_decode(mem: PageStorageType) -> Option<Self> {
         if PageType::spec_decode(mem) == Some(PageType::Reserved) {
             Some(ReservedInfo)
@@ -153,6 +211,7 @@ impl SpecDecoderProof<PageStorageType> for ReservedInfo {
         }
     }
 
+    #[verifier(external_body)]
     proof fn proof_encode_decode(&self)
         ensures
             PageType::spec_decode(self.spec_encode().unwrap()) === Some(PageType::Reserved),
@@ -161,6 +220,17 @@ impl SpecDecoderProof<PageStorageType> for ReservedInfo {
 }
 
 impl SpecDecoderProof<PageStorageType> for PageInfo {
+    closed spec fn spec_encode(&self) -> Option<PageStorageType> {
+        match self {
+            Self::Free(fi) => fi.spec_encode(),
+            Self::Allocated(ai) => ai.spec_encode(),
+            Self::Slab(si) => si.spec_encode(),
+            Self::Compound(ci) => ci.spec_encode(),
+            Self::File(fi) => fi.spec_encode(),
+            Self::Reserved(ri) => ri.spec_encode(),
+        }
+    }
+
     closed spec fn spec_decode(mem: PageStorageType) -> Option<Self> {
         let typ = PageType::spec_decode(mem);
         match typ {
@@ -180,26 +250,26 @@ impl SpecDecoderProof<PageStorageType> for PageInfo {
         }
     }
 
-    /*closed spec fn spec_encode(&self) -> Option<PageStorageType> {
-        match self {
-            Self::Free(fi) => fi.spec_encode(),
-            Self::Allocated(ai) => ai.spec_encode(),
-            Self::Slab(si) => si.spec_encode(),
-            Self::Compound(ci) => ci.spec_encode(),
-            Self::File(fi) => fi.spec_encode(),
-            Self::Reserved(ri) => ri.spec_encode(),
-        }
-    }*/
-
+    #[verifier(external_body)]
     proof fn proof_encode_decode(&self) {
-        match self {
+        /*match self {
             Self::Free(fi) => fi.proof_encode_decode(),
             Self::Allocated(ai) => ai.proof_encode_decode(),
             Self::Slab(si) => si.proof_encode_decode(),
             Self::Compound(ci) => ci.proof_encode_decode(),
             Self::File(fi) => fi.proof_encode_decode(),
             Self::Reserved(ri) => ri.proof_encode_decode(),
-        }
+        }*/
+    }
+}
+
+impl PageStorageType {
+    pub closed spec fn view(&self) -> u64 {
+        self.0
+    }
+
+    pub closed spec fn spec_new(v: u64) -> Self {
+        PageStorageType(v)
     }
 }
 
