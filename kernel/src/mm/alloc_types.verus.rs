@@ -16,7 +16,14 @@ trait SpecDecoderProof<T>: core::marker::Sized {
         }
     }
 
-    spec fn spec_encode(&self) -> Option<T>;
+    spec fn spec_encode(&self) -> Option<T>; 
+    /*{
+        if exists|x: T| #[trigger] Self::spec_decode(x) === Some(*self) {
+            Some(choose|x: T| #[trigger] Self::spec_decode(x) === Some(*self))
+        } else {
+            None
+        }
+    }*/
 
     spec fn spec_encode_req(&self) -> bool {
         true
@@ -31,28 +38,8 @@ trait SpecDecoderProof<T>: core::marker::Sized {
 }
 
 impl SpecDecoderProof<PageStorageType> for PageType {
-    spec fn spec_decode(mem: PageStorageType) -> Option<Self> {
-        match mem.0 {
-            0 => Some(PageType::Free),
-            1 => Some(PageType::Allocated),
-            2 => Some(PageType::SlabPage),
-            3 => Some(PageType::Compound),
-            4 => Some(PageType::File),
-            15 => Some(PageType::Reserved),
-            _ => None,
-        }
-    }
-
     spec fn spec_encode(&self) -> Option<PageStorageType> {
-        let val = match self {
-            PageType::Free => 0,
-            PageType::Allocated => 1,
-            PageType::SlabPage => 2,
-            PageType::Compound => 3,
-            PageType::File => 4,
-            PageType::Reserved => 15,
-        };
-        Some(PageStorageType(val))
+        Some(PageStorageType(*self as u64))
     }
 
     #[verifier::spinoff_prover]
@@ -84,18 +71,18 @@ impl SpecDecoderProof<PageStorageType> for FreeInfo {
     }
 
     spec fn spec_encode(&self) -> Option<PageStorageType> {
-        Some(PageStorageType(((self.order as u64 & 0xff) << 4) | ((self.next_page as u64) << 12)))
+        Some(PageStorageType(((self.order as u64 & 0xff) << 4) | ((self.next_page as u64) << 12) | PageType::Free as u64))
     }
 
     #[verifier(external_body)]
     proof fn proof_encode_decode(
         &self,
-    );/*
-    {
+    );
+    /*{
         assert forall |v1: u64, v2: u64|
             v1 <= 0xff && v2 <= (usize::MAX << 12)
         implies
-            (((v1 << 4) | (v2 << 12)) >> 4) == v1 &&
+            (((v1 << 4) | (v2 << 12)) >> 4) & 0xff == v1 &&
             (((v1 << 4) | (v2 << 12)) >> 12) == v2
         by {}
         let order = self.order as u64;
@@ -120,7 +107,7 @@ impl SpecDecoderProof<PageStorageType> for AllocatedInfo {
     }
 
     spec fn spec_encode(&self) -> Option<PageStorageType> {
-        Some(PageStorageType(((self.order as u64 & 0xff) << 4) | 0x1))
+        Some(PageStorageType(((self.order as u64 & 0xff) << 4) | PageType::Allocated as u64))
     }
 
     #[verifier(external_body)]
@@ -143,7 +130,7 @@ impl SpecDecoderProof<PageStorageType> for SlabPageInfo {
     }
 
     spec fn spec_encode(&self) -> Option<PageStorageType> {
-        Some(PageStorageType(((self.item_size & 0xffff) << 4) | 0x2))
+        Some(PageStorageType(((self.item_size & 0xffff) << 4) | PageType::SlabPage as u64))
     }
 
     #[verifier(external_body)]
@@ -165,7 +152,7 @@ impl SpecDecoderProof<PageStorageType> for CompoundInfo {
     }
 
     spec fn spec_encode(&self) -> Option<PageStorageType> {
-        Some(PageStorageType(((self.order as u64 & 0xffu64) << 4) | 0x3))
+        Some(PageStorageType(((self.order as u64 & 0xffu64) << 4) | PageType::Compound as u64))
     }
 
     #[verifier(external_body)]
@@ -187,7 +174,7 @@ impl SpecDecoderProof<PageStorageType> for FileInfo {
     }
 
     spec fn spec_encode(&self) -> Option<PageStorageType> {
-        Some(PageStorageType((self.ref_count << 4) | 0x4))
+        Some(PageStorageType((self.ref_count << 4) | PageType::File as u64))
     }
 
     #[verifier(external_body)]
@@ -200,7 +187,7 @@ impl SpecDecoderProof<PageStorageType> for FileInfo {
 
 impl SpecDecoderProof<PageStorageType> for ReservedInfo {
     spec fn spec_encode(&self) -> Option<PageStorageType> {
-        Some(PageStorageType(5))
+        Some(PageStorageType(PageType::Reserved as u64))
     }
 
     spec fn spec_decode(mem: PageStorageType) -> Option<Self> {
@@ -231,35 +218,48 @@ impl SpecDecoderProof<PageStorageType> for PageInfo {
         }
     }
 
-    closed spec fn spec_decode(mem: PageStorageType) -> Option<Self> {
-        let typ = PageType::spec_decode(mem);
-        match typ {
-            Some(typ) => Some(
-                match typ {
-                    PageType::Free => Self::Free(FreeInfo::spec_decode(mem).unwrap()),
-                    PageType::Allocated => Self::Allocated(
-                        AllocatedInfo::spec_decode(mem).unwrap(),
-                    ),
-                    PageType::SlabPage => Self::Slab(SlabPageInfo::spec_decode(mem).unwrap()),
-                    PageType::Compound => Self::Compound(CompoundInfo::spec_decode(mem).unwrap()),
-                    PageType::File => Self::File(FileInfo::spec_decode(mem).unwrap()),
-                    PageType::Reserved => Self::Reserved(ReservedInfo::spec_decode(mem).unwrap()),
-                },
-            ),
-            _ => { None },
+    uninterp spec fn spec_decode(v: PageStorageType) -> Option<PageInfo>; /*{
+        let mem_type = PageType::spec_decode(PageStorageType(v.0 & 0xF));
+        if mem_type.is_none() {
+            None
+        } else {
+            match mem_type.unwrap() {
+                PageType::Free => if let Some(fi) = FreeInfo::spec_decode(v) {
+                    Some(PageInfo::Free(fi))
+                } else {
+                    None
+                }
+                PageType::Allocated => if let Some(fi) = AllocatedInfo::spec_decode(v) {
+                    Some(PageInfo::Allocated(fi))
+                } else {
+                    None
+                }
+                PageType::SlabPage => if let Some(fi) = SlabPageInfo::spec_decode(v) {
+                    Some(PageInfo::Slab(fi))
+                } else {
+                    None
+                }
+                PageType::Compound => if let Some(fi) = CompoundInfo::spec_decode(v) {
+                    Some(PageInfo::Compound(fi))
+                } else {
+                    None
+                }
+                PageType::File => if let Some(fi) = FileInfo::spec_decode(v) {
+                    Some(PageInfo::File(fi))
+                } else {
+                    None
+                }
+                PageType::Reserved => if let Some(fi) = ReservedInfo::spec_decode(v) {
+                    Some(PageInfo::Reserved(fi))
+                } else {
+                    None
+                }
+            }
         }
-    }
+    }*/
 
     #[verifier(external_body)]
     proof fn proof_encode_decode(&self) {
-        /*match self {
-            Self::Free(fi) => fi.proof_encode_decode(),
-            Self::Allocated(ai) => ai.proof_encode_decode(),
-            Self::Slab(si) => si.proof_encode_decode(),
-            Self::Compound(ci) => ci.proof_encode_decode(),
-            Self::File(fi) => fi.proof_encode_decode(),
-            Self::Reserved(ri) => ri.proof_encode_decode(),
-        }*/
     }
 }
 

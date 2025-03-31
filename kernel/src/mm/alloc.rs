@@ -704,17 +704,13 @@ impl MemoryRegion {
         };
 
         self.next_page[order] = fi.next_page;
+        self.free_pages[order] -= 1;
+
         proof! {
             let tracked perm = self.perms.borrow_mut().tracked_pop_next(order);
             self.tmp_perms.borrow_mut().tracked_push(perm);
-            assert forall |o: int, i: int| 0<= o < MAX_ORDER && 0 <= i < self@.next[o].len()
-            implies order_disjoint(#[trigger]self@.next[o][i], o as usize, pfn, order as usize)
-            by {
-                old(self)@.lemma_unique_pfn(o, i, order as int, self@.next[order as int].len() as int);
-            }
+            self.perms.borrow().lemma_tmp_perm_disjoint(self, self.tmp_perms.borrow_mut(), pfn, order);
         }
-
-        self.free_pages[order] -= 1;
 
         Ok(pfn)
     }
@@ -763,7 +759,6 @@ impl MemoryRegion {
             old(self).ens_split_page_ok(&*self, pfn, order),
             self.wf(),
             ret.is_ok(),
-            false,
     )]
     #[verus_verify(spinoff_prover, rlimit(10))]
     fn split_page(&mut self, pfn: usize, order: usize) -> Result<(), AllocError> {
@@ -979,8 +974,10 @@ impl MemoryRegion {
 
         proof! {
             self@.reserved().lemma_pfn_dom_len_with_two(pfn1, pfn2, order);
+            let size = (1usize << order);
+            assert(size * 2 / size as int == 2) by (nonlinear_arith) requires size > 0;
+            assert(self.nr_pages[order as int] >= 2);
             self.lemma_accounting(new_order);
-            assert(self@.reserved().pfn_dom(order).len() >= (1usize <<order));
             tracked_merge(self.tmp_perms.borrow_mut(), self.map(), pfn1, pfn2, order)
         }
 
@@ -1015,13 +1012,14 @@ impl MemoryRegion {
         ensures
             self@.get_free_info(pfn as int).is_some(),
             self@.get_free_info(pfn as int).unwrap().next_page == ret,
+            ret < MAX_PAGE_COUNT,
     )]
     fn next_free_pfn(&self, pfn: usize, order: usize) -> usize {
         let page = self.read_page_info(pfn);
         let PageInfo::Free(fi) = page else {
             panic!("Unexpected page type in free-list for order {}", order);
         };
-
+        proof!{use_type_invariant(fi);}
         fi.next_page
     }
 
