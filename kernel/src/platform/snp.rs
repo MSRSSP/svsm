@@ -4,9 +4,11 @@
 //
 // Author: Jon Lange <jlange@microsoft.com>
 
+use super::capabilities::Caps;
 use super::snp_fw::{
     copy_tables_to_fw, launch_fw, prepare_fw_launch, print_fw_meta, validate_fw, validate_fw_memory,
 };
+use super::{PageEncryptionMasks, PageStateChangeOp, PageValidateOp, SvsmPlatform};
 use crate::address::{Address, PhysAddr, VirtAddr};
 use crate::config::SvsmConfig;
 use crate::console::init_svsm_console;
@@ -16,11 +18,9 @@ use crate::cpu::tlb::TlbFlushScope;
 use crate::error::ApicError::Registration;
 use crate::error::SvsmError;
 use crate::greq::driver::guest_request_driver_init;
-use crate::hyperv;
 use crate::io::IOPort;
 use crate::mm::memory::write_guest_memory_map;
 use crate::mm::{PerCPUPageMappingGuard, PAGE_SIZE, PAGE_SIZE_2M};
-use crate::platform::{PageEncryptionMasks, PageStateChangeOp, PageValidateOp, SvsmPlatform};
 use crate::sev::ghcb::GHCBIOSize;
 use crate::sev::hv_doorbell::current_hv_doorbell;
 use crate::sev::msr_protocol::{
@@ -34,6 +34,7 @@ use crate::sev::{
 use crate::types::PageSize;
 use crate::utils::immut_after_init::ImmutAfterInitCell;
 use crate::utils::MemoryRegion;
+use syscall::GlobalFeatureFlags;
 
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
@@ -185,6 +186,24 @@ impl SvsmPlatform for SnpPlatform {
         }
     }
 
+    fn determine_cet_support(&self) -> bool {
+        // Examine CPUID information to see whether CET is supported by the
+        // hypervisor.  If no CPUID information is present, then assume that
+        // CET is supported.
+        if let Some(cpuid) = cpuid_table(7) {
+            (cpuid.ecx & 0x80) != 0
+        } else {
+            todo!()
+        }
+    }
+
+    fn capabilities(&self) -> Caps {
+        // VMPL0 is SVSM. VMPL1 to VMPL3 are guest.
+        let vm_bitmap: u64 = 0xE;
+        let features = GlobalFeatureFlags::PLATFORM_TYPE_SNP;
+        Caps::new(vm_bitmap, features)
+    }
+
     fn cpuid(&self, eax: u32) -> Option<CpuidResult> {
         cpuid_table(eax)
     }
@@ -321,12 +340,8 @@ impl SvsmPlatform for SnpPlatform {
         false
     }
 
-    fn start_cpu(
-        &self,
-        cpu: &PerCpu,
-        context: &hyperv::HvInitialVpContext,
-    ) -> Result<(), SvsmError> {
-        let (vmsa_pa, sev_features) = cpu.alloc_svsm_vmsa(*VTOM as u64, context)?;
+    fn start_cpu(&self, cpu: &PerCpu, start_rip: u64) -> Result<(), SvsmError> {
+        let (vmsa_pa, sev_features) = cpu.alloc_svsm_vmsa(*VTOM as u64, start_rip)?;
 
         current_ghcb().ap_create(vmsa_pa, cpu.get_apic_id().into(), 0, sev_features)
     }

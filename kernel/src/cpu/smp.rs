@@ -6,6 +6,7 @@
 
 use crate::acpi::tables::ACPICPUInfo;
 use crate::address::{Address, VirtAddr};
+use crate::cpu::efer::EFERFlags;
 use crate::cpu::idt::idt;
 use crate::cpu::percpu::{cpu_idle_loop, this_cpu, this_cpu_shared, PerCpu};
 use crate::cpu::shadow_stack::{is_cet_ss_supported, SCetFlags, MODE_64BIT, S_CET};
@@ -29,8 +30,7 @@ fn start_cpu(platform: &dyn SvsmPlatform, apic_id: u32) -> Result<(), SvsmError>
     let pgtable = this_cpu().get_pgtable().clone_shared()?;
     percpu.setup(platform, pgtable)?;
 
-    let context = percpu.get_initial_context(start_rip);
-    platform.start_cpu(percpu, &context)?;
+    platform.start_cpu(percpu, start_rip)?;
 
     let percpu_shared = percpu.shared();
     while !percpu_shared.is_online() {}
@@ -92,8 +92,14 @@ global_asm!(
          * environment and context structure from the address space. */
         movq    %r8, %cr0
         movq    %r10, %cr4
+
+        /* Check to see whether EFER.LME is specified.  If not, then EFER
+         * should not be reloaded. */
+        testl   ${LME}, %eax
+        je      1f
         movl    $0xC0000080, %ecx   /* EFER */
         wrmsr
+    1:
         movq    %r9, %cr3
 
         /* Make sure stack frames are 16b-aligned */
@@ -115,6 +121,7 @@ global_asm!(
         call    *%r12
         int3
         "#,
+    LME = const EFERFlags::LME.bits(),
     options(att_syntax)
 );
 

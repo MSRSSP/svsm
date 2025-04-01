@@ -6,6 +6,8 @@
 // Author: Jon Lange <jlange@microsoft.com>
 // Author: Joerg Roedel <jroedel@suse.de>
 
+use super::capabilities::Caps;
+use super::{PageEncryptionMasks, PageStateChangeOp, PageValidateOp, SvsmPlatform};
 use crate::address::{PhysAddr, VirtAddr};
 use crate::console::init_svsm_console;
 use crate::cpu::apic::{ApicIcr, IcrMessageType};
@@ -15,13 +17,12 @@ use crate::cpu::percpu::PerCpu;
 use crate::cpu::smp::create_ap_start_context;
 use crate::cpu::x86::apic::{x2apic_enable, x2apic_eoi, x2apic_icr_write};
 use crate::error::SvsmError;
-use crate::hyperv;
 use crate::hyperv::{hyperv_setup_hypercalls, hyperv_start_cpu, is_hyperv_hypervisor};
 use crate::io::{IOPort, DEFAULT_IO_DRIVER};
 use crate::mm::PerCPUPageMappingGuard;
-use crate::platform::{PageEncryptionMasks, PageStateChangeOp, PageValidateOp, SvsmPlatform};
 use crate::types::{PageSize, PAGE_SIZE};
 use crate::utils::MemoryRegion;
+use syscall::GlobalFeatureFlags;
 
 use bootlib::kernel_launch::{ApStartContext, SIPI_STUB_GPA};
 use core::{mem, ptr};
@@ -98,6 +99,11 @@ impl SvsmPlatform for NativePlatform {
             addr_mask_width: 64,
             phys_addr_sizes: res.eax,
         }
+    }
+
+    fn capabilities(&self) -> Caps {
+        let features = GlobalFeatureFlags::PLATFORM_TYPE_NATIVE;
+        Caps::new(0, features)
     }
 
     fn cpuid(&self, eax: u32) -> Option<CpuidResult> {
@@ -179,18 +185,15 @@ impl SvsmPlatform for NativePlatform {
         false
     }
 
-    fn start_cpu(
-        &self,
-        cpu: &PerCpu,
-        context: &hyperv::HvInitialVpContext,
-    ) -> Result<(), SvsmError> {
+    fn start_cpu(&self, cpu: &PerCpu, start_rip: u64) -> Result<(), SvsmError> {
+        let context = cpu.get_initial_context(start_rip);
         if self.is_hyperv {
-            return hyperv_start_cpu(cpu, context);
+            return hyperv_start_cpu(cpu, &context);
         }
 
         // Translate this context into an AP start context and place it it in
         // the AP startup transition page.
-        let ap_context = create_ap_start_context(context, self.transition_cr3);
+        let ap_context = create_ap_start_context(&context, self.transition_cr3);
 
         let context_pa = PhysAddr::new(SIPI_STUB_GPA as usize);
         let context_mapping = PerCPUPageMappingGuard::create_4k(context_pa)?;
