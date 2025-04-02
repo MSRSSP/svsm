@@ -98,7 +98,7 @@ pub struct UniqueByPtr {
 
 impl UniqueByPtr {
     // inst is only created once at the begining and thus all share the same inst_id;
-    pub closed spec fn spec_uniq_inst_id() -> InstanceId;
+    pub uninterp spec fn spec_uniq_inst_id() -> InstanceId;
 
     pub closed spec fn wf(&self) -> bool {
         &&& self.inst.id() == UniqueByPtr::spec_uniq_inst_id()
@@ -116,12 +116,12 @@ impl UniqueByPtr {
     }
 }
 
-pub struct FracPointToPerm<T> {
+pub struct FracTypedPerm<T> {
     p: FracPerm<PointsTo<T>>,
     unique: UniqueByPtr,
 }
 
-impl<T> FracPointToPerm<T> {
+impl<T> FracTypedPerm<T> {
     pub closed spec fn shares(&self) -> nat {
         self.p.shares()
     }
@@ -165,7 +165,7 @@ impl<T> FracPointToPerm<T> {
     }
 }
 
-impl<T> FracPointToPerm<T> {
+impl<T> FracTypedPerm<T> {
     #[verifier::type_invariant]
     pub closed spec fn wf(&self) -> bool {
         &&& self.p.wf()
@@ -189,7 +189,7 @@ impl<T> FracPointToPerm<T> {
         self.unique.inst.check_ids(self.addr(), self.p.id(), other.p.id(), &self.unique.id, &other.unique.id);
     }
 
-    pub proof fn extract(tracked self) -> (tracked ret: (PointsTo<T>, FracPointToPerm<T>))
+    pub proof fn extract(tracked self) -> (tracked ret: (PointsTo<T>, FracTypedPerm<T>))
     requires
         self.valid(),
         self.shares() == self.total(),
@@ -198,9 +198,9 @@ impl<T> FracPointToPerm<T> {
         !ret.1.valid(),
         ret.1.wf(),
     {
-        let tracked FracPointToPerm {p, unique} = self;
+        let tracked FracTypedPerm {p, unique} = self;
         let tracked (perm, p) = p.extract();
-        (perm, FracPointToPerm{p, unique})
+        (perm, FracTypedPerm{p, unique})
     }
 
     pub proof fn borrow(tracked &self) -> (tracked ret: &PointsTo<T>)
@@ -222,10 +222,10 @@ impl<T> FracPointToPerm<T> {
     {
         self.has_same_id(&other);
         self.p.is_same(&other.p);
-        let tracked FracPointToPerm {p: p1, unique} = self;
-        let tracked FracPointToPerm {p: p2, ..} = other;
+        let tracked FracTypedPerm {p: p1, unique} = self;
+        let tracked FracTypedPerm {p: p2, ..} = other;
         let tracked p = p1.merge(p2);
-        FracPointToPerm {p, unique}
+        FracTypedPerm {p, unique}
     }
 }
 }
