@@ -798,8 +798,9 @@ impl MemoryRegion {
         self.nr_pages[new_order] += 2;
         self.free_pages[new_order] += 2;
 
-        proof_mr_forall_wf_at!(self);
+        
         proof! {
+            proof_mr_forall_wf_at!(self);
             old(self)@.reserved().lemma_pfn_dom_update(self@.reserved(), order_set(pfn, order), order, new_order);
             old(self).lemma_nr_page_add(self, -1, order);
             old(self).lemma_nr_page_add(self, 2, new_order);
@@ -992,8 +993,9 @@ impl MemoryRegion {
         // not updated here.
         self.nr_pages[order] -= 2;
         self.nr_pages[new_order] += 1;
-        proof_mr_forall_wf_at!(self);
+        
         proof! {
+            proof_mr_forall_wf_at!(self);
             old(self)@.reserved().lemma_pfn_dom_update(self@.reserved(), order_set(pfn, new_order), order, new_order);
             old(self).lemma_nr_page_add(self, -2, order);
             old(self).lemma_nr_page_add(self, 1, new_order);
@@ -1168,8 +1170,9 @@ impl MemoryRegion {
         self.next_page[order] = pfn;
 
         self.free_pages[order] += 1;
-        proof_mr_forall_wf_at!(self);
+        
         proof! {
+            proof_mr_forall_wf_at!(self);
             assert(self@.wf_info()) by {
                 assert(self@.wf_at(order as int, old(self)@.next[order as int].len() as int));
                 assert forall|o, i| 0 <= o < MAX_ORDER && 0 <= i < self@.next[o].len()
