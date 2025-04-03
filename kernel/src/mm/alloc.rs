@@ -609,9 +609,10 @@ impl MemoryRegion {
         proof_decl! {
             let tracked perm = self.perms.borrow().reserved.tracked_borrow(pfn as int);
         }
-        #[cfg_attr(verus_keep_ghost, verus_spec(with Tracked(perm)))]
-        let v = self.page_info_pptr(pfn).v_borrow();
-        v
+        unsafe {
+            #[cfg_attr(verus_keep_ghost, verus_spec(with Tracked(perm)))]
+            self.page_info_pptr(pfn).v_borrow()
+        }
     }
 
     /// Checks if a page frame number is valid.
@@ -642,16 +643,16 @@ impl MemoryRegion {
         self.check_pfn(pfn);
 
         let info: PageStorageType = pi.to_mem();
-        // SAFETY: we have checked that the pfn is valid via check_pfn() above.
-        //unsafe { self.page_info_mut_ptr(pfn).write(info) };
+
         proof_decl! {
             let tracked mut perm = self.perms.borrow_mut().reserved.tracked_remove(pfn as int);
         }
-
-        #[cfg_attr(verus_keep_ghost, verus_spec(
-            with Tracked(&mut perm)
-        ))]
-        self.page_info_mut_ptr(pfn).v_write(info);
+        unsafe {
+            #[cfg_attr(verus_keep_ghost, verus_spec(
+                with Tracked(&mut perm)
+            ))]
+            self.page_info_mut_ptr(pfn).v_write(info);
+        }
         proof! {
             self.perms.borrow_mut().reserved.tracked_insert(pfn as int, perm);
             reveal(ReservedPerms::pfn_dom);

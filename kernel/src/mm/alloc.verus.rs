@@ -651,17 +651,6 @@ impl<const N: usize> MemoryRegionTracked<N> {
     }
 }
 
-spec fn sum_nr_pages(nr_pages: Seq<usize>) -> int
-    decreases nr_pages.len(),
-{
-    let order = nr_pages.len() - 1;
-    if order >= 0 {
-        sum_nr_pages(nr_pages.remove(order)) + nr_pages.last() * (1usize << order)
-    } else {
-        0
-    }
-}
-
 impl MemoryRegion {
     pub closed spec fn view(&self) -> MemoryRegionTracked<MAX_ORDER> {
         self.perms@

@@ -35,7 +35,7 @@ pub trait SafePtrWithFracTypedPerm<T>: PtrSpec + Sized {
         opens_invariants none
         no_unwind
     )]
-    fn v_borrow<'a>(self) -> &'a T;
+    unsafe fn v_borrow<'a>(self) -> &'a T;
 }
 
 #[verus_verify]
@@ -47,7 +47,7 @@ impl<T> SafePtrWithFracTypedPerm<T> for *const T {
     #[verus_spec(v =>
         with Tracked(perm): Tracked<&'a FracTypedPerm<T>>
     )]
-    fn v_borrow<'a>(self) -> &'a T {
+    unsafe fn v_borrow<'a>(self) -> &'a T {
         unsafe { &*self }
     }
 }
@@ -61,12 +61,13 @@ pub trait SafeMutPtrWithFracTypedPerm<T>: PtrSpec + Sized {
         opens_invariants none
         no_unwind
     )]
-    fn v_write(self, v: T);
+    unsafe fn v_write(self, v: T);
 }
 
 #[verus_verify]
 impl<T> SafeMutPtrWithFracTypedPerm<T> for *mut T {
     /// Trusted API to borrow a reference to the value at the pointer.
+    /// Safety: without providing the tracked memory permission, this is unsafe.
     /// This is safe with verification because we have passed the tracked memory permission.
     #[inline(always)]
     #[verus_verify(external_body)]
@@ -76,9 +77,7 @@ impl<T> SafeMutPtrWithFracTypedPerm<T> for *mut T {
             perm.ptr() == self,
             perm.opt_value() == MemContents::Init(v),
     )]
-    fn v_write(self, v: T) {
-        unsafe {
-            self.write(v);
-        }
+    unsafe fn v_write(self, v: T) {
+        unsafe {self.write(v);}
     }
 }
