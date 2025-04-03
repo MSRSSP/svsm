@@ -273,7 +273,6 @@ impl SpecVAddrImpl for VirtAddr {
         Some(self@ as int)
     }
 
-    #[verifier(inline)]
     open spec fn region_to_dom(&self, size: nat) -> Set<int> {
         if self.is_canonical() {
             Set::new(

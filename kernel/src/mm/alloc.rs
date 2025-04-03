@@ -15,11 +15,27 @@ use crate::utils::{align_down, align_up, zero_mem_region};
 use core::alloc::{GlobalAlloc, Layout};
 use core::mem::size_of;
 use core::{cmp, ptr, slice};
+use crate::utils::safe_ptr::{SafeMutPtrWithFracTypedPerm, SafePtrWithFracTypedPerm};
 
 #[cfg(any(test, fuzzing))]
 use crate::locking::LockGuard;
 
 use vstd::prelude::*;
+
+macro_rules! proof_mr_forall_wf_at {
+    ($old: expr, $new:expr) => {proof!{
+        assert forall|o, i| 0 <= o < MAX_ORDER && 0 <= i <$new@.next[o].len()
+        implies $new@.wf_at(o, i) by {
+            if i < $old@.next[o].len() {
+                assert($old@.wf_at(o, i));
+            }
+        }
+    }
+    };
+    ($new:expr) => {
+        proof_mr_forall_wf_at!{old($new), $new}
+    };
+}
 
 #[cfg(verus_keep_ghost)]
 include!("alloc.verus.rs");
@@ -550,11 +566,27 @@ impl MemoryRegion {
             pfn < self.page_count,
             self.wf_params(),
         ensures
-            ret.addr() == self.spec_page_info_addr(pfn as int)@,
+            ret@.addr == self.spec_page_info_addr(pfn as int)@,
     )]
-    fn page_info_pptr(&self, pfn: usize) -> vstd::simple_pptr::PPtr<PageStorageType> {
+    fn page_info_mut_ptr(&self, pfn: usize) -> *mut PageStorageType {
         let offset = pfn * size_of::<PageStorageType>();
-        vstd::simple_pptr::PPtr::from_usize(self.start_virt.const_add(offset).as_usize())
+        #[cfg_attr(verus_keep_ghost, verus_spec(with Tracked(self.perms.borrow().is_exposed)))]
+        let ret = self.start_virt.const_add(offset).as_mut_ptr_with_provenance();
+        ret
+    }
+
+    #[verus_spec(ret =>
+        requires
+            pfn < self.page_count,
+            self.wf_params(),
+        ensures
+            ret@.addr == self.spec_page_info_addr(pfn as int)@,
+    )]
+    fn page_info_pptr(&self, pfn: usize) -> *const PageStorageType {
+        let offset = pfn * size_of::<PageStorageType>();
+        #[cfg_attr(verus_keep_ghost, verus_spec(with Tracked(self.perms.borrow().is_exposed)))]
+        let ret = self.start_virt.const_add(offset).as_ptr_with_provenance();
+        ret
     }
 
     /// Gets the page information for a given page frame number.
@@ -569,9 +601,13 @@ impl MemoryRegion {
     )]
     #[verus_verify(spinoff_prover)]
     fn get_page_storage_type(&self, pfn: usize) -> &PageStorageType {
-        self.page_info_pptr(pfn).borrow(verus_exec_expr!(Tracked(
-            self.perms.borrow().reserved.tracked_borrow(pfn as int)
-        )))
+        #[cfg_attr(verus_keep_ghost, verus_spec(
+            with Tracked(
+                self.perms.borrow().reserved.tracked_borrow(pfn as int)
+            )
+        ))]
+        let v = self.page_info_pptr(pfn).v_borrow();
+        v
     }
 
     /// Checks if a page frame number is valid.
@@ -608,8 +644,10 @@ impl MemoryRegion {
             let tracked mut perm = self.perms.borrow_mut().reserved.tracked_remove(pfn as int);
         }
 
-        self.page_info_pptr(pfn)
-            .write(verus_exec_expr! {Tracked(&mut perm)}, info);
+        #[cfg_attr(verus_keep_ghost, verus_spec(
+            with Tracked(&mut perm)
+        ))]
+        self.page_info_mut_ptr(pfn).v_write(info);
         proof! {
             self.perms.borrow_mut().reserved.tracked_insert(pfn as int, perm);
         }
@@ -642,6 +680,9 @@ impl MemoryRegion {
             ret.is_some() == self.map().to_paddr(vaddr).is_some(),
     )]
     fn get_virt_offset(&self, vaddr: VirtAddr) -> Option<usize> {
+        proof!{
+            broadcast use crate::address::group_addr_proofs;           
+        };
         (self.start_virt <= vaddr && (vaddr - self.start_virt) < self.page_count * PAGE_SIZE).then(
             verus_exec_expr!(
                 || -> (ret: usize)
@@ -760,7 +801,7 @@ impl MemoryRegion {
             self.wf(),
             ret.is_ok(),
     )]
-    #[verus_verify(spinoff_prover, rlimit(10))]
+    #[verus_verify(spinoff_prover, rlimit(14))]
     fn split_page(&mut self, pfn: usize, order: usize) -> Result<(), AllocError> {
         if !(1..MAX_ORDER).contains(&order) {
             return Err(AllocError::InvalidPageOrder(order));
@@ -774,9 +815,11 @@ impl MemoryRegion {
         proof! {
             lemma_wf_next_page_info(*self, new_order as int);
             self.lemma_accounting(order);
-            self.lemma_accounting(new_order);
+            self.lemma_accounting_basic(new_order);
             let vaddr1 = self.map().lemma_get_virt(pfn1);
+            vaddr1.property_canonical();
             let vaddr2 = self.map().lemma_get_virt(pfn2);
+            vaddr2.property_canonical();
             let tracked p = self.tmp_perms.borrow_mut().tracked_pop();
             let size = (1usize << order) * PAGE_SIZE;
             let new_size = (1usize << new_order) * PAGE_SIZE;
@@ -798,9 +841,9 @@ impl MemoryRegion {
         self.nr_pages[new_order] += 2;
         self.free_pages[new_order] += 2;
 
-        
+       
+        proof_mr_forall_wf_at!(self);
         proof! {
-            proof_mr_forall_wf_at!(self);
             old(self)@.reserved().lemma_pfn_dom_update(self@.reserved(), order_set(pfn, order), order, new_order);
             old(self).lemma_nr_page_add(self, -1, order);
             old(self).lemma_nr_page_add(self, 2, new_order);
@@ -994,8 +1037,8 @@ impl MemoryRegion {
         self.nr_pages[order] -= 2;
         self.nr_pages[new_order] += 1;
         
+        proof_mr_forall_wf_at!(self);
         proof! {
-            proof_mr_forall_wf_at!(self);
             old(self)@.reserved().lemma_pfn_dom_update(self@.reserved(), order_set(pfn, new_order), order, new_order);
             old(self).lemma_nr_page_add(self, -2, order);
             old(self).lemma_nr_page_add(self, 1, new_order);
@@ -1170,9 +1213,9 @@ impl MemoryRegion {
         self.next_page[order] = pfn;
 
         self.free_pages[order] += 1;
-        
+
+        proof_mr_forall_wf_at!(self);
         proof! {
-            proof_mr_forall_wf_at!(self);
             assert(self@.wf_info()) by {
                 assert(self@.wf_at(order as int, old(self)@.next[order as int].len() as int));
                 assert forall|o, i| 0 <= o < MAX_ORDER && 0 <= i < self@.next[o].len()

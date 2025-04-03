@@ -25,18 +25,19 @@ use verify_proof::bits::{
 use verify_proof::nonlinear::lemma_modulus_add_sub_m;
 use verify_proof::set::{lemma_int_range_disjoint, seq_sets_to_set, spec_int_range_disjoint};
 use verify_proof::tseq::TrackedSeq;
+use verify_proof::frac_ptr::FracTypedPerm;
 use vstd::arithmetic::mul::group_mul_properties;
 use vstd::arithmetic::mul::{lemma_mul_inequality, lemma_mul_ordering};
 use vstd::raw_ptr::PointsToRaw;
+use vstd::raw_ptr::{IsExposed, Provenance};
 use vstd::set_lib::set_int_range;
-use vstd::simple_pptr::PointsTo;
 
 verus! {
 
 use crate::mm::address_space::LinearMap;
 
 broadcast group alloc_broadcast_group {
-    crate::address::group_addr_proofs,
+    //crate::address::group_addr_proofs,
     lemma_bit_usize_shl_values,
     lemma_page_size,
     set_len_group,
@@ -49,8 +50,6 @@ include!("alloc_proof.verus.rs");
 include!("alloc_types.verus.rs");
 
 pub type RawPerm = PointsToRaw;
-
-pub type TypedPerm<T> = PointsTo<T>;
 
 pub const MAX_PAGE_COUNT: usize = usize::MAX >> 12;
 
@@ -66,7 +65,7 @@ spec fn order_disjoint(start1: usize, order1: usize, start2: usize, order2: usiz
     spec_int_range_disjoint(start1 as int, end1, start2 as int, end2)
 }
 
-pub uninterp spec fn allocator_provenance() -> vstd::raw_ptr::Provenance;
+pub uninterp spec fn allocator_provenance() -> Provenance;
 
 pub trait MemPermWithVAddrOrder<VAddr: SpecVAddrImpl> {
     spec fn wf_vaddr_order(&self, vaddr: VAddr, order: usize) -> bool;
@@ -92,7 +91,7 @@ impl MemPermWithPfnOrder for RawPerm {
     }
 }
 
-spec fn spec_page_storage_type(perm: TypedPerm<PageStorageType>) -> Option<PageStorageType> {
+spec fn spec_page_storage_type(perm: FracTypedPerm<PageStorageType>) -> Option<PageStorageType> {
     if perm.is_init() {
         Some(perm.value())
     } else {
@@ -100,7 +99,7 @@ spec fn spec_page_storage_type(perm: TypedPerm<PageStorageType>) -> Option<PageS
     }
 }
 
-spec fn spec_page_info(perm: TypedPerm<PageStorageType>) -> Option<PageInfo> {
+spec fn spec_page_info(perm: FracTypedPerm<PageStorageType>) -> Option<PageInfo> {
     let mem = spec_page_storage_type(perm);
     if mem.is_some() {
         PageInfo::spec_decode(mem.unwrap())
@@ -109,7 +108,7 @@ spec fn spec_page_info(perm: TypedPerm<PageStorageType>) -> Option<PageInfo> {
     }
 }
 
-spec fn spec_free_info(perm: TypedPerm<PageStorageType>) -> Option<FreeInfo> {
+spec fn spec_free_info(perm: FracTypedPerm<PageStorageType>) -> Option<FreeInfo> {
     let p_info = spec_page_info(perm);
     if p_info.is_some() {
         let pi = p_info.unwrap();
@@ -127,8 +126,9 @@ ghost struct VirtInfo<VAddr> {
 tracked struct MemoryRegionTracked<VAddr: SpecVAddrImpl, const N: usize> {
     tracked avail: Map<(int, int), RawPerm>,  //(order, idx) -> perm
     ghost next: Seq<Seq<usize>>,  // order -> next page list
-    tracked reserved: Map<int, TypedPerm<PageStorageType>>,  //pfn -> pginfo
+    tracked reserved: Map<int, FracTypedPerm<PageStorageType>>,  //pfn -> pginfo
     ghost pfn_to_virt: Seq<VirtInfo<VAddr>>,  // pfn -> virt address
+    tracked is_exposed: IsExposed,
 }
 
 ghost struct FreePerms<VAddr: SpecVAddrImpl, const N: usize> {
@@ -156,7 +156,7 @@ impl<VAddr: SpecVAddrImpl, const N: usize> FreePerms<VAddr, N> {
 
 #[allow(missing_debug_implementations)]
 struct ReservedPerms<const N: usize> {
-    reserved: Map<int, TypedPerm<PageStorageType>>,
+    reserved: Map<int, FracTypedPerm<PageStorageType>>,
     page_count: PageCountParam<N>,
 }
 
@@ -636,6 +636,7 @@ impl<VAddr: SpecVAddrImpl, const N: usize> MemoryRegionTracked<VAddr, N> {
         let next = self.next;
         &&& self.page_count() <= MAX_PAGE_COUNT
         &&& next.len() == N
+        &&& self.is_exposed@ == allocator_provenance()
         &&& avail.dom() =~= Set::new(
             |k: (int, int)| 0 <= k.0 < N && 0 <= k.1 < self.next[k.0].len(),
         )
@@ -719,11 +720,15 @@ impl<VAddr: SpecVAddrImpl, const N: usize> MemoryRegionTracked<VAddr, N> {
         self.reserved().wf_page_info()
     }
 
+    spec fn no_duplicates(&self) -> bool {
+        &&& forall|order| 0 <= order < N ==> (#[trigger] self.next[order]).no_duplicates()
+    }
+
     spec fn wf_info(&self) -> bool {
         let next = self.next;
-        &&& forall|order| 0 <= order < N ==> (#[trigger] self.next[order]).no_duplicates()
         &&& forall|order, i| 0 <= order < N && 0 <= i < next[order].len() ==> #[trigger]self.wf_at(order, i)
         &&& self.wf_info_content()
+        &&& self.no_duplicates()
     }
 
     spec fn wf_perms(&self) -> bool {
@@ -897,6 +902,8 @@ impl MemoryRegion {
         ensures
             (#[trigger] self.nr_pages[order as int]) * (1usize << order) <= self.page_count,
             self.nr_pages[order as int] <= self.page_count,
+            self.nr_pages[order as int] == self@.reserved().pfn_dom(order).len() / (1usize
+                << order) as nat,
     {
         self.lemma_accounting(order)
     }
@@ -970,6 +977,7 @@ impl MemoryRegion {
         &&& self.map().wf()
         &&& self.wf_pfn_to_virt()
         &&& self@.page_count() == self.page_count
+        &&& self@.is_exposed@ == allocator_provenance()
         &&& self.start_virt@ % PAGE_SIZE == 0
         &&& self.page_count <= MAX_PAGE_COUNT
     }
@@ -1168,7 +1176,6 @@ impl MemoryRegion {
             }
     }
 
-    #[verifier(inline)]
     spec fn ens_init_compound_page(
         &self,
         new: Self,

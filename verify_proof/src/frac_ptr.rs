@@ -1,12 +1,14 @@
 use state_machines_macros::*;
-use vstd::multiset::*;
+
 use vstd::prelude::*;
-use crate::frac_perm::*;
 use vstd::raw_ptr::PointsTo;
 use vstd::tokens::InstanceId;
 use vstd::simple_pptr::MemContents;
 
+use crate::frac_perm::FracPerm;
+
 verus! {
+use vstd::multiset::Multiset;
 tokenized_state_machine!(addr_unique {
     fields {
         #[sharding(map)]
@@ -117,21 +119,25 @@ impl UniqueByPtr {
 }
 
 pub struct FracTypedPerm<T> {
-    p: FracPerm<PointsTo<T>>,
+    p: Map<int, FracPerm<PointsTo<T>>>,
     unique: UniqueByPtr,
 }
 
 impl<T> FracTypedPerm<T> {
+    pub closed spec fn view(&self) -> FracPerm<PointsTo<T>> {
+        self.p[0]
+    }
+
     pub closed spec fn shares(&self) -> nat {
-        self.p.shares()
+        self@.shares()
     }
 
     pub closed spec fn total(&self) -> nat {
-        self.p.total()
+        self@.total()
     }
 
     pub closed spec fn points_to(&self) -> PointsTo<T> {
-        self.p@.unwrap()
+        self@@.unwrap()
     }
 
     #[verifier::inline]
@@ -168,14 +174,15 @@ impl<T> FracTypedPerm<T> {
 impl<T> FracTypedPerm<T> {
     #[verifier::type_invariant]
     pub closed spec fn wf(&self) -> bool {
-        &&& self.p.wf()
+        &&& self@.wf()
         &&& self.unique.wf()
-        &&& self.p.valid() ==> (self.addr(), self.p.id()) == self.unique@
+        &&& self@.valid() ==> (self.addr(), self@.id()) == self.unique@
     }
 
     pub closed spec fn valid(&self) -> bool {
-        &&& self.p.valid()
+        &&& self@.valid()
         &&& self.wf()
+        &&& self.p.dom() =~= set![0]
     }
 
     proof fn has_same_id(tracked &self, tracked other: &Self) 
@@ -184,48 +191,50 @@ impl<T> FracTypedPerm<T> {
         other.valid(),
         self.addr() == other.addr(),
     ensures
-        self.p.id() == other.p.id(),
+        self@.id() == other@.id(),
     {
-        self.unique.inst.check_ids(self.addr(), self.p.id(), other.p.id(), &self.unique.id, &other.unique.id);
+        self.unique.inst.check_ids(self.addr(), self@.id(), other@.id(), &self.unique.id, &other.unique.id);
     }
 
-    pub proof fn extract(tracked self) -> (tracked ret: (PointsTo<T>, FracTypedPerm<T>))
+    pub proof fn extract(tracked &mut self) -> (tracked ret: PointsTo<T>)
     requires
-        self.valid(),
-        self.shares() == self.total(),
+        old(self).valid(),
+        old(self).shares() == old(self).total(),
     ensures
-        ret.0 == self.points_to(),
-        !ret.1.valid(),
-        ret.1.wf(),
+        ret == old(self).points_to(),
+        !self.valid(),
+        self.wf(),
     {
-        let tracked FracTypedPerm {p, unique} = self;
-        let tracked (perm, p) = p.extract();
-        (perm, FracTypedPerm{p, unique})
+        let tracked p = self.p.tracked_remove(0);
+        let tracked (ret, p) = p.extract();
+        self.p.tracked_insert(0, p);
+        ret
     }
 
     pub proof fn borrow(tracked &self) -> (tracked ret: &PointsTo<T>)
     requires
         self.valid(),
     {
-        self.p.borrow()
+        self.p.tracked_borrow(0).borrow()
     }
 
-    pub proof fn merge(tracked self, tracked other: Self) -> (ret: Self)
+    pub proof fn merge(tracked &mut self, tracked other: Self)
     requires
-        self.valid(),
+        old(self).valid(),
         other.valid(),
-        self.addr() == other.addr(),
-        self.shares() + other.shares() <= self.total(),
+        old(self).addr() == other.addr(),
+        old(self).shares() + other.shares() <= old(self).total(),
     ensures
-        ret.wf(),
-        self.addr() == self.addr(),
+        self.wf(),
+        self.addr() == old(self).addr(),
     {
+        let tracked mut other = other;
         self.has_same_id(&other);
-        self.p.is_same(&other.p);
-        let tracked FracTypedPerm {p: p1, unique} = self;
-        let tracked FracTypedPerm {p: p2, ..} = other;
+        self.p.tracked_borrow(0).is_same(&other.p.tracked_borrow(0));
+        let tracked p1 = self.p.tracked_remove(0);
+        let tracked p2 = other.p.tracked_remove(0);
         let tracked p = p1.merge(p2);
-        FracTypedPerm {p, unique}
+        self.p.tracked_insert(0, p);
     }
 }
 }

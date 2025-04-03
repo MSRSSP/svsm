@@ -9,7 +9,7 @@ edition = "2021"
 builtin = { workspace = true, optional = true }
 builtin_macros = { workspace = true }
 vstd = { workspace = true }
-state_machines_macros = { git = "https://github.com/verus-lang/verus", rev ="d0afa89", default-features = false }
+state_machines_macros = { path = "../../verus/source/state_machines_macros", default-features = false }
 paste = "1.0"
 seq-macro = "0.3"
 

@@ -14,7 +14,7 @@ pub mod nonlinear;
 pub mod set;
 pub mod tseq;
 pub mod frac_perm;
-pub mod unique_ptr;
+pub mod frac_ptr;
 
 verus! {
 

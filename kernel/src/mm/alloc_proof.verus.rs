@@ -39,21 +39,6 @@ proof fn is_disjoint(tracked p1: &mut RawPerm, p2: &RawPerm)
     admit();
 }
 
-macro_rules! proof_mr_forall_wf_at {
-    ($old: expr, $new:expr) => {proof!{
-        assert forall|o, i| 0 <= o < MAX_ORDER && 0 <= i <$new@.next[o].len()
-        implies $new@.wf_at(o, i) by {
-            if i < $old@.next[o].len() {
-                assert($old@.wf_at(o, i));
-            }
-        }
-    }
-    };
-    ($new:expr) => {
-        proof_mr_forall_wf_at!{old($new), $new}
-    };
-}
-
 impl MemoryRegionTracked<VirtAddr, MAX_ORDER> {
     #[verifier::spinoff_prover]
     proof fn lemma_pfn_range_disjoint_rec1(
@@ -901,7 +886,9 @@ impl<VAddr: SpecVAddrImpl, const N: usize> MemoryRegionTracked<VAddr, N> {
     }
 
     #[verifier::spinoff_prover]
-    proof fn tracked_new() -> (tracked ret: MemoryRegionTracked<VAddr, N>)
+    proof fn tracked_new(tracked is_exposed: IsExposed) -> (tracked ret: MemoryRegionTracked<VAddr, N>)
+        requires
+            is_exposed@ == allocator_provenance()
         ensures
             ret.wf(),
             ret.avail === Map::empty(),
@@ -914,6 +901,7 @@ impl<VAddr: SpecVAddrImpl, const N: usize> MemoryRegionTracked<VAddr, N> {
             reserved: Map::tracked_empty(),
             next: Seq::new(N as nat, |k| Seq::empty()),
             pfn_to_virt: Seq::empty(),
+            is_exposed,
         };
         assert(ret.reserved.dom() =~= set_int_range(0, 0));
         reveal(ReservedPerms::wf_page_info);

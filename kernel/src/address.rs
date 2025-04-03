@@ -363,12 +363,28 @@ impl VirtAddr {
     }
 
     #[inline]
-    #[verus_verify(external_body)]
+    #[verus_verify(external)]
     pub fn as_ptr<T>(&self) -> *const T {
         self.0 as *const T
     }
 
     #[inline]
+    #[verus_verify(external)]
+    pub fn as_mut_ptr<T>(&self) -> *mut T {
+        self.0 as *mut T
+    }
+
+    #[verus_spec(ret =>
+        with Tracked(provenance): Tracked<vstd::raw_ptr::IsExposed>
+        ensures
+            ret == vstd::raw_ptr::ptr_from_data::<T>(
+                vstd::raw_ptr::PtrData { addr: self@, provenance: provenance@, metadata: vstd::raw_ptr::Metadata::Thin },
+            ),
+    )]
+    pub fn as_ptr_with_provenance<T>(&self) -> *const T {
+        vstd::raw_ptr::with_exposed_provenance(self.0, verus_exec_expr! {Tracked(provenance)}) as *const T
+    }
+
     #[verus_spec(ret =>
         with Tracked(provenance): Tracked<vstd::raw_ptr::IsExposed>
         ensures
@@ -376,7 +392,7 @@ impl VirtAddr {
                 vstd::raw_ptr::PtrData { addr: self@, provenance: provenance@, metadata: vstd::raw_ptr::Metadata::Thin },
             ),
     )]
-    pub fn as_mut_ptr<T>(&self) -> *mut T {
+    pub fn as_mut_ptr_with_provenance<T>(&self) -> *mut T {
         vstd::raw_ptr::with_exposed_provenance(self.0, verus_exec_expr! {Tracked(provenance)})
     }
 

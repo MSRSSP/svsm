@@ -180,7 +180,7 @@ tokenized_state_machine!(frac_inner<Perm> {
         assert(sum(reader1) == 0);
         if (reader1.len() != 0) {
             let e = reader1.choose();
-            axiom_choose_count(reader1);
+            vstd::multiset::axiom_choose_count(reader1);
             lemma_sum(reader1, e);
         }
         lemma_sum_insert(reader1, (x, pre.total));
@@ -207,7 +207,6 @@ tokenized_state_machine!(frac_inner<Perm> {
     }
 });
 
-#[cfg(verus_keep_ghost)]
 verus! {
 
 /// A `tracked ghost` container that you can put a ghost object in.
