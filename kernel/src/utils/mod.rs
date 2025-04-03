@@ -8,9 +8,9 @@ pub mod bitmap_allocator;
 pub mod fw_meta;
 pub mod immut_after_init;
 pub mod memory_region;
+pub mod safe_ptr;
 pub mod scoped;
 pub mod util;
-pub mod safe_ptr;
 
 pub use memory_region::MemoryRegion;
 pub use scoped::{ScopedMut, ScopedRef};

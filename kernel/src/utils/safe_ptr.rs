@@ -5,7 +5,7 @@ use verify_proof::frac_ptr::FracTypedPerm;
 #[cfg(verus_keep_ghost)]
 use vstd::simple_pptr::MemContents;
 
-verus!{
+verus! {
 pub trait PtrSpec {
     spec fn spec_addr(&self) -> int;
 }
@@ -35,7 +35,7 @@ pub trait SafePtrWithFracTypedPerm<T>: PtrSpec + Sized {
         opens_invariants none
         no_unwind
     )]
-    fn v_borrow<'a>(self) ->  &'a T;
+    fn v_borrow<'a>(self) -> &'a T;
 }
 
 #[verus_verify]
@@ -47,7 +47,7 @@ impl<T> SafePtrWithFracTypedPerm<T> for *const T {
     #[verus_spec(v =>
         with Tracked(perm): Tracked<&'a FracTypedPerm<T>>
     )]
-    fn v_borrow<'a>(self) ->  &'a T {
+    fn v_borrow<'a>(self) -> &'a T {
         unsafe { &*self }
     }
 }
@@ -77,7 +77,7 @@ impl<T> SafeMutPtrWithFracTypedPerm<T> for *mut T {
             perm.opt_value() == MemContents::Init(v),
     )]
     fn v_write(self, v: T) {
-        unsafe { 
+        unsafe {
             self.write(v);
         }
     }

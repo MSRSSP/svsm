@@ -7,6 +7,33 @@
 // Proves the encode/decode functions used in alloc.rs.
 verus! {
 
+spec fn spec_page_storage_type(perm: FracTypedPerm<PageStorageType>) -> Option<PageStorageType> {
+    if perm.is_init() {
+        Some(perm.value())
+    } else {
+        None
+    }
+}
+
+spec fn spec_page_info(perm: FracTypedPerm<PageStorageType>) -> Option<PageInfo> {
+    let mem = spec_page_storage_type(perm);
+    if mem.is_some() {
+        PageInfo::spec_decode(mem.unwrap())
+    } else {
+        None
+    }
+}
+
+spec fn spec_free_info(perm: FracTypedPerm<PageStorageType>) -> Option<FreeInfo> {
+    let p_info = spec_page_info(perm);
+    if p_info.is_some() {
+        let pi = p_info.unwrap();
+        pi.get_free()
+    } else {
+        None
+    }
+}
+
 trait SpecDecoderProof<T>: core::marker::Sized {
     spec fn spec_decode(mem: T) -> Option<Self> {
         if exists|x: Self| #[trigger] x.spec_encode() === Some(mem) {
@@ -16,7 +43,8 @@ trait SpecDecoderProof<T>: core::marker::Sized {
         }
     }
 
-    spec fn spec_encode(&self) -> Option<T>; 
+    spec fn spec_encode(&self) -> Option<T>;
+
     /*{
         if exists|x: T| #[trigger] Self::spec_decode(x) === Some(*self) {
             Some(choose|x: T| #[trigger] Self::spec_decode(x) === Some(*self))
@@ -24,7 +52,6 @@ trait SpecDecoderProof<T>: core::marker::Sized {
             None
         }
     }*/
-
     spec fn spec_encode_req(&self) -> bool {
         true
     }
@@ -71,14 +98,18 @@ impl SpecDecoderProof<PageStorageType> for FreeInfo {
     }
 
     spec fn spec_encode(&self) -> Option<PageStorageType> {
-        Some(PageStorageType(((self.order as u64 & 0xff) << 4) | ((self.next_page as u64) << 12) | PageType::Free as u64))
+        Some(
+            PageStorageType(
+                ((self.order as u64 & 0xff) << 4) | ((self.next_page as u64) << 12)
+                    | PageType::Free as u64,
+            ),
+        )
     }
 
     #[verifier(external_body)]
     proof fn proof_encode_decode(
         &self,
-    );
-    /*{
+    );/*{
         assert forall |v1: u64, v2: u64|
             v1 <= 0xff && v2 <= (usize::MAX << 12)
         implies
@@ -218,7 +249,9 @@ impl SpecDecoderProof<PageStorageType> for PageInfo {
         }
     }
 
-    uninterp spec fn spec_decode(v: PageStorageType) -> Option<PageInfo>; /*{
+    uninterp spec fn spec_decode(v: PageStorageType) -> Option<PageInfo>;
+
+    /*{
         let mem_type = PageType::spec_decode(PageStorageType(v.0 & 0xF));
         if mem_type.is_none() {
             None
@@ -257,7 +290,6 @@ impl SpecDecoderProof<PageStorageType> for PageInfo {
             }
         }
     }*/
-
     #[verifier(external_body)]
     proof fn proof_encode_decode(&self) {
     }

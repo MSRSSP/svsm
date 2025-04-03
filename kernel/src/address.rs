@@ -382,7 +382,8 @@ impl VirtAddr {
             ),
     )]
     pub fn as_ptr_with_provenance<T>(&self) -> *const T {
-        vstd::raw_ptr::with_exposed_provenance(self.0, verus_exec_expr! {Tracked(provenance)}) as *const T
+        vstd::raw_ptr::with_exposed_provenance(self.0, verus_exec_expr! {Tracked(provenance)})
+            as *const T
     }
 
     #[verus_spec(ret =>

@@ -59,6 +59,18 @@ impl LinearMap {
         VirtAddr::lemma_wf((self.start_virt.offset() + (pfn * crate::types::PAGE_SIZE)) as usize);
         self.try_get_virt(pfn).unwrap()
     }
+
+    pub broadcast proof fn lemma_get_paddr(&self, vaddr: VirtAddr)
+        requires
+            self.wf(),
+            vaddr.is_canonical(),
+            self.start_virt.offset() <= vaddr.offset() < self.start_virt.offset() + self.size,
+        ensures
+            (#[trigger] self.to_paddr(vaddr)).is_some(),
+            self.start_phys <= self.to_paddr(vaddr).unwrap() <= self.start_phys + self.size,
+    {
+        reveal(<LinearMap as SpecMemMapTr>::to_paddr);
+    }
 }
 
 impl SpecMemMapTr for LinearMap {
@@ -88,6 +100,7 @@ impl SpecMemMapTr for LinearMap {
         }
     }
 
+    #[verifier(opaque)]
     open spec fn to_paddr(&self, vaddr: VirtAddr) -> Option<int> {
         let offset = vaddr.offset() - self.start_virt.offset();
         if 0 <= offset < self.size && (self.start_virt.offset() + offset < VADDR_RANGE_SIZE)
