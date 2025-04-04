@@ -941,20 +941,22 @@ impl MemoryRegion {
         &&& Self::ens_find_neighbor(pfn, order, ret_pfn)
     }
 
-    spec fn req_allocate_pfn(&self, pfn: usize, order: usize) -> bool {
+    spec fn req_allocate_pfn(&self, pfn: usize, order: usize, perm: Option<RawPerm>) -> bool {
         let n = 1usize << order;
         &&& self@.reserved_pfn_count() <= pfn
         &&& pfn % n == 0
         &&& order < MAX_ORDER
         &&& self.wf()
+        &&& perm.is_none()
     }
 
-    spec fn ens_allocate_pfn(&self, new: &Self, pfn: usize, order: usize) -> bool {
+    spec fn ens_allocate_pfn(&self, new: &Self, pfn: usize, order: usize, perm: Option<RawPerm>) -> bool {
         &&& self@.ens_allocate_pfn(new@, pfn, order)
-        &&& new.tmp_perms@@ === self.tmp_perms@@.push(new.tmp_perms@@.last())
-        &&& new.tmp_perms@@.last().wf_vaddr_order(self.spec_get_virt(pfn as int), order as usize)
+        &&& perm.is_some()
+        &&& perm.unwrap().wf_pfn_order(self@.map, pfn, order)
         &&& new.wf()
         &&& self.with_same_mapping(new)
+        &&& self.tmp_perms@@ =~= new.tmp_perms@@
         &&& new.valid_pfn_order(pfn, order)
         &&& new.nr_pages === self.nr_pages
         &&& new.free_pages@ === self.free_pages@.update(
@@ -974,7 +976,7 @@ impl MemoryRegion {
         &&& self.wf_reserved()
         &&& self.wf()
         &&& self.tmp_perms@@.len() >= 1
-        &&& self.tmp_perms@@.last().wf_vaddr_order(self.spec_get_virt(pfn as int), order as usize)
+        &&& self.tmp_perms@@.last().wf_pfn_order(self@.map, pfn, order)
         &&& self.valid_pfn_order(pfn, order)
         &&& self@.marked_not_free(pfn, order)
         &&& self@.pfn_range_is_allocated(pfn, order)
@@ -1018,15 +1020,11 @@ impl MemoryRegion {
         &&& ret.is_err() ==> (self == new)
     }
 
-    spec fn req_merge_pages(&self, pfn1: usize, pfn2: usize, order: usize) -> bool {
+    spec fn req_merge_pages(&self, pfn1: usize, pfn2: usize, order: usize, p1: RawPerm, p2: RawPerm) -> bool {
         let pfn = vstd::math::min(pfn1 as int, pfn2 as int);
         &&& self.wf()
-        &&& self.tmp_perms@@.len() >= 2
-        &&& self.tmp_perms@@.last().wf_vaddr_order(self.spec_get_virt(pfn2 as int), order as usize)
-        &&& self.tmp_perms@@[self.tmp_perms@@.len() - 2].wf_vaddr_order(
-            self.spec_get_virt(pfn1 as int),
-            order as usize,
-        )
+        &&& p1.wf_pfn_order(self@.map, pfn1, order)
+        &&& p2.wf_pfn_order(self@.map, pfn2, order)
         &&& (pfn1 == pfn2 + (1usize << order)) || (pfn1 == pfn2 - (1usize << order))
         &&& self.valid_pfn_order(pfn as usize, (order + 1) as usize)
         &&& 0 <= order < MAX_ORDER - 1
@@ -1043,6 +1041,7 @@ impl MemoryRegion {
         pfn2: usize,
         order: usize,
         ret: usize,
+        perm: RawPerm
     ) -> bool {
         let order = order as int;
         let pfn = vstd::math::min(pfn1 as int, pfn2 as int);
@@ -1051,10 +1050,7 @@ impl MemoryRegion {
         let new_nr_pages = self.nr_pages@.update(order, n1).update(order + 1, n2);
         &&& new.wf()
         &&& ret == pfn
-        &&& new.tmp_perms@@ === self.tmp_perms@@.take(self.tmp_perms@@.len() - 2).push(
-            new.tmp_perms@@.last(),
-        )
-        &&& new.tmp_perms@@.last().wf_vaddr_order(self.spec_get_virt(pfn), (order + 1) as usize)
+        &&& perm.wf_pfn_order(self@.map, pfn as usize, (order + 1) as usize)
         &&& self.only_update_reserved_and_tmp_nr(new)
         &&& new.nr_pages@ === new_nr_pages
         &&& new@.marked_allocated(pfn as usize, (order + 1) as usize)
@@ -1068,9 +1064,10 @@ impl MemoryRegion {
         pfn2: usize,
         order: usize,
         ret: Result<usize, AllocError>,
+        perm: RawPerm
     ) -> bool {
         &&& ret.is_ok()
-        &&& self.ens_merge_pages_ok(new, pfn1, pfn2, order, ret.unwrap())
+        &&& self.ens_merge_pages_ok(new, pfn1, pfn2, order, ret.unwrap(), perm)
     }
 
     spec fn ens_free_page_order(&self, new: &Self, pfn: usize, order: usize) -> bool {

@@ -19,6 +19,7 @@ verus! {
 
 use vstd::arithmetic::div_mod::{lemma_mod_self_0, lemma_small_mod, lemma_add_mod_noop};
 use verify_proof::nonlinear::lemma_align_down_properties;
+use vstd::modes::tracked_swap;
 
 global size_of PageStorageType == 8;
 
@@ -180,7 +181,8 @@ impl MemoryRegionTracked<MAX_ORDER> {
 
 #[verifier::rlimit(4)]
 proof fn tracked_merge(
-    tracked tmp_perms: &mut TrackedSeq<RawPerm>,
+    tracked p1: &mut RawPerm,
+    tracked p2: RawPerm,
     map: LinearMap,
     pfn1: usize,
     pfn2: usize,
@@ -188,14 +190,12 @@ proof fn tracked_merge(
 )
     requires
         map.wf(),
-        old(tmp_perms)@.len() >= 2,
         0 <= order < 64,
         pfn1 == pfn2 + (1usize << order) || pfn2 == pfn1 + (1usize << order),
-        old(tmp_perms)@.last().wf_pfn_order(map, pfn2, order),
-        old(tmp_perms)@[old(tmp_perms)@.len() - 2].wf_pfn_order(map, pfn1, order),
+        p2.wf_pfn_order(map, pfn2, order),
+        old(p1).wf_pfn_order(map, pfn1, order),
     ensures
-        tmp_perms@ =~= old(tmp_perms)@.take(old(tmp_perms)@.len() - 2).push(tmp_perms@.last()),
-        tmp_perms@.last().wf_pfn_order(
+        p1.wf_pfn_order(
             map,
             if pfn1 < pfn2 {
                 pfn1
@@ -210,17 +210,16 @@ proof fn tracked_merge(
     map.lemma_get_virt(pfn1);
     map.lemma_get_virt(pfn2);
     let size = 1usize << order;
-    let tracked p2 = tmp_perms.tracked_pop();
-    let tracked p1 = tmp_perms.tracked_pop();
-
+    let tracked mut owned_p1 = RawPerm::empty(p1.provenance());
+    tracked_swap(&mut owned_p1, p1);
     let tracked p = if pfn1 < pfn2 {
         assert(pfn2 == pfn1 + size);
-        p1.join(p2)
+        owned_p1.join(p2)
     } else {
         assert(pfn1 == pfn2 + size);
-        p2.join(p1)
+        p2.join(owned_p1)
     };
-    tmp_perms.tracked_push(p);
+    *p1 = p;
 }
 
 impl<const N: usize> ReservedPerms<N> {

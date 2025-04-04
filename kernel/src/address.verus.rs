@@ -10,7 +10,6 @@ use crate::utils::util::{
 use verify_external::convert::{exists_into, forall_into, FromSpec};
 use verify_external::hw_spec::SpecVAddrImpl;
 use vstd::set_lib::set_int_range;
-use vstd::std_specs::cmp::{SpecPartialEqOp, SpecPartialOrdOp};
 use vstd::std_specs::ops::{SpecAddRequires, SpecSubRequires};
 
 verus! {
@@ -44,8 +43,8 @@ broadcast group vaddr_impl_proof {
 pub broadcast group group_addr_proofs {
     VirtAddr::property_canonical,
     VirtAddr::lemma_wf,
-    VirtAddr::reveal_closed_cmp_op_spec,
-    VirtAddr::reveal_closed_eq_op_spec,
+    //VirtAddr::reveal_closed_cmp_op_spec,
+    //VirtAddr::reveal_closed_eq_op_spec,
 }
 
 broadcast use vaddr_impl_proof;
@@ -56,6 +55,7 @@ mod address_spec { include!("address_inner.verus.rs");  }
 
 pub use address_spec::*;
 
+unsafe impl Structural for PhysAddr {}
 // The inner address should be smaller than VADDR_RANGE_SIZE.
 // Define a simple spec for sign_extend without using bit ops.
 pub open spec fn sign_extend_spec(addr: InnerAddr) -> usize
@@ -122,26 +122,6 @@ impl VirtAddr {
     #[verifier::type_invariant]
     pub open spec fn is_canonical(&self) -> bool {
         self.is_low() || self.is_high()
-    }
-
-    /// In derived(PartialCmp), a closed spec is created.
-    /// Call this proof if using PartialCmp logic is used outside.
-    pub broadcast proof fn reveal_closed_cmp_op_spec(&self, rhs: &Self)
-        ensures
-            #[trigger] vstd::std_specs::cmp::spec_partial_cmp(self, rhs) == (self@.spec_partial_cmp(
-                &rhs@,
-            )),
-    {
-        vstd::std_specs::cmp::axiom_partial_cmp(self, rhs);
-    }
-
-    pub broadcast proof fn reveal_closed_eq_op_spec(&self, rhs: &Self)
-        ensures
-            #[trigger] vstd::std_specs::cmp::spec_partial_eq(self, rhs) == (self@.spec_partial_eq(
-                &rhs@,
-            )),
-    {
-        vstd::std_specs::cmp::axiom_partial_eq(self, rhs);
     }
 
     /// @Property:
@@ -346,4 +326,15 @@ impl SpecAddRequires<InnerAddr> for PhysAddr {
     }
 }
 
+// TOOD: wait for verus derive automation.
+pub assume_specification[VirtAddr::partial_cmp](lhs: &VirtAddr, rhs: &VirtAddr) -> (ret: Option<core::cmp::Ordering>)
+ensures
+    usize::partial_cmp.ensures((&lhs@, &rhs@), ret)
+;
+
+// TOOD: wait for verus derive automation.
+pub assume_specification[PhysAddr::partial_cmp](lhs: &PhysAddr, rhs: &PhysAddr) -> (ret: Option<core::cmp::Ordering>)
+ensures
+    usize::partial_cmp.ensures((&lhs@, &rhs@), ret)
+;
 } // verus!

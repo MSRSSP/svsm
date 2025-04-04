@@ -809,7 +809,7 @@ impl MemoryRegion {
             old(self).ens_split_page_ok(&*self, pfn, order),
             ret.is_ok(),
     )]
-    #[verus_verify(spinoff_prover, rlimit(3))]
+    #[verus_verify(spinoff_prover, rlimit(8))]
     fn split_page(&mut self, pfn: usize, order: usize) -> Result<(), AllocError> {
         if !(1..MAX_ORDER).contains(&order) {
             return Err(AllocError::InvalidPageOrder(order));
@@ -852,7 +852,6 @@ impl MemoryRegion {
             old(self).lemma_nr_page_add(self, -1, order);
             old(self).lemma_nr_page_add(self, 2, new_order);
             old(self)@.reserved().lemma_reserved_info_split(self@.reserved(), pfn, order);
-            assume(self@.wf());
         }
 
         Ok(())
@@ -1011,10 +1010,11 @@ impl MemoryRegion {
     /// Merges two pages of the same order into a new compound page.
     //#[verus_verify(external_body)]
     #[verus_spec(ret =>
+        with Tracked(p1): Tracked<&mut RawPerm>, Tracked(p2): Tracked<RawPerm>
         requires
-            old(self).req_merge_pages(pfn1, pfn2, order),
+            old(self).req_merge_pages(pfn1, pfn2, order, *old(p1), p2),
         ensures
-            old(self).ens_merge_pages(self, pfn1, pfn2, order, ret),
+            old(self).ens_merge_pages(self, pfn1, pfn2, order, ret, *p1),
     )]
     #[verus_verify(spinoff_prover, rlimit(5))]
     fn merge_pages(&mut self, pfn1: usize, pfn2: usize, order: usize) -> Result<usize, AllocError> {
@@ -1023,17 +1023,16 @@ impl MemoryRegion {
         }
 
         let new_order = order + 1;
-        let pfn = pfn1.min(pfn2);
-
-        proof! {
+        proof_decl! {
+            let ghost size = (1usize << order);
             self@.reserved().lemma_pfn_dom_len_with_two(pfn1, pfn2, order);
-            let size = (1usize << order);
             assert(size * 2 / size as int == 2) by (nonlinear_arith) requires size > 0;
             assert(self.nr_pages[order as int] >= 2);
             self.lemma_accounting(new_order);
-            tracked_merge(self.tmp_perms.borrow_mut(), self.map(), pfn1, pfn2, order)
+            tracked_merge(p1, p2, self@.map, pfn1, pfn2, order);
         }
 
+        let pfn: usize = pfn1.min(pfn2);
         // Write new compound head
         let pg = PageInfo::Allocated(AllocatedInfo { order: new_order });
         self.write_page_info(pfn, pg);
@@ -1052,7 +1051,7 @@ impl MemoryRegion {
             old(self).lemma_nr_page_add(self, -2, order);
             old(self).lemma_nr_page_add(self, 1, new_order);
             old(self)@.reserved().lemma_reserved_info_merge(self@.reserved(), pfn, order);
-            self.perms.borrow().lemma_tmp_perm_disjoint(self.tmp_perms.borrow_mut(), pfn, new_order);
+            self.perms.borrow().lemma_perm_disjoint(p1, pfn, new_order);
         }
 
         Ok(pfn)
@@ -1087,10 +1086,11 @@ impl MemoryRegion {
     ///
     /// Panics if `order` is greater than [`MAX_ORDER`].
     #[verus_spec(ret =>
+        with Tracked(perm): Tracked<&mut Option<RawPerm>>
         requires
-            old(self).req_allocate_pfn(pfn, order)
+            old(self).req_allocate_pfn(pfn, order, *old(perm))
         ensures
-            ret.is_ok() ==> old(self).ens_allocate_pfn(self, pfn, order),
+            ret.is_ok() ==> old(self).ens_allocate_pfn(self, pfn, order, *perm),
             !ret.is_ok() ==> old(self) === self,
     )]
     #[verus_verify(spinoff_prover, rlimit(4))]
@@ -1114,6 +1114,10 @@ impl MemoryRegion {
         } else if first_pfn == pfn {
             // Requested pfn is first in list
             self.get_next_page(order).unwrap();
+            proof! {
+                //assert(self.tmp_perms@@ =~= old(self).tmp_perms@@.push(self.tmp_perms@.last()));
+                *perm = Some(self.tmp_perms.borrow_mut().tracked_pop());
+            }
             return Ok(());
         }
 
@@ -1124,8 +1128,8 @@ impl MemoryRegion {
         #[cfg_attr(verus_keep_ghost, verus_spec(
             invariant
                 self === old(self),
-                self.req_allocate_pfn(pfn, order),
-                self.req_allocate_pfn(old_pfn, order),
+                self.req_allocate_pfn(pfn, order, *old(perm)),
+                self.req_allocate_pfn(old_pfn, order, *old(perm)),
                 old_pfn != pfn,
                 old_pfn == self@.next[order as int][idx_ + 1],
                 -1 <= idx_ < self@.next[order as int].len() - 1,
@@ -1149,8 +1153,7 @@ impl MemoryRegion {
             }
 
             proof! {
-                let tracked p = self.perms.borrow_mut().tracked_remove(order as int, idx_);
-                self.tmp_perms.borrow_mut().tracked_push(p);
+                *perm = Some(self.perms.borrow_mut().tracked_remove(order as int, idx_));
             }
             let next_pfn = self.next_free_pfn(current_pfn, order);
             proof! {
@@ -1264,16 +1267,28 @@ impl MemoryRegion {
             return Err(AllocError::InvalidPageOrder(fi.order));
         }
 
-        self.allocate_pfn(neighbor_pfn, order)?;
+        proof_decl! {
+            let tracked mut p2 = None::<RawPerm>;
+        }
+        #[verus_spec(with Tracked(&mut p2))]
+        let _ = self.allocate_pfn(neighbor_pfn, order)?;
 
-        proof! {
-            self.perms.borrow().lemma_tmp_perm_disjoint(self.tmp_perms.borrow_mut(), neighbor_pfn, order);
-            let i = old(self)@.next[order as int].index_of(neighbor_pfn);
+        proof_decl! {
+            let tracked mut p1 = self.tmp_perms.borrow_mut().tracked_pop();
+            let tracked mut p2 = p2.tracked_unwrap();
+            self.perms.borrow().lemma_perm_disjoint(&mut p2, neighbor_pfn, order);
+            let ghost i = old(self)@.next[order as int].index_of(neighbor_pfn);
             assert(old(self)@.wf_at(order as int, i));
             assert(old(self).free_pages[order as int] > 0);
         }
 
+        #[cfg_attr(verus_keep_ghost,
+            verus_spec(with Tracked(&mut p1), Tracked(p2))
+        )]
         let new_pfn = self.merge_pages(pfn, neighbor_pfn, order)?;
+        proof! {
+            self.tmp_perms.borrow_mut().tracked_push(p1);
+        }
 
         Ok(new_pfn)
     }
