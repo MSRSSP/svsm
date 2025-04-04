@@ -27,6 +27,7 @@ macro_rules! proof_mr_forall_wf_at {
         proof! {
             assert forall|o, i| 0 <= o < MAX_ORDER && 0 <= i <$new@.next[o].len()
             implies $new@.wf_at(o, i) by {
+                reveal(ReservedPerms::marked_compound);
                 if i < $old@.next[o].len() {
                     assert($old@.wf_at(o, i));
                 }
@@ -607,6 +608,7 @@ impl MemoryRegion {
     #[verus_verify(spinoff_prover)]
     fn get_page_storage_type(&self, pfn: usize) -> &PageStorageType {
         proof_decl! {
+            reveal(spec_page_info);
             let tracked perm = self.perms.borrow().reserved.tracked_borrow(pfn as int);
         }
         unsafe {
@@ -656,6 +658,7 @@ impl MemoryRegion {
         proof! {
             self.perms.borrow_mut().reserved.tracked_insert(pfn as int, perm);
             reveal(ReservedPerms::pfn_dom);
+            reveal(spec_page_info);
         }
     }
 
@@ -669,6 +672,7 @@ impl MemoryRegion {
     )]
     #[verus_verify(spinoff_prover)]
     fn read_page_info(&self, pfn: usize) -> PageInfo {
+        proof!{reveal(spec_page_info);}
         self.check_pfn(pfn);
 
         // SAFETY: we have checked that the pfn is valid via check_pfn() above.
@@ -809,7 +813,7 @@ impl MemoryRegion {
             old(self).ens_split_page_ok(&*self, pfn, order),
             ret.is_ok(),
     )]
-    #[verus_verify(spinoff_prover, rlimit(8))]
+    #[verus_verify(spinoff_prover, rlimit(4))]
     fn split_page(&mut self, pfn: usize, order: usize) -> Result<(), AllocError> {
         if !(1..MAX_ORDER).contains(&order) {
             return Err(AllocError::InvalidPageOrder(order));

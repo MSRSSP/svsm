@@ -511,7 +511,6 @@ impl<const N: usize> ReservedPerms<N> {
             (pfn <= p < pfn + (1usize << order)) ==> self.wf_page_info_at(p),
     {
         broadcast use lemma_bit_usize_shl_values;
-
         let size = 1usize << order;
         if pfn <= p < pfn + (1usize << order) {
             lemma_align_down_properties(p as int, size as int, pfn as int);

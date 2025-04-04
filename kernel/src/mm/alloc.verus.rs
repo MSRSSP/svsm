@@ -203,7 +203,6 @@ impl<const N: usize> ReservedPerms<N> {
 
     spec fn marked_compound(&self, pfn: usize, order: usize) -> bool {
         let n = 1usize << order;
-        let pi = self.spec_page_info(pfn);
         &&& order < N
         &&& self.valid_pfn_order(pfn, order)
         &&& forall|i|
@@ -620,7 +619,6 @@ impl<const N: usize> MemoryRegionTracked<N> {
         &&& self.wf_reserved()
     }
 
-    #[verifier(inline)]
     spec fn marked_compound(&self, pfn: usize, order: usize) -> bool {
         self.reserved().marked_compound(pfn, order)
     }
@@ -759,8 +757,8 @@ impl MemoryRegion {
     }
 
     spec fn ens_read_page_info(self, pfn: usize, ret: PageInfo) -> bool {
-        &&& self@.spec_page_info(pfn as int).is_some()
-        &&& self@.spec_page_info(pfn as int).unwrap() === ret
+        let pi = self@.spec_page_info(pfn as int);
+        &&& pi === Some(ret)
         &&& pfn < self.page_count
     }
 
@@ -1088,10 +1086,7 @@ impl MemoryRegion {
     spec fn ens_free_page(&self, new: &Self, vaddr: VirtAddr) -> bool {
         let pfn = self.spec_get_pfn(vaddr);
         if pfn.is_some() {
-            let order = self@.reserved().spec_page_info(pfn.unwrap()).unwrap().get_order();
-            &&& new.wf()
-            //&&& new@.contains_range(pfn.unwrap(), order)
-
+            new.wf()
         } else {
             new === self
         }

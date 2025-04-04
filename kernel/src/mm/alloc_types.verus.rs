@@ -15,6 +15,7 @@ spec fn spec_page_storage_type(perm: FracTypedPerm<PageStorageType>) -> Option<P
     }
 }
 
+#[verifier(opaque)]
 spec fn spec_page_info(perm: FracTypedPerm<PageStorageType>) -> Option<PageInfo> {
     let mem = spec_page_storage_type(perm);
     if mem.is_some() {
