@@ -46,17 +46,6 @@ trait SpecDecoderProof<T>: core::marker::Sized {
 
     spec fn spec_encode(&self) -> Option<T>;
 
-    /*{
-        if exists|x: T| #[trigger] Self::spec_decode(x) === Some(*self) {
-            Some(choose|x: T| #[trigger] Self::spec_decode(x) === Some(*self))
-        } else {
-            None
-        }
-    }*/
-    spec fn spec_encode_req(&self) -> bool {
-        true
-    }
-
     proof fn proof_encode_decode(&self)
         requires
             self.spec_encode().is_some(),
@@ -92,10 +81,6 @@ impl SpecDecoderProof<PageStorageType> for FreeInfo {
         } else {
             None
         }
-    }
-
-    spec fn spec_encode_req(&self) -> bool {
-        self.inv()
     }
 
     spec fn spec_encode(&self) -> Option<PageStorageType> {

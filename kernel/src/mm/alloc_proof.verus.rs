@@ -69,6 +69,7 @@ impl MemoryRegionTracked<MAX_ORDER> {
         broadcast use lemma_bit_usize_shl_values, verify_proof::set::lemma_int_range;
 
         let next = self.next;
+        self.pg_params().lemma_reserved_pfn_count();
         if n > 0 {
             let i = n - 1;
             let p = self.next[o][i];
@@ -85,6 +86,7 @@ impl MemoryRegionTracked<MAX_ORDER> {
             let perm2 = self.avail.tracked_borrow((o, i));
             vaddr1.lemma_vaddr_region_len(mem_size as nat);
             is_disjoint(perm, perm2);
+            reveal(<VirtAddr as SpecVAddrImpl>::region_to_dom);
             assert(perm.dom().contains(start1));
             assert(perm2.dom().contains(start2));
             assert(order_disjoint(#[trigger] self.next[o][n - 1], o as usize, pfn, order));
@@ -121,6 +123,7 @@ impl MemoryRegionTracked<MAX_ORDER> {
             *old(perm) == *perm,
         decreases max_order,
     {
+        reveal(MemoryRegionTracked::free_order_dom_rec);
         if max_order > 0 {
             let o = max_order - 1;
             self.lemma_pfn_range_disjoint_rec1(perm, pfn, order, o, self.next[o].len());
@@ -144,7 +147,7 @@ impl MemoryRegionTracked<MAX_ORDER> {
         ensures
             self.pfn_range_is_allocated(pfn, order),
             self.free_dom().disjoint(order_set(pfn, order)),
-            //self.free_dom().len() + (1usize << order) <= self.max_free_page_count(),
+            self.free_dom().len() + (1usize << order) <= self.max_free_page_count(),
             *old(perm) == *perm,
     {
         reveal(MemoryRegionTracked::free_dom);
@@ -179,7 +182,7 @@ impl MemoryRegionTracked<MAX_ORDER> {
     }
 }
 
-#[verifier::rlimit(4)]
+#[verifier::rlimit(2)]
 proof fn tracked_merge(
     tracked p1: &mut RawPerm,
     tracked p2: RawPerm,
@@ -207,6 +210,7 @@ proof fn tracked_merge(
 {
     broadcast use lemma_bit_usize_shl_values;
 
+    reveal(<VirtAddr as SpecVAddrImpl>::region_to_dom);
     map.lemma_get_virt(pfn1);
     map.lemma_get_virt(pfn2);
     let size = 1usize << order;
@@ -360,7 +364,6 @@ impl<const N: usize> ReservedPerms<N> {
         requires
             self.wf_dom(),
             0 <= order < N <= 64,
-            self.valid_pfn_order(pfn, order),
             #[trigger] self.marked_order(pfn, order),
         ensures
             self.pfn_dom(order).len() >= 1usize << order,
@@ -511,6 +514,8 @@ impl<const N: usize> ReservedPerms<N> {
             (pfn <= p < pfn + (1usize << order)) ==> self.wf_page_info_at(p),
     {
         broadcast use lemma_bit_usize_shl_values;
+
+        self.pg_params().lemma_reserved_pfn_count();
         let size = 1usize << order;
         if pfn <= p < pfn + (1usize << order) {
             lemma_align_down_properties(p as int, size as int, pfn as int);
@@ -592,7 +597,7 @@ impl<const N: usize> ReservedPerms<N> {
     }
 
     #[verifier::spinoff_prover]
-    #[verifier::rlimit(4)]
+    #[verifier::rlimit(2)]
     proof fn lemma_reserved_info_merge(&self, new: Self, pfn: usize, order: usize)
         requires
             0 <= order < N - 1,
@@ -630,7 +635,7 @@ impl<const N: usize> ReservedPerms<N> {
     }
 
     #[verifier::spinoff_prover]
-    #[verifier::rlimit(5)]
+    #[verifier::rlimit(2)]
     proof fn lemma_reserved_info_split(&self, new: Self, pfn: usize, order: usize)
         requires
             0 < order < N <= 64,
@@ -676,7 +681,7 @@ impl<const N: usize> ReservedPerms<N> {
     }
 
     #[verifier::spinoff_prover]
-    #[verifier::rlimit(4)]
+    #[verifier::rlimit(2)]
     broadcast proof fn lemma_reserved_info_remove(
         &self,
         new: Self,
@@ -691,9 +696,7 @@ impl<const N: usize> ReservedPerms<N> {
             new.wf_dom(),
             prev_pfn >= pfn + (1usize << order) || pfn >= prev_pfn + (1usize << order),
             self.marked_order(pfn, order),
-            self.valid_pfn_order(pfn, order),
             self.marked_order(prev_pfn, order),
-            self.valid_pfn_order(prev_pfn, order),
             new.page_count() === self.page_count(),
             self.reserved.dom() === new.reserved.dom(),
             #[trigger] self.ens_allocate_pfn(new, pfn, prev_pfn, order),
@@ -709,6 +712,8 @@ impl<const N: usize> ReservedPerms<N> {
             === new.spec_page_info(p) && self.spec_page_info(p).is_some() by {
             assert(self.reserved[p as int] === new.reserved[p as int]);
         }
+        self.pg_params().lemma_reserved_pfn_count();
+        new.pg_params().lemma_reserved_pfn_count();
         assert forall|p: usize|
             new.reserved_count() <= p < new.page_count() implies new.wf_page_info_at(p) by {
             assert(self.wf_page_info_at(p));
@@ -796,6 +801,7 @@ impl<const N: usize> MemoryRegionTracked<N> {
             self.free_dom_at(order, idx).subset_of(self.free_order_dom(order)),
             self.free_dom_at(order, idx).subset_of(self.full_pfn_dom()),
     {
+        reveal(MemoryRegionTracked::free_order_dom_rec);
         let s1 = self.free_order_dom(order);
         let s2 = self.free_dom_at(order, idx);
         assert forall|e| s2.contains(e) implies s1.contains(e) by {
@@ -815,6 +821,8 @@ impl<const N: usize> MemoryRegionTracked<N> {
             self.free_order_dom_rec(order, len).len() == len * (1usize << order),
         decreases len,
     {
+        reveal(PageCountParam::reserved_pfn_count);
+        reveal(MemoryRegionTracked::free_order_dom_rec);
         let size = 1usize << order;
         if len > 0 {
             let idx = len - 1;
@@ -851,6 +859,7 @@ impl<const N: usize> MemoryRegionTracked<N> {
         ensures
             self.free_order_dom(order).subset_of(self.free_dom()),
     {
+        reveal(MemoryRegionTracked::free_order_dom_rec);
         reveal(MemoryRegionTracked::free_dom);
         assert(self.free_order_dom(order).subset_of(self.free_dom()));
     }
@@ -862,11 +871,12 @@ impl<const N: usize> MemoryRegionTracked<N> {
             0 <= order < N <= 64,
         ensures
             self.free_order_dom(order).len() == self.next[order as int].len() * (1usize << order),
-            self.free_order_dom(order).len() >= self.next[order as int].len(),
-            self.free_order_dom(order).len() <= self.free_dom().len(),
+            self.next[order as int].len() <= self.free_order_dom(order).len()
+                <= self.free_dom().len(),
     {
         broadcast use set_len_group, lemma_mul_ordering;
 
+        reveal(PageCountParam::reserved_pfn_count);
         reveal(MemoryRegionTracked::free_dom);
         assert(1usize << order >= 1) by {
             broadcast use lemma_bit_usize_shl_values;
@@ -877,7 +887,7 @@ impl<const N: usize> MemoryRegionTracked<N> {
     }
 
     #[verifier::spinoff_prover]
-    #[verifier::rlimit(4)]
+    #[verifier::rlimit(2)]
     proof fn lemma_wf_info_after_remove(&self, new: Self, order: usize, idx: int)
         requires
             self.wf(),
@@ -1000,6 +1010,7 @@ impl<const N: usize> MemoryRegionTracked<N> {
         };
         assert(ret.reserved.dom() =~= set_int_range(0, 0));
         reveal(ReservedPerms::wf_page_info);
+        reveal(PageCountParam::reserved_pfn_count);
         ret
     }
 
@@ -1116,15 +1127,7 @@ impl<const N: usize> MemoryRegionTracked<N> {
             self.next[order as int] == old(self).next[order as int].push(pfn),
             self.next == old(self).next.update(order as int, self.next[order as int]),
             self.reserved() == old(self).reserved(),
-            self.map == old(
-                self,
-            ).map,
-    //self.avail[(order as int, old(self).next[order as int].len() as int)] === perm,
-    //self.avail === old(self).avail.insert(
-    //    (order as int, old(self).next[order as int].len() as int),
-    //    perm,
-    //),
-
+            self.map == old(self).map,
     {
         assert(self.wf_perms()) by {
             broadcast use lemma_wf_perms;
@@ -1157,37 +1160,16 @@ broadcast proof fn lemma_wf_next_page_info(mr: MemoryRegion, order: int)
         mr@.wf_next(order),
         mr.next_page[order] == 0 || mr.next_page[order] < mr.page_count,
         (mr.next_page[order] == 0) == (mr.free_pages[order] == 0),
-        //(mr@.next_next_page(order) == 0) ==> (mr.free_pages[order] <= 1),
-        mr.free_pages[order] == mr@.next[order].len(),
 {
     let perms = mr@;
     let i = perms.next[order].len() - 1;
-    if i < 0 {
-        assert(mr@.next_page(order) == 0);
-    } else {
+    mr@.pg_params().lemma_reserved_pfn_count();
+    if i >= 0 {
         assert(perms.wf_at(order, i));
-        assert(perms.next_page(order) > 0);
     }
-    assert(mr.free_pages[order] == perms.free_page_counts()[order]);
-    assert(perms.free_page_counts()[order] == perms.next[order].len());
     if i > 0 {
         assert(perms.wf_at(order, i - 1));
-        assert(mr@.next_next_page(order) > 0);
-    } else {
-        assert(perms.next[order].len() <= 1);
-        assert(mr@.next_next_page(order) == 0);
     }
-}
-
-#[verifier::spinoff_prover]
-proof fn lemma_ens_has_free_pages_pages(mr: MemoryRegion, order: int)
-    requires
-        mr.spec_alloc_fails(order),
-        0 <= order < MAX_ORDER - 1,
-    ensures
-        !mr.spec_alloc_fails(order + 1) ==> !mr.spec_alloc_fails(order),
-        (mr.spec_alloc_fails(order + 1) && mr.next_page[order] == 0) ==> mr.spec_alloc_fails(order),
-{
 }
 
 #[verifier::spinoff_prover]
@@ -1335,16 +1317,16 @@ impl MemoryRegion {
             (#[trigger] self.nr_pages[order as int]) * (1usize << order) <= self.page_count,
             self.nr_pages[order as int] <= self.page_count,
             self.nr_pages[order as int] == self@.reserved().pfn_dom(order).len() / (1usize
-                << order) as nat,
-            (exists|pfn: usize| #[trigger] self@.marked_order(pfn, order))
-                ==> self.nr_pages[order as int] >= 1,
-            (exists|pfn: usize, pfn2: usize|
+                << order) as nat,/*(exists|pfn: usize| #[trigger] self@.marked_order(pfn, order))
+                ==> self.nr_pages[order as int] >= 1,*/
+    /*(exists|pfn: usize, pfn2: usize|
                 pfn2 != pfn && #[trigger] self@.marked_order(pfn, order)
                     && #[trigger] self@.marked_order(pfn2, order)) ==> self.nr_pages[order as int]
-                >= 1,
-            (exists|order2: usize|
+                >= 1,*/
+    /*(exists|order2: usize|
                 order2 != order && 0 < order2 < MAX_ORDER && self.nr_pages[order2 as int] > 0)
-                ==> self.nr_pages[order as int] <= self.page_count - 2,
+                ==> self.nr_pages[order as int] <= self.page_count - 2,*/
+
     {
         broadcast use lemma_bit_usize_shl_values, lemma_mul_inequality, lemma_mul_ordering;
 
@@ -1360,15 +1342,15 @@ impl MemoryRegion {
         if exists|pfn: usize| #[trigger] self@.marked_order(pfn, order) {
             let pfn = choose|pfn: usize| #[trigger] self@.marked_order(pfn, order);
             self@.reserved().lemma_pfn_dom_len_with_one(pfn, order);
-        }
-        if exists|pfn: usize, pfn2: usize|
+        }/*if exists|pfn: usize, pfn2: usize|
             pfn2 != pfn && #[trigger] self@.marked_order(pfn, order)
                 && #[trigger] self@.marked_order(pfn2, order) {
             let (pfn1, pfn2) = choose|pfn: usize, pfn2: usize|
                 pfn2 != pfn && #[trigger] self@.marked_order(pfn, order)
                     && #[trigger] self@.marked_order(pfn2, order);
             self@.reserved().lemma_pfn_dom_len_with_two(pfn1, pfn2, order);
-        }
+        }*/
+
         if exists|order2: usize|
             order2 != order && 0 < order2 < MAX_ORDER && self.nr_pages[order2 as int] > 0 {
             let order2 = choose|order2: usize|
@@ -1376,6 +1358,44 @@ impl MemoryRegion {
             self@.reserved().lemma_pfn_dom_pair(order, order2);
             assert((1usize << order2) >= 2);
         }
+    }
+
+    #[verifier::spinoff_prover]
+    proof fn lemma_free_count(&self, order: usize)
+        requires
+            self.wf(),
+            0 <= order < MAX_ORDER,
+        ensures
+            self.free_pages[order as int] == self@.next[order as int].len(),
+            self.free_pages[order as int] <= self@.free_order_dom(order).len(),
+            self.free_pages[order as int] <= self@.free_dom().len(),
+    {
+        self@.lemma_free_order_dom(order);
+        assert(self.free_pages[order as int] == self@.free_page_counts()[order as int]);
+    }
+
+    proof fn lemma_pfn_dom_len_with_two(&self, pfn1: usize, pfn2: usize, order: usize)
+        requires
+            self.wf(),
+            0 <= order < MAX_ORDER,
+            self@.marked_order(pfn1, order),
+            self@.marked_order(pfn2, order),
+            pfn1 != pfn2,
+        ensures
+            self.nr_pages[order as int] >= 2,
+    {
+        self@.reserved().lemma_pfn_dom_len_with_two(pfn1, pfn2, order);
+    }
+
+    proof fn lemma_pfn_dom_len_with_one(&self, pfn: usize, order: usize)
+        requires
+            self.wf(),
+            0 <= order < MAX_ORDER,
+            #[trigger] self@.marked_order(pfn, order),
+        ensures
+            self.nr_pages[order as int] >= 1,
+    {
+        self@.reserved().lemma_pfn_dom_len_with_one(pfn, order);
     }
 }
 

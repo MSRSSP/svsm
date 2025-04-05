@@ -55,7 +55,10 @@ mod address_spec { include!("address_inner.verus.rs");  }
 
 pub use address_spec::*;
 
-unsafe impl Structural for PhysAddr {}
+unsafe impl Structural for PhysAddr {
+
+}
+
 // The inner address should be smaller than VADDR_RANGE_SIZE.
 // Define a simple spec for sign_extend without using bit ops.
 pub open spec fn sign_extend_spec(addr: InnerAddr) -> usize
@@ -253,6 +256,7 @@ impl SpecVAddrImpl for VirtAddr {
         Some(self@ as int)
     }
 
+    #[verifier(opaque)]
     open spec fn region_to_dom(&self, size: nat) -> Set<int> {
         if self.is_canonical() {
             Set::new(
@@ -267,12 +271,14 @@ impl SpecVAddrImpl for VirtAddr {
     }
 
     proof fn lemma_unique(v1: &Self, v2: &Self) {
+        reveal(<VirtAddr as SpecVAddrImpl>::region_to_dom);
     }
 
     proof fn lemma_vaddr_region_len(&self, size: nat)
         ensures
             self.is_canonical() ==> self.region_to_dom(size).len() > 0,
     {
+        reveal(<VirtAddr as SpecVAddrImpl>::region_to_dom);
         if self.is_canonical() {
             assert(self.region_to_dom(size).contains(self@ as int));
         }
@@ -284,6 +290,27 @@ impl SpecVAddrImpl for VirtAddr {
     }
 
     proof fn lemma_valid_small_size(&self, size1: nat, size2: nat) {
+        reveal(<VirtAddr as SpecVAddrImpl>::region_to_dom);
+    }
+}
+
+impl VirtAddr {
+    pub proof fn lemma_region_to_dom2(self, vaddr2: VirtAddr, size1: nat, size2: nat)
+        requires
+            self.is_canonical() && vaddr2.is_canonical(),
+            vaddr2.offset() == self.offset() + size1,
+        ensures
+            #[trigger] self.region_to_dom(size1) + #[trigger] vaddr2.region_to_dom(size2)
+                == self.region_to_dom(size1 + size2),
+            self.region_to_dom(size1 + size2).difference(self.region_to_dom(size1))
+                == vaddr2.region_to_dom(size2),
+    {
+        reveal(<VirtAddr as SpecVAddrImpl>::region_to_dom);
+        assert(self.region_to_dom(size1) + vaddr2.region_to_dom(size2) =~= self.region_to_dom(
+            size1 + size2,
+        ));
+        assert(self.region_to_dom(size1 + size2).difference(self.region_to_dom(size1))
+            =~= vaddr2.region_to_dom(size2))
     }
 }
 
@@ -327,14 +354,19 @@ impl SpecAddRequires<InnerAddr> for PhysAddr {
 }
 
 // TOOD: wait for verus derive automation.
-pub assume_specification[VirtAddr::partial_cmp](lhs: &VirtAddr, rhs: &VirtAddr) -> (ret: Option<core::cmp::Ordering>)
-ensures
-    usize::partial_cmp.ensures((&lhs@, &rhs@), ret)
+pub assume_specification[ VirtAddr::partial_cmp ](lhs: &VirtAddr, rhs: &VirtAddr) -> (ret: Option<
+    core::cmp::Ordering,
+>)
+    ensures
+        usize::partial_cmp.ensures((&lhs@, &rhs@), ret),
 ;
 
 // TOOD: wait for verus derive automation.
-pub assume_specification[PhysAddr::partial_cmp](lhs: &PhysAddr, rhs: &PhysAddr) -> (ret: Option<core::cmp::Ordering>)
-ensures
-    usize::partial_cmp.ensures((&lhs@, &rhs@), ret)
+pub assume_specification[ PhysAddr::partial_cmp ](lhs: &PhysAddr, rhs: &PhysAddr) -> (ret: Option<
+    core::cmp::Ordering,
+>)
+    ensures
+        usize::partial_cmp.ensures((&lhs@, &rhs@), ret),
 ;
+
 } // verus!

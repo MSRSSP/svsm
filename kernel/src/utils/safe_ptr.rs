@@ -78,6 +78,8 @@ impl<T> SafeMutPtrWithFracTypedPerm<T> for *mut T {
             perm.opt_value() == MemContents::Init(v),
     )]
     unsafe fn v_write(self, v: T) {
-        unsafe {self.write(v);}
+        unsafe {
+            self.write(v);
+        }
     }
 }
