@@ -25,7 +25,6 @@ use verify_proof::bits::{
 use verify_proof::frac_ptr::FracTypedPerm;
 use verify_proof::nonlinear::lemma_modulus_add_sub_m;
 use verify_proof::set::{lemma_int_range_disjoint, spec_int_range_disjoint};
-use verify_proof::tseq::TrackedSeq;
 use vstd::arithmetic::mul::group_mul_properties;
 use vstd::arithmetic::mul::{lemma_mul_inequality, lemma_mul_ordering};
 use vstd::raw_ptr::PointsToRaw;
@@ -120,13 +119,15 @@ impl MemoryRegion {
     }
 
     spec fn wf_free_pages(&self) -> bool {
+        let free_pages = self.free_pages;
+        let perms = self@;
         &&& forall|order|
-            0 <= order < MAX_ORDER ==> self@.next[order].len() == #[trigger] self.free_pages[order]
+            0 <= order < MAX_ORDER ==> perms.next[order].len() == #[trigger] free_pages[order]
     }
 
     spec fn spec_get_pfn(&self, vaddr: VirtAddr) -> Option<usize> {
-        if self@.map.to_paddr(vaddr).is_some() {
-            Some(((vaddr.offset() - self.start_virt.offset()) / PAGE_SIZE as int) as usize)
+        if let Some(paddr) = self@.map.to_paddr(vaddr) {
+            Some(((paddr - self.start_phys@) / PAGE_SIZE as int) as usize)
         } else {
             None
         }
@@ -137,7 +138,17 @@ impl MemoryRegion {
     }
 
     spec fn spec_get_virt(&self, pfn: int) -> VirtAddr {
-        self.spec_try_get_virt(pfn).unwrap()
+        self@.map.try_get_virt(pfn as usize).unwrap()
+    }
+
+    /// virt_offset == physical_offset
+    spec fn ens_get_pfn(&self, vaddr: VirtAddr, ret: Result<usize, AllocError>) -> bool {
+        &&& ret.is_ok() == self.spec_get_pfn(vaddr).is_some()
+        &&& ret.is_ok() ==> {
+            &&& ret.unwrap() == self.spec_get_pfn(vaddr).unwrap()
+            &&& ret.unwrap() < self.page_count
+            &&& vaddr@ % 0x1000 == 0 ==> self.spec_get_virt(ret.unwrap() as int) == vaddr
+        }
     }
 
     spec fn ens_get_next_page(
@@ -145,19 +156,14 @@ impl MemoryRegion {
         new_self: &Self,
         order: usize,
         ret: Result<usize, AllocError>,
+        perm: RawPerm,
     ) -> bool {
-        let tmp = self.tmp_perms@.to_seq();
-        let new_tmp = new_self.tmp_perms@.to_seq();
         let order = order as int;
         &&& self.with_same_mapping(new_self)
         &&& ret.is_err() == ((self.next_page[order] == 0) && (self.free_pages[order] == 0))
         &&& ret.is_err() ==> self === new_self
         &&& ret.is_ok() ==> {
-            &&& new_tmp.last().wf_pfn_order(new_self@.map, ret.unwrap(), order as usize)
-            &&& new_tmp === tmp.push(
-                new_tmp.last(),
-            )
-            //&&& new_self.tmp_perms@.len() == self.tmp_perms@.len() + 1
+            &&& perm.wf_pfn_order(new_self@.map, ret.unwrap(), order as usize)
             &&& ret.unwrap() == self.next_page[order]
             &&& new_self.valid_pfn_order(ret.unwrap(), order as usize)
             &&& new_self.free_pages@ === self.free_pages@.update(
@@ -306,12 +312,7 @@ impl MemoryRegion {
 
     spec fn only_update_reserved_and_tmp_nr(&self, new: &Self) -> bool {
         let expected_perm = MemoryRegionTracked { reserved: new@.reserved, ..self@ };
-        let expected_self = MemoryRegion {
-            perms: new.perms,
-            nr_pages: new.nr_pages,
-            tmp_perms: new.tmp_perms,
-            ..*self
-        };
+        let expected_self = MemoryRegion { perms: new.perms, nr_pages: new.nr_pages, ..*self };
         &&& expected_self === *new
         &&& expected_perm === new@
     }
@@ -356,28 +357,19 @@ impl MemoryRegion {
         &&& Self::ens_find_neighbor(pfn, order, ret_pfn)
     }
 
-    spec fn req_allocate_pfn(&self, pfn: usize, order: usize, perm: Option<RawPerm>) -> bool {
+    spec fn req_allocate_pfn(&self, pfn: usize, order: usize) -> bool {
         let n = 1usize << order;
         &&& self@.reserved_pfn_count() <= pfn
         &&& pfn % n == 0
         &&& order < MAX_ORDER
         &&& self.wf()
-        &&& perm.is_none()
     }
 
-    spec fn ens_allocate_pfn(
-        &self,
-        new: &Self,
-        pfn: usize,
-        order: usize,
-        perm: Option<RawPerm>,
-    ) -> bool {
+    spec fn ens_allocate_pfn(&self, new: &Self, pfn: usize, order: usize, perm: RawPerm) -> bool {
         &&& self@.ens_allocate_pfn(new@, pfn, order)
-        &&& perm.is_some()
-        &&& perm.unwrap().wf_pfn_order(self@.map, pfn, order)
+        &&& perm.wf_pfn_order(self@.map, pfn, order)
         &&& new.wf()
         &&& self.with_same_mapping(new)
-        &&& self.tmp_perms@@ =~= new.tmp_perms@@
         &&& new.valid_pfn_order(pfn, order)
         &&& new.nr_pages === self.nr_pages
         &&& new.free_pages@ === self.free_pages@.update(
@@ -386,11 +378,10 @@ impl MemoryRegion {
         )
     }
 
-    spec fn req_try_to_merge_page(&self, pfn: usize, order: usize) -> bool {
+    spec fn req_try_to_merge_page(&self, pfn: usize, order: usize, perm: RawPerm) -> bool {
         &&& self.wf_reserved()
         &&& self.wf()
-        &&& self.tmp_perms@@.len() >= 1
-        &&& self.tmp_perms@@.last().wf_pfn_order(self@.map, pfn, order)
+        &&& perm.wf_pfn_order(self@.map, pfn, order)
         &&& self.valid_pfn_order(pfn, order)
         &&& self@.marked_not_free(pfn, order)
         &&& self@.pfn_range_is_allocated(pfn, order)
@@ -402,6 +393,7 @@ impl MemoryRegion {
         pfn: usize,
         order: usize,
         ret: Result<usize, AllocError>,
+        perm: RawPerm,
     ) -> bool {
         let new_pfn = ret.unwrap();
         let order = order as int;
@@ -413,8 +405,7 @@ impl MemoryRegion {
         &&& new_pfn == pfn || new_pfn == pfn - (1usize << order)
         &&& new.wf()
         &&& self.with_same_mapping(new)
-        &&& new.tmp_perms@@.last().wf_pfn_order(new@.map, new_pfn, new_order)
-        &&& new.tmp_perms@@.len() >= 1
+        &&& perm.wf_pfn_order(new@.map, new_pfn, new_order)
         &&& self.valid_pfn_order(new_pfn, new_order)
         &&& new.nr_pages@ =~= new_nr_pages
         &&& new.free_pages@ === new_free_pages
@@ -428,9 +419,11 @@ impl MemoryRegion {
         pfn: usize,
         order: usize,
         ret: Result<usize, AllocError>,
+        old_perm: RawPerm,
+        perm: RawPerm,
     ) -> bool {
-        &&& ret.is_ok() ==> self.ens_try_to_merge_page_ok(new, pfn, order, ret)
-        &&& ret.is_err() ==> (self == new)
+        &&& ret.is_ok() ==> self.ens_try_to_merge_page_ok(new, pfn, order, ret, perm)
+        &&& ret.is_err() ==> (self == new) && perm == old_perm
     }
 
     spec fn req_merge_pages(
@@ -514,13 +507,12 @@ impl MemoryRegion {
         }
     }
 
-    spec fn req_free_page_raw(&self, pfn: usize, order: usize) -> bool {
+    spec fn req_free_page_raw(&self, pfn: usize, order: usize, perm: RawPerm) -> bool {
         &&& self.wf()
         &&& self@.marked_not_free(pfn, order)
-        &&& self.tmp_perms@@.last().wf_pfn_order(self@.map, pfn, order)
-        &&& self.tmp_perms@@.len() > 0
         &&& self.valid_pfn_order(pfn, order)
         &&& self@.pfn_range_is_allocated(pfn, order)
+        &&& perm.wf_pfn_order(self@.map, pfn, order)
     }
 
     spec fn ens_free_page_raw(&self, new: &Self, pfn: usize, order: usize) -> bool {

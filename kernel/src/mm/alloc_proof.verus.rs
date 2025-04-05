@@ -156,30 +156,6 @@ impl MemoryRegionTracked<MAX_ORDER> {
         broadcast use set_len_group;
 
     }
-
-    #[verifier::spinoff_prover]
-    proof fn lemma_tmp_perm_disjoint(
-        tracked &self,
-        tracked tmp_perms: &mut TrackedSeq<RawPerm>,
-        pfn: usize,
-        order: usize,
-    )
-        requires
-            self.wf(),
-            self.valid_pfn_order(pfn, order),
-            old(tmp_perms).len() > 0,
-            old(tmp_perms).last().wf_pfn_order(self.map, pfn, order),
-            0 <= order < MAX_ORDER,
-        ensures
-            self.pfn_range_is_allocated(pfn, order),
-            tmp_perms@ == old(tmp_perms)@,
-            self.free_dom().disjoint(order_set(pfn, order)),
-    {
-        let tracked mut perm = tmp_perms.tracked_pop();
-        self.lemma_perm_disjoint(&mut perm, pfn, order);
-        tmp_perms.tracked_push(perm);
-        assert(tmp_perms@ =~= old(tmp_perms)@);
-    }
 }
 
 #[verifier::rlimit(2)]

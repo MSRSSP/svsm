@@ -14,8 +14,11 @@ pub trait SpecVAddrImpl {
             size > 0,
         ensures
             self.region_to_dom(size).finite(),
-            self.region_to_dom(1).len() > 0 <==> self.region_to_dom(1).contains(self.spec_int_addr().unwrap()),
-            self.region_to_dom(size).len() >= self.region_to_dom(1).len();
+            self.region_to_dom(1).len() > 0 <==> self.region_to_dom(1).contains(
+                self.spec_int_addr().unwrap(),
+            ),
+            self.region_to_dom(size).len() >= self.region_to_dom(1).len(),
+    ;
 
     /// Unique when casting to int address
     proof fn lemma_unique(v1: &Self, v2: &Self)

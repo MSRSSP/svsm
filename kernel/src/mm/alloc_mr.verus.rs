@@ -1,4 +1,5 @@
-verus!{
+verus! {
+
 spec fn spec_map_page_info_addr(map: LinearMap, pfn: usize) -> VirtAddr {
     let reserved_unit_size = size_of::<PageStorageType>();
     let start = map.start_virt;
@@ -568,4 +569,5 @@ impl<const N: usize> MemoryRegionTracked<N> {
         self.reserved().marked_not_free(pfn, order)
     }
 }
-}
+
+} // verus!
