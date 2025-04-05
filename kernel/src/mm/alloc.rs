@@ -515,25 +515,6 @@ impl MemoryRegion {
             tmp_perms: Tracked::assume_new(),
         }
     }
-    /// Converts a physical address within this memory region to a virtual address.
-    #[expect(dead_code)]
-    #[verus_verify(external_body)]
-    fn phys_to_virt(&self, paddr: PhysAddr) -> Option<VirtAddr> {
-        let end_phys = self.start_phys + (self.page_count * PAGE_SIZE);
-
-        if paddr < self.start_phys || paddr >= end_phys {
-            // For the initial stage2 identity mapping, the root page table
-            // pages are static and outside of the heap memory region.
-            if VirtAddr::from(self.start_phys.bits()) == self.start_virt {
-                return Some(VirtAddr::from(paddr.bits()));
-            }
-            return None;
-        }
-
-        let offset = paddr - self.start_phys;
-
-        Some(self.start_virt + offset)
-    }
 
     /// Converts a virtual address to a physical address within the memory region.
     #[expect(dead_code)]
