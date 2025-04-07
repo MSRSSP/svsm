@@ -221,6 +221,10 @@ impl<T> FracPerm<T> {
         self.reader.instance_id() == self.inst.id()
     }
 
+    pub closed spec fn view(self) -> Option<T> {
+        self.reader.element().0
+    }
+
     pub closed spec fn valid(&self) -> bool {
         &&& self@.is_some()
         &&& self.wf()
@@ -228,10 +232,6 @@ impl<T> FracPerm<T> {
 
     pub closed spec fn id(self) -> InstanceId {
         self.inst.id()
-    }
-
-    pub closed spec fn view(self) -> Option<T> {
-        self.reader.element().0
     }
 
     pub closed spec fn shares(&self) -> nat {
@@ -311,13 +311,15 @@ impl<T> FracPerm<T> {
             self.wf(),
             other.wf(),
             self@ == other@,
+            self.valid(),
+            other.valid(),
             self.id() == other.id(),
-            self.shares() + other.shares() <= self.total(),
         ensures
             ret@ == self@,
             ret.shares() == self.shares() + other.shares(),
             ret.wf(),
             ret.id() == self.id(),
+            ret.valid(),
     {
         let tracked (new_reader) = self.inst.merge(self.view(), self.shares(), other.shares(), self.reader, other.reader);
         FracPerm { inst: self.inst, reader: new_reader }

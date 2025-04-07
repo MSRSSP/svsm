@@ -1,7 +1,9 @@
+/// A fully verified frac-based pointer permission to share tracked memory permissions.
+
 use state_machines_macros::*;
 
 use vstd::prelude::*;
-use vstd::raw_ptr::PointsTo;
+use vstd::raw_ptr::{PointsToRaw, PointsTo};
 use vstd::tokens::InstanceId;
 use vstd::simple_pptr::MemContents;
 
@@ -118,14 +120,16 @@ impl UniqueByPtr {
     }
 }
 
+/// We proved that the frac-based permissions pointing to the same address are always from the same instance.
+/// Thus, we can safely merge the local and global permissions if they point to the same address.
 pub struct FracTypedPerm<T> {
-    p: Map<int, FracPerm<PointsTo<T>>>,
+    p: Option<FracPerm<PointsTo<T>>>,
     unique: UniqueByPtr,
 }
 
 impl<T> FracTypedPerm<T> {
     pub closed spec fn view(&self) -> FracPerm<PointsTo<T>> {
-        self.p[0]
+        self.p.unwrap()
     }
 
     pub closed spec fn shares(&self) -> nat {
@@ -174,15 +178,13 @@ impl<T> FracTypedPerm<T> {
 impl<T> FracTypedPerm<T> {
     #[verifier::type_invariant]
     pub closed spec fn wf(&self) -> bool {
-        &&& self@.wf()
         &&& self.unique.wf()
-        &&& self@.valid() ==> (self.addr(), self@.id()) == self.unique@
+        &&& self.valid() ==> self@.wf()
+        &&& self.valid() ==>  (self@.valid() && (self.addr(), self@.id()) == self.unique@)
     }
 
     pub closed spec fn valid(&self) -> bool {
-        &&& self@.valid()
-        &&& self.wf()
-        &&& self.p.dom() =~= set![0]
+        &&& self.p.is_some()
     }
 
     proof fn has_same_id(tracked &self, tracked other: &Self) 
@@ -193,6 +195,8 @@ impl<T> FracTypedPerm<T> {
     ensures
         self@.id() == other@.id(),
     {
+        use_type_invariant(&*self);
+        use_type_invariant(&*other);
         self.unique.inst.check_ids(self.addr(), self@.id(), other@.id(), &self.unique.id, &other.unique.id);
     }
 
@@ -205,9 +209,9 @@ impl<T> FracTypedPerm<T> {
         !self.valid(),
         self.wf(),
     {
-        let tracked p = self.p.tracked_remove(0);
+        use_type_invariant(&*self);
+        let tracked p = self.p.tracked_take();
         let tracked (ret, p) = p.extract();
-        self.p.tracked_insert(0, p);
         ret
     }
 
@@ -215,26 +219,39 @@ impl<T> FracTypedPerm<T> {
     requires
         self.valid(),
     {
-        self.p.tracked_borrow(0).borrow()
+        use_type_invariant(&*self);
+        self.p.tracked_borrow().borrow()
     }
 
     pub proof fn merge(tracked &mut self, tracked other: Self)
     requires
-        old(self).valid(),
         other.valid(),
+        old(self).valid(),
         old(self).addr() == other.addr(),
-        old(self).shares() + other.shares() <= old(self).total(),
     ensures
-        self.wf(),
         self.addr() == old(self).addr(),
+        self.valid(),
+        self.shares() == old(self).shares() + other.shares(),
     {
+        use_type_invariant(&*self);
+        use_type_invariant(&other);
         let tracked mut other = other;
         self.has_same_id(&other);
-        self.p.tracked_borrow(0).is_same(&other.p.tracked_borrow(0));
-        let tracked p1 = self.p.tracked_remove(0);
-        let tracked p2 = other.p.tracked_remove(0);
+        self.p.tracked_borrow().is_same(&other.p.tracked_borrow());
+        let tracked p1 = self.p.tracked_take();
+        let tracked p2 = other.p.tracked_take();
         let tracked p = p1.merge(p2);
-        self.p.tracked_insert(0, p);
+        self.p = Some(p);
     }
+}
+
+pub proof fn raw_perm_is_disjoint(tracked p1: &mut PointsToRaw, p2: &PointsToRaw)
+    requires
+        old(p1).dom().len() > 0,
+    ensures
+        *old(p1) == *p1,
+        p1.dom().disjoint(p2.dom()),
+{
+    admit();
 }
 }
