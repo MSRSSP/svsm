@@ -20,6 +20,7 @@ verus! {
 use vstd::arithmetic::div_mod::{lemma_mod_self_0, lemma_small_mod, lemma_add_mod_noop};
 use verify_proof::nonlinear::lemma_align_down_properties;
 use vstd::modes::tracked_swap;
+use verify_proof::frac_ptr::raw_perm_is_disjoint;
 
 global size_of PageStorageType == 8;
 
@@ -28,16 +29,6 @@ broadcast group set_len_group {
     verify_proof::set::lemma_int_range,
     verify_proof::set::lemma_len_filter,
     verify_proof::set::lemma_len_subset,
-}
-
-proof fn is_disjoint(tracked p1: &mut RawPerm, p2: &RawPerm)
-    requires
-        old(p1).dom().len() > 0,
-    ensures
-        *old(p1) == *p1,
-        p1.dom().disjoint(p2.dom()),
-{
-    admit();
 }
 
 impl MemoryRegionTracked<MAX_ORDER> {
@@ -72,12 +63,9 @@ impl MemoryRegionTracked<MAX_ORDER> {
         self.pg_params().lemma_reserved_pfn_count();
         if n > 0 {
             let i = n - 1;
-            let p = self.next[o][i];
-            let npages = 1usize << order;
-            let mem_size = npages * PAGE_SIZE;
+            let mem_size = (1usize << order) * PAGE_SIZE;
             let vaddr1 = self.map.lemma_get_virt(pfn);
             let start1 = vaddr1@ as int;
-            let end1 = start1 + npages;
             assert(self.wf_at(o, i));
             let pfn2 = self.next[o][i];
             let vaddr2 = self.map.lemma_get_virt(pfn2);
@@ -85,7 +73,7 @@ impl MemoryRegionTracked<MAX_ORDER> {
             let end2 = start2 + (1usize << o);
             let perm2 = self.avail.tracked_borrow((o, i));
             vaddr1.lemma_vaddr_region_len(mem_size as nat);
-            is_disjoint(perm, perm2);
+            raw_perm_is_disjoint(perm, perm2);
             reveal(<VirtAddr as SpecVAddrImpl>::region_to_dom);
             assert(perm.dom().contains(start1));
             assert(perm2.dom().contains(start2));

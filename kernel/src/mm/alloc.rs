@@ -551,8 +551,7 @@ impl MemoryRegion {
     fn page_info_mut_ptr(&self, pfn: usize) -> *mut PageStorageType {
         let offset = pfn * size_of::<PageStorageType>();
         verus_with!(Tracked(self.perms.borrow().is_exposed));
-        self
-            .start_virt
+        self.start_virt
             .const_add(offset)
             .as_mut_ptr_with_provenance()
     }
