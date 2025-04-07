@@ -1,11 +1,11 @@
 /// A fully verified frac-based pointer permission to share tracked memory permissions.
-
 use state_machines_macros::*;
 
+use vstd::modes::tracked_swap;
 use vstd::prelude::*;
-use vstd::raw_ptr::{PointsToRaw, PointsTo};
-use vstd::tokens::InstanceId;
+use vstd::raw_ptr::{PointsTo, PointsToRaw};
 use vstd::simple_pptr::MemContents;
+use vstd::tokens::InstanceId;
 
 use crate::frac_perm::FracPerm;
 
@@ -123,13 +123,13 @@ impl UniqueByPtr {
 /// We proved that the frac-based permissions pointing to the same address are always from the same instance.
 /// Thus, we can safely merge the local and global permissions if they point to the same address.
 pub struct FracTypedPerm<T> {
-    p: Option<FracPerm<PointsTo<T>>>,
+    p: FracPerm<PointsTo<T>>,
     unique: UniqueByPtr,
 }
 
 impl<T> FracTypedPerm<T> {
     pub closed spec fn view(&self) -> FracPerm<PointsTo<T>> {
-        self.p.unwrap()
+        self.p
     }
 
     pub closed spec fn shares(&self) -> nat {
@@ -184,10 +184,10 @@ impl<T> FracTypedPerm<T> {
     }
 
     pub closed spec fn valid(&self) -> bool {
-        &&& self.p.is_some()
+        &&& self.p.valid()
     }
 
-    proof fn has_same_id(tracked &self, tracked other: &Self) 
+    proof fn has_same_id(tracked &self, tracked other: &Self)
     requires
         self.valid(),
         other.valid(),
@@ -210,9 +210,7 @@ impl<T> FracTypedPerm<T> {
         self.wf(),
     {
         use_type_invariant(&*self);
-        let tracked p = self.p.tracked_take();
-        let tracked (ret, p) = p.extract();
-        ret
+        self.p.take()
     }
 
     pub proof fn borrow(tracked &self) -> (tracked ret: &PointsTo<T>)
@@ -220,7 +218,7 @@ impl<T> FracTypedPerm<T> {
         self.valid(),
     {
         use_type_invariant(&*self);
-        self.p.tracked_borrow().borrow()
+        self.p.borrow()
     }
 
     pub proof fn merge(tracked &mut self, tracked other: Self)
@@ -237,11 +235,8 @@ impl<T> FracTypedPerm<T> {
         use_type_invariant(&other);
         let tracked mut other = other;
         self.has_same_id(&other);
-        self.p.tracked_borrow().is_same(&other.p.tracked_borrow());
-        let tracked p1 = self.p.tracked_take();
-        let tracked p2 = other.p.tracked_take();
-        let tracked p = p1.merge(p2);
-        self.p = Some(p);
+        self.p.is_same(&other.p);
+        self.p.merge(other.p);
     }
 }
 

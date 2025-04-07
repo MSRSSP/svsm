@@ -1,8 +1,8 @@
 /// A fully verified frac-based ownership to share tracked ghost permissions.
 /// This is motivated by PCM from vstd and https://github.com/zeldovich/verus-experiments/blob/main/disk/frac.rs
 /// The state-machine proofs are motivated from the proof for Rc in vstd.
-
 use state_machines_macros::*;
+use vstd::modes::tracked_swap;
 use vstd::multiset::*;
 use vstd::prelude::*;
 
@@ -218,7 +218,8 @@ pub tracked struct FracPerm<T> {
 
 impl<T> FracPerm<T> {
     pub closed spec fn wf(self) -> bool {
-        self.reader.instance_id() == self.inst.id()
+        &&& self.reader.instance_id() == self.inst.id()
+        &&& self.inst.total() > 0
     }
 
     pub closed spec fn view(self) -> Option<T> {
@@ -226,8 +227,7 @@ impl<T> FracPerm<T> {
     }
 
     pub closed spec fn valid(&self) -> bool {
-        &&& self@.is_some()
-        &&& self.wf()
+        self@.is_some()
     }
 
     pub closed spec fn id(self) -> InstanceId {
@@ -242,11 +242,27 @@ impl<T> FracPerm<T> {
         self.inst.total()
     }
 
-    pub proof fn new(total: nat) -> (tracked s: Self)
+    pub proof fn new(total: nat, tracked v: T) -> (tracked s: Self)
         requires
             total > 0,
         ensures
-            s@.is_none(),
+            s.valid(),
+            s.wf(),
+            s@ == Some(v),
+    {
+        let tracked (Tracked(inst), Tracked(mut readers)) =
+            frac_inner::Instance::initialize_once(total, None);
+        let tracked reader = readers.remove((None, total));
+        let tracked reader = inst.update(Some(v), v, reader);
+        FracPerm { inst, reader }
+    }
+
+    pub proof fn empty(total: nat) -> (tracked s: Self)
+        requires
+            total > 0,
+        ensures
+            !s.valid(),
+            s.wf(),
     {
         let tracked (Tracked(inst), Tracked(mut readers)) =
             frac_inner::Instance::initialize_once(total, None);
@@ -304,25 +320,32 @@ impl<T> FracPerm<T> {
     }
 
     pub proof fn merge(
-        tracked self,
+        tracked &mut self,
         tracked other: Self,
-    ) -> (tracked ret: Self)
+    )
         requires
-            self.wf(),
+            old(self).wf(),
             other.wf(),
-            self@ == other@,
-            self.valid(),
+            old(self)@ == other@,
+            old(self).valid(),
             other.valid(),
-            self.id() == other.id(),
+            old(self).id() == other.id(),
         ensures
-            ret@ == self@,
-            ret.shares() == self.shares() + other.shares(),
-            ret.wf(),
-            ret.id() == self.id(),
-            ret.valid(),
+            self@ == old(self)@,
+            self.shares() == old(self).shares() + other.shares(),
+            self.wf(),
+            self.id() == old(self).id(),
+            self.valid(),
     {
-        let tracked (new_reader) = self.inst.merge(self.view(), self.shares(), other.shares(), self.reader, other.reader);
-        FracPerm { inst: self.inst, reader: new_reader }
+        let tracked mut perm = FracPerm::empty(self.total());
+        tracked_swap(self, &mut perm);
+        let shares = perm.shares();
+        let tracked FracPerm {
+            inst,
+            reader,
+        } = perm;
+        let tracked (new_reader) = inst.merge(other@, shares, other.shares(), reader, other.reader);
+        *self = FracPerm { inst: inst, reader: new_reader }
     }
 
     pub proof fn extract(tracked self) -> (tracked ret: (T, Self))
@@ -340,16 +363,33 @@ impl<T> FracPerm<T> {
         let tracked (Tracked(ret), Tracked(reader)) = inst.take(reader.element().0, reader);
 
         (ret, FracPerm{inst, reader})
+    }
 
+    pub proof fn take(tracked &mut self) -> (tracked ret: T)
+    requires
+        old(self).wf(),
+        old(self).valid(),
+        old(self).shares() == old(self).total(),
+    ensures
+        Some(ret) == old(self)@,
+        self.id() == old(self).id(),
+        self.wf(),
+        !self.valid(),
+    {
+        let tracked mut perm = FracPerm::empty(self.total());
+        tracked_swap(self, &mut perm);
+        let tracked (ret, mut new) = perm.extract();
+        tracked_swap(self, &mut new);
+        ret
     }
 }
 
 } // verus!
 
-verus!{
+verus! {
 
 impl<T> FracPerm<vstd::raw_ptr::PointsTo<T>> {
-    pub open spec fn addr(&self) -> int 
+    pub open spec fn addr(&self) -> int
     recommends self.valid()
     {
         self@.unwrap().ptr()@.addr as int

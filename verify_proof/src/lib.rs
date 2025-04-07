@@ -10,10 +10,10 @@
 use builtin_macros::*;
 
 pub mod bits;
-pub mod nonlinear;
-pub mod set;
 pub mod frac_perm;
 pub mod frac_ptr;
+pub mod nonlinear;
+pub mod set;
 
 verus! {
 
