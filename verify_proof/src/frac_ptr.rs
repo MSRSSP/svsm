@@ -205,6 +205,10 @@ impl<T> FracTypedPermData<T> {
             points_to: self.points_to,
         }
     }
+
+    pub open spec fn data_view(&self) -> Self {
+        self.update_shares(0)
+    }
 }
 
 impl<T> FracTypedPerm<T> {
@@ -278,8 +282,8 @@ impl<T> FracTypedPerm<T> {
         self.shares() == self.total()
     }
 
-    pub closed spec fn valid(&self) -> bool {
-        &&& self.p.valid()
+    pub open spec fn valid(&self) -> bool {
+        &&& self@.points_to.is_some()
     }
 
     proof fn has_same_id(tracked &self, tracked other: &Self)
@@ -385,16 +389,33 @@ pub proof fn raw_perm_is_disjoint(tracked p1: &mut PointsToRaw, p2: &PointsToRaw
     admit();
 }
 
-pub proof fn tracked_map_shares<Idx, T>(tracked m: &mut Map<Idx, FracTypedPerm<T>>, shares: nat, s: Set<Idx>) -> (tracked ret:  Map<Idx, FracTypedPerm<T>>)
+pub proof fn tracked_map_shares<Idx, T>(tracked m: &mut Map<Idx, FracTypedPerm<T>>, shares: nat) -> (tracked ret:  Map<Idx, FracTypedPerm<T>>)
 requires
+    old(m).dom().finite(),
+    shares > 0,
+    forall |i| old(m).dom().contains(i) ==> shares < (#[trigger]old(m)[i]).shares() && old(m)[i].valid(),
+ensures
+    ret.dom() == m.dom(),
+    m.dom() == old(m).dom(),
+    forall |i: Idx| #![trigger m[i]] #![trigger old(m)[i]] m.contains_key(i) ==> m[i]@ == old(m)[i]@.update_shares((old(m)[i].shares() - shares) as nat),
+    forall |i: Idx| #![trigger ret[i]] #![trigger old(m)[i]] ret.contains_key(i) ==> ret[i]@ == old(m)[i]@.update_shares(shares),
+{
+    _tracked_map_shares(m, shares, m.dom())
+}
+
+pub proof fn _tracked_map_shares<Idx, T>(tracked m: &mut Map<Idx, FracTypedPerm<T>>, shares: nat, s: Set<Idx>) -> (tracked ret:  Map<Idx, FracTypedPerm<T>>)
+requires
+    shares > 0,
     forall |i| #[trigger]s.contains(i) ==> old(m).contains_key(i),
-    forall |i| old(m).contains_key(i) ==> (#[trigger]old(m)[i]).valid() && 0 < shares < old(m)[i].shares(),
+    forall |i| s.contains(i) ==> (#[trigger]old(m)[i]).valid(),
+    forall |i| s.contains(i) ==> shares < (#[trigger]old(m)[i]).shares(),
     s.finite(),
 ensures
-    forall |i: Idx| #[trigger]s.contains(i) ==> m[i]@ == old(m)[i]@.update_shares((old(m)[i].shares() - shares) as nat),
+    forall |i: Idx| #![trigger m[i]] #![trigger old(m)[i]] s.contains(i) ==> m[i]@ == old(m)[i]@.update_shares((old(m)[i].shares() - shares) as nat),
     *m =~= old(m).union_prefer_right(m.restrict(s)),
+    m.dom() =~= old(m).dom(),
     ret.dom() =~= s,
-    forall |i: Idx| #[trigger]s.contains(i) ==> ret[i]@ == old(m)[i]@.update_shares(shares),
+    forall |i: Idx| s.contains(i) ==> (#[trigger]ret[i])@ == old(m)[i]@.update_shares(shares),
 decreases
     s.len(),
 {
@@ -402,7 +423,7 @@ decreases
         let idx = s.choose();
         assert(s.contains(idx));
         assert(m.contains_key(idx));
-        let tracked mut ret = tracked_map_shares(m, shares, s.remove(idx));
+        let tracked mut ret = _tracked_map_shares(m, shares, s.remove(idx));
         let old_m = *m;
         let tracked mut tmp = m.tracked_remove(idx);
         let tracked shared = tmp.share(shares);

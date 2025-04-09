@@ -3,6 +3,39 @@ use vstd::set_lib::set_int_range;
 
 verus! {
 
+pub open spec fn set_usize_range(start: usize, end: int) -> Set<usize> {
+    Set::new(|i| start <= i < end)
+}
+
+pub proof fn axiom_set_usize_range(start: usize, end: int)
+    requires
+        start <= end,
+        end <= usize::MAX + 1,
+    ensures
+        (#[trigger] set_usize_range(start, end)).finite(),
+        set_usize_range(start, end).len() == end - start,
+    decreases end - start,
+{
+    if end > start {
+        let e2 = (end - 1) as usize;
+        let s1 = set_usize_range(start, end);
+        let s2 = set_usize_range(start, e2 as int);
+        axiom_set_usize_range(start, e2 as int);
+        assert(s1 =~= s2.insert(e2));
+    } else {
+        assert(set_usize_range(start, end) =~= Set::empty());
+    }
+}
+
+pub broadcast proof fn axiom_set_usize_finite(s: Set<usize>)
+    ensures
+        #[trigger] s.finite(),
+{
+    let maxset = set_usize_range(0, usize::MAX + 1);
+    axiom_set_usize_range(0, usize::MAX + 1);
+    assert(s.subset_of(maxset));
+}
+
 pub open spec fn seq_sets_to_set<A>(next: Seq<Set<A>>) -> Set<A>
     decreases next.len(),
 {
