@@ -27,12 +27,13 @@ struct PageInfoDb {
     reserved: Map<usize, FracTypedPerm<PageStorageType>>,
 }
 
-struct DeallocInfo(PageInfoDb);
+struct RawDeallocPerm(PageInfoDb);
 
-impl DeallocInfo {
+impl RawDeallocPerm {
     #[verifier::type_invariant]
     pub closed spec fn wf(&self) -> bool {
-        self.0.is_unit()
+        &&& self.0.is_unit()
+        &&& self.0.is_readonly_dealloc_shares()
     }
 
     pub closed spec fn view(&self) -> PageInfoDb {
@@ -111,6 +112,29 @@ impl PageInfoDb {
 
     pub closed spec fn empty(base_ptr: *const PageStorageType) -> PageInfoDb {
         PageInfoDb { npages: 0, start_idx: 0, base_ptr, reserved: Map::empty() }
+    }
+
+    pub closed spec fn info_dom(&self, order: usize) -> Set<usize> {
+        self@.dom().filter(|i| self@[i].is_head() && self@[i].order() == order)
+    }
+
+    pub closed spec fn nr_page(&self, order: usize) -> nat {
+        self.info_dom(order).len()
+    }
+
+    proof fn lemma_unit_nr_page(&self, order: usize)
+        requires
+            self.wf(),
+            self.is_unit(),
+        ensures
+            order == self@[self.start_idx()].order() ==> self.nr_page(order) == 1,
+            order != self@[self.start_idx()].order() ==> self.nr_page(order) == 0,
+    {
+        if order == self@[self.start_idx()].order() {
+            assert(self.info_dom(order) =~= set![self.start_idx()]);
+        } else {
+            assert(self.info_dom(order).is_empty());
+        }
     }
 
     /*** Basic spec functions ***/
@@ -274,6 +298,24 @@ impl PageInfoDb {
         PageInfoDb { npages: 1usize << order, start_idx, base_ptr, reserved }
     }
 
+    pub open spec fn ens_split(&self, idx: usize, left: Self, right: Self) -> bool {
+        &&& left@ =~= self@.restrict(Set::new(|k: usize| k < idx))
+        &&& left.base_ptr() == self.base_ptr()
+        &&& left.start_idx() == self.start_idx()
+        &&& left.npages() == idx - self.start_idx()
+        &&& right@ =~= self@.restrict(Set::new(|k: usize| k >= idx))
+        &&& right.base_ptr() == self.base_ptr()
+        &&& right.start_idx() == idx
+        &&& right.npages() + left.npages() == self.npages()
+        &&& forall|i|
+            self.start_idx() <= i < self.start_idx() + self.npages() ==> #[trigger] self@[i] == if i
+                < idx {
+                left@[i]
+            } else {
+                right@[i]
+            }
+    }
+
     #[verifier(spinoff_prover)]
     #[verifier(rlimit(4))]
     proof fn tracked_split(tracked self, idx: usize) -> (tracked ret: (PageInfoDb, PageInfoDb))
@@ -281,21 +323,7 @@ impl PageInfoDb {
             self.is_head(idx),
             self.start_idx() <= idx < self.start_idx() + self.npages(),
         ensures
-            ret.0@ =~= self@.restrict(Set::new(|k: usize| k < idx)),
-            ret.0.base_ptr() == self.base_ptr(),
-            ret.0.start_idx() == self.start_idx(),
-            ret.0.npages() == idx - self.start_idx(),
-            ret.1@ =~= self@.restrict(Set::new(|k: usize| k >= idx)),
-            ret.1.base_ptr() == self.base_ptr(),
-            ret.1.start_idx() == idx,
-            ret.1.npages() + ret.0.npages() == self.npages(),
-            forall|i|
-                self.start_idx <= i < self.start_idx + self.npages ==> #[trigger] self@[i] == if i
-                    < idx {
-                    ret.0@[i]
-                } else {
-                    ret.1@[i]
-                },
+            self.ens_split(idx, ret.0, ret.1),
     {
         use_type_invariant(&self);
         self.lemma_restrict(idx);
@@ -464,7 +492,7 @@ impl PageInfoDb {
 
     #[verifier(spinoff_prover)]
     #[verifier(rlimit(4))]
-    proof fn tracked_alloc(tracked &mut self, idx: usize) -> (tracked ret: DeallocInfo)
+    proof fn tracked_alloc(tracked &mut self, idx: usize) -> (tracked ret: RawDeallocPerm)
         requires
             old(self)@[idx].is_head(),
             !old(self)@[idx].is_free(),
@@ -506,7 +534,7 @@ impl PageInfoDb {
             allocated_reserved,
         );
         assert(ret.is_unit());
-        DeallocInfo(ret)
+        RawDeallocPerm(ret)
     }
 
     pub closed spec fn is_unit(&self) -> bool {
