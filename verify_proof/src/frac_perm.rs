@@ -217,6 +217,7 @@ pub tracked struct FracPerm<T> {
 }
 
 impl<T> FracPerm<T> {
+    #[verifier::type_invariant]
     pub closed spec fn wf(self) -> bool {
         &&& self.reader.instance_id() == self.inst.id()
         &&& self.inst.total() > 0
@@ -224,10 +225,6 @@ impl<T> FracPerm<T> {
 
     pub closed spec fn view(self) -> Option<T> {
         self.reader.element().0
-    }
-
-    pub closed spec fn valid(&self) -> bool {
-        self@.is_some()
     }
 
     pub closed spec fn id(self) -> InstanceId {
@@ -242,12 +239,15 @@ impl<T> FracPerm<T> {
         self.inst.total()
     }
 
+    pub open spec fn valid(&self) -> bool {
+        self@.is_some()
+    }
+
     pub proof fn new(total: nat, tracked v: T) -> (tracked s: Self)
         requires
             total > 0,
         ensures
             s.valid(),
-            s.wf(),
             s@ == Some(v),
     {
         let tracked (Tracked(inst), Tracked(mut readers)) =
@@ -262,7 +262,6 @@ impl<T> FracPerm<T> {
             total > 0,
         ensures
             !s.valid(),
-            s.wf(),
     {
         let tracked (Tracked(inst), Tracked(mut readers)) =
             frac_inner::Instance::initialize_once(total, None);
@@ -272,51 +271,50 @@ impl<T> FracPerm<T> {
 
     pub proof fn borrow(tracked &self) -> (tracked t: &T)
         requires
-            self.wf(),
             self.valid(),
         ensures
             Some(*t) == self@,
     {
+        use_type_invariant(&*self);
         self.inst.reader_guard(self.view(), self.shares(), &self.reader)
     }
 
     pub proof fn is_same(tracked &self, tracked other: &Self)
     requires
-        self.wf(),
-        other.wf(),
         self.id() == other.id(),
     ensures
         self@ == other@,
     {
+        use_type_invariant(self);
+        use_type_invariant(other);
         self.inst.is_same((self@, self.shares()), (other@, other.shares()), &self.reader,&other.reader);
     }
 
-    pub proof fn share(tracked self, n: nat) -> (tracked ret: (
-        Self,
-        Self,
-    ))
+    pub proof fn share(tracked &mut self, n: nat) -> (tracked ret: Self)
         requires
-            self.wf(),
-            0 < n < self.shares(),
+            0 < n < old(self).shares(),
         ensures
-            ret.0.wf(),
-            ret.1.wf(),
-            self@ == ret.0@,
-            self@ == ret.1@,
-            self.id() == ret.0.id(),
-            self.id() == ret.1.id(),
-            ret.0.shares() + ret.1.shares() == self.shares(),
+            ret@ == old(self)@,
+            self@ == old(self)@,
+            self.id() == old(self).id(),
+            self.total() == old(self).total(),
+            ret.id() == old(self).id(),
+            ret.shares() + self.shares() == old(self).shares(),
+            ret.shares() == n,
+            ret.total() == old(self).total(),
     {
-        let tracked (Tracked(r1), Tracked(r2)) = self.inst.do_share(self.view(), self.shares(), n, self.reader);
-        let tracked left = FracPerm {
-            inst: self.inst,
-            reader: r1,
-        };
-        let tracked right = FracPerm {
-            inst: self.inst,
+        use_type_invariant(&*self);
+        let tracked mut perm = FracPerm::empty(self.total());
+        tracked_swap(self, &mut perm);
+        let tracked (Tracked(r1), Tracked(r2)) = perm.inst.do_share(perm.view(), perm.shares(), n, perm.reader);
+        *self = FracPerm {
+            inst: perm.inst,
             reader: r2,
         };
-        (left, right)
+        FracPerm {
+            inst: perm.inst,
+            reader: r1,
+        }
     }
 
     pub proof fn merge(
@@ -324,8 +322,6 @@ impl<T> FracPerm<T> {
         tracked other: Self,
     )
         requires
-            old(self).wf(),
-            other.wf(),
             old(self)@ == other@,
             old(self).valid(),
             other.valid(),
@@ -333,10 +329,12 @@ impl<T> FracPerm<T> {
         ensures
             self@ == old(self)@,
             self.shares() == old(self).shares() + other.shares(),
-            self.wf(),
+            self.total() == old(self).total(),
             self.id() == old(self).id(),
             self.valid(),
     {
+        use_type_invariant(&*self);
+        use_type_invariant(&other);
         let tracked mut perm = FracPerm::empty(self.total());
         tracked_swap(self, &mut perm);
         let shares = perm.shares();
@@ -348,17 +346,37 @@ impl<T> FracPerm<T> {
         *self = FracPerm { inst: inst, reader: new_reader }
     }
 
+    pub proof fn udpate(tracked &mut self, tracked v: T)
+        requires
+            !old(self).valid(),
+            old(self).shares() == old(self).total(),
+        ensures
+            self.valid(),
+            self@ == Some(v),
+            self.id() == old(self).id(),
+            self.shares() == old(self).shares(),
+            self.total() == old(self).total(),
+    {
+        use_type_invariant(&*self);
+        let tracked mut perm = FracPerm::empty(self.total());
+        tracked_swap(self, &mut perm);
+        let tracked FracPerm { inst, reader } = perm;
+        let tracked reader = inst.update(Some(v), v, reader);
+        *self  = FracPerm { inst, reader };
+    }
+
     pub proof fn extract(tracked self) -> (tracked ret: (T, Self))
         requires
-            self.wf(),
             self.valid(),
             self.shares() == self.total(),
         ensures
             Some(ret.0) == self@,
             ret.1.id() == self.id(),
-            ret.1.wf(),
             !ret.1.valid(),
+            ret.1.shares() == ret.1.total(),
+            self.total() == ret.1.total(),
     {
+        use_type_invariant(&self);
         let tracked FracPerm { mut inst, mut reader } = self;
         let tracked (Tracked(ret), Tracked(reader)) = inst.take(reader.element().0, reader);
 
@@ -367,15 +385,16 @@ impl<T> FracPerm<T> {
 
     pub proof fn take(tracked &mut self) -> (tracked ret: T)
     requires
-        old(self).wf(),
         old(self).valid(),
         old(self).shares() == old(self).total(),
     ensures
         Some(ret) == old(self)@,
         self.id() == old(self).id(),
-        self.wf(),
         !self.valid(),
+        self.shares() == old(self).total(),
+        self.total() == old(self).total(),
     {
+        use_type_invariant(&*self);
         let tracked mut perm = FracPerm::empty(self.total());
         tracked_swap(self, &mut perm);
         let tracked (ret, mut new) = perm.extract();

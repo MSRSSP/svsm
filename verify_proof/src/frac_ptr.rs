@@ -1,10 +1,8 @@
 /// A fully verified frac-based pointer permission to share tracked memory permissions.
 use state_machines_macros::*;
 
-use vstd::modes::tracked_swap;
 use vstd::prelude::*;
-use vstd::raw_ptr::{PointsTo, PointsToRaw};
-use vstd::simple_pptr::MemContents;
+use vstd::raw_ptr::{MemContents, PointsTo, PointsToData, PointsToRaw};
 use vstd::tokens::InstanceId;
 
 use crate::frac_perm::FracPerm;
@@ -90,6 +88,24 @@ tokenized_state_machine!(addr_unique {
             post.to_addr[post.addr_to[addr].unwrap()] == Some(addr)
         by {}
     }
+
+    transition!{
+        add_reader(addr: int, id: InstanceId) {
+            have ptr_readers >= {(addr, id)};
+            add ptr_readers += {(addr, id)};
+        }
+    }
+
+    #[inductive(add_reader)]
+    fn add_reader_inductive(pre: Self, post: Self, addr: int, id: InstanceId) {
+        assert(pre.ptr_readers.contains((addr, id)));
+        assert forall |addr, id| #[trigger]post.ptr_readers.contains((addr, id))
+        implies
+            post.addr_to[addr] === Some(id) && post.to_addr[id] === Some(addr)
+        by {
+            assert(pre.ptr_readers.contains((addr, id)));
+        }
+    }
 }
 );
 
@@ -97,13 +113,14 @@ tokenized_state_machine!(addr_unique {
 pub struct UniqueByPtr {
     tracked inst: addr_unique::Instance,
     tracked id: addr_unique::ptr_readers,
-    addr_id_map: Option<(addr_unique::addr_to, addr_unique::to_addr)>,
+    ghost addr_id_map: Option<(addr_unique::addr_to, addr_unique::to_addr)>,
 }
 
 impl UniqueByPtr {
     // inst is only created once at the begining and thus all share the same inst_id;
     pub uninterp spec fn spec_uniq_inst_id() -> InstanceId;
 
+    #[verifier::type_invariant]
     pub closed spec fn wf(&self) -> bool {
         &&& self.inst.id() == UniqueByPtr::spec_uniq_inst_id()
         &&& self.id.instance_id() == UniqueByPtr::spec_uniq_inst_id()
@@ -115,8 +132,26 @@ impl UniqueByPtr {
         }
     }
 
+    pub proof fn tracked_clone(tracked &self) -> (tracked ret: Self)
+    ensures
+        ret@ == self@,
+    {
+        use_type_invariant(&*self);
+        let (addr, id) = self.id.element();
+        let tracked reader = self.inst.add_reader(addr, id, &self.id);
+        UniqueByPtr {
+            inst: self.inst,
+            id: reader,
+            addr_id_map: self.addr_id_map,
+        }
+    }
+
     pub closed spec fn view(&self) -> (int, InstanceId) {
         self.id.element()
+    }
+
+    pub open spec fn id(&self) -> InstanceId {
+        self@.1
     }
 }
 
@@ -127,60 +162,120 @@ pub struct FracTypedPerm<T> {
     unique: UniqueByPtr,
 }
 
+pub struct FracTypedPermData<T> {
+    pub shares: nat,
+    pub total: nat,
+    pub addr: int,
+    pub id: InstanceId,
+    pub points_to: Option<PointsToData<T>>,
+}
+
+impl<T> FracTypedPermData<T> {
+    pub open spec fn update_points_to(self, p: Option<PointsToData<T>>) -> Self {
+        FracTypedPermData {
+            shares: self.shares,
+            total: self.total,
+            addr: self.addr,
+            id: self.id,
+            points_to: p,
+        }
+    }
+
+    pub open spec fn update_value(self, opt_value: MemContents<T>) -> Self
+    recommends self.points_to.is_some()
+    {
+        FracTypedPermData {
+            shares: self.shares,
+            total: self.total,
+            addr: self.addr,
+            id: self.id,
+            points_to: Some(PointsToData {
+                ptr: self.points_to.unwrap().ptr,
+                opt_value,
+            }),
+        }
+    }
+
+    pub open spec fn update_shares(self, shares: nat) -> Self {
+        FracTypedPermData {
+            shares,
+            total: self.total,
+            addr: self.addr,
+            id: self.id,
+            points_to: self.points_to,
+        }
+    }
+}
+
 impl<T> FracTypedPerm<T> {
-    pub closed spec fn view(&self) -> FracPerm<PointsTo<T>> {
-        self.p
+    pub closed spec fn view(&self) -> FracTypedPermData<T> {
+        FracTypedPermData {
+            shares: self.p.shares(),
+            total: self.p.total(),
+            id: self.p.id(),
+            addr: self.unique@.0,
+            points_to: match self.p@ {
+                Some(p) => Some(p@),
+                None => None,
+            },
+        }
     }
 
-    pub closed spec fn shares(&self) -> nat {
-        self@.shares()
+    pub open spec fn shares(&self) -> nat {
+        self@.shares
     }
 
-    pub closed spec fn total(&self) -> nat {
-        self@.total()
+    pub open spec fn total(&self) -> nat {
+        self@.total
     }
 
-    pub closed spec fn points_to(&self) -> PointsTo<T> {
-        self@@.unwrap()
+    pub open spec fn points_to(&self) -> Option<PointsToData<T>> {
+        self@.points_to
+    }
+
+    pub open spec fn addr(&self) -> int {
+        self@.addr
+    }
+
+    pub open spec fn id(&self) -> InstanceId {
+        self@.id
     }
 
     #[verifier::inline]
     pub open spec fn ptr(&self) -> *mut T {
-        self.points_to().ptr()
-    }
-
-    #[verifier::inline]
-    pub open spec fn addr(&self) -> int {
-        self.ptr() as int
+        self@.points_to.unwrap().ptr
     }
 
     #[verifier::inline]
     pub open spec fn opt_value(&self) -> MemContents<T> {
-        self.points_to().opt_value()
+        self@.points_to.unwrap().opt_value
     }
 
     #[verifier::inline]
     pub open spec fn is_init(&self) -> bool {
-        self.points_to().is_init()
+        self.opt_value().is_init()
     }
 
     #[verifier::inline]
     pub open spec fn is_uninit(&self) -> bool {
-        self.points_to().is_uninit()
+       self.opt_value().is_uninit()
     }
 
     #[verifier::inline]
     pub open spec fn value(&self) -> T {
-        self.points_to().value()
+        self.opt_value().value()
     }
 }
 
 impl<T> FracTypedPerm<T> {
     #[verifier::type_invariant]
     pub closed spec fn wf(&self) -> bool {
-        &&& self.unique.wf()
-        &&& self.valid() ==> self@.wf()
-        &&& self.valid() ==>  (self@.valid() && (self.addr(), self@.id()) == self.unique@)
+        &&& self@.id == self.unique.id()
+        &&& self.valid() ==> ((self.ptr() as int) == self.addr())
+    }
+
+    pub open spec fn writable(&self) -> bool {
+        self.shares() == self.total()
     }
 
     pub closed spec fn valid(&self) -> bool {
@@ -193,32 +288,74 @@ impl<T> FracTypedPerm<T> {
         other.valid(),
         self.addr() == other.addr(),
     ensures
-        self@.id() == other@.id(),
+        self@.id == other@.id,
     {
         use_type_invariant(&*self);
         use_type_invariant(&*other);
-        self.unique.inst.check_ids(self.addr(), self@.id(), other@.id(), &self.unique.id, &other.unique.id);
+        use_type_invariant(&self.unique);
+        use_type_invariant(&other.unique);
+        self.unique.inst.check_ids(self.addr(), self.id(), other.id(), &self.unique.id, &other.unique.id);
     }
 
     pub proof fn extract(tracked &mut self) -> (tracked ret: PointsTo<T>)
     requires
         old(self).valid(),
-        old(self).shares() == old(self).total(),
+        old(self).writable(),
     ensures
-        ret == old(self).points_to(),
+        Some(ret@) == old(self).points_to(),
+        ret.ptr() as int == self.addr(),
         !self.valid(),
-        self.wf(),
+        self@ == old(self)@.update_points_to(None),
     {
         use_type_invariant(&*self);
         self.p.take()
     }
 
+    pub proof fn update(tracked &mut self, tracked val: PointsTo<T>)
+    requires
+        old(self).writable(),
+        (val@.ptr as int) == old(self).addr(),
+        !old(self).valid(),
+    ensures
+        self@ === old(self)@.update_points_to(Some(val@)),
+    {
+        use_type_invariant(&*self);
+        use_type_invariant(&self.p);
+        self.p.udpate(val)
+    }
+
     pub proof fn borrow(tracked &self) -> (tracked ret: &PointsTo<T>)
     requires
         self.valid(),
+    ensures
+        Some(ret@) == self.points_to(),
     {
         use_type_invariant(&*self);
         self.p.borrow()
+    }
+
+    pub proof fn share(tracked &mut self, shares: nat) -> (tracked ret: Self)
+    requires
+        old(self).valid(),
+        0 < shares < old(self).shares(),
+    ensures
+        self@ === old(self)@.update_shares((old(self).shares() - shares) as nat),
+        ret@ === old(self)@.update_shares(shares),
+    {
+        use_type_invariant(&*self);
+        use_type_invariant(&self.p);
+        use_type_invariant(&self.unique);
+        let id = self.unique.id();
+        let tracked p = self.p.share(shares);
+        assert(p.id() == id);
+        let tracked unique = self.unique.tracked_clone();
+        assert(unique.id() == id);
+        use_type_invariant(&p);
+        use_type_invariant(&unique);
+        FracTypedPerm {
+            p,
+            unique,
+        }
     }
 
     pub proof fn merge(tracked &mut self, tracked other: Self)
@@ -227,9 +364,7 @@ impl<T> FracTypedPerm<T> {
         old(self).valid(),
         old(self).addr() == other.addr(),
     ensures
-        self.addr() == old(self).addr(),
-        self.valid(),
-        self.shares() == old(self).shares() + other.shares(),
+        self@ === old(self)@.update_shares(old(self).shares() + other.shares()),
     {
         use_type_invariant(&*self);
         use_type_invariant(&other);
@@ -248,5 +383,35 @@ pub proof fn raw_perm_is_disjoint(tracked p1: &mut PointsToRaw, p2: &PointsToRaw
         p1.dom().disjoint(p2.dom()),
 {
     admit();
+}
+
+pub proof fn tracked_map_shares<Idx, T>(tracked m: &mut Map<Idx, FracTypedPerm<T>>, shares: nat, s: Set<Idx>) -> (tracked ret:  Map<Idx, FracTypedPerm<T>>)
+requires
+    forall |i| #[trigger]s.contains(i) ==> old(m).contains_key(i),
+    forall |i| old(m).contains_key(i) ==> (#[trigger]old(m)[i]).valid() && 0 < shares < old(m)[i].shares(),
+    s.finite(),
+ensures
+    forall |i: Idx| #[trigger]s.contains(i) ==> m[i]@ == old(m)[i]@.update_shares((old(m)[i].shares() - shares) as nat),
+    *m =~= old(m).union_prefer_right(m.restrict(s)),
+    ret.dom() =~= s,
+    forall |i: Idx| #[trigger]s.contains(i) ==> ret[i]@ == old(m)[i]@.update_shares(shares),
+decreases
+    s.len(),
+{
+    if !s.is_empty() {
+        let idx = s.choose();
+        assert(s.contains(idx));
+        assert(m.contains_key(idx));
+        let tracked mut ret = tracked_map_shares(m, shares, s.remove(idx));
+        let old_m = *m;
+        let tracked mut tmp = m.tracked_remove(idx);
+        let tracked shared = tmp.share(shares);
+        m.tracked_insert(idx, tmp);
+        ret.tracked_insert(idx, shared);
+        ret
+    } else {
+        assert(s =~= Set::empty());
+        Map::tracked_empty()
+    }
 }
 }
