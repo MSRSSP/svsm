@@ -52,6 +52,9 @@ impl LinearMap {
             self.try_get_virt(pfn).is_some(),
             ret.is_canonical(),
             ret.offset() == self.start_virt.offset() + (pfn * crate::types::PAGE_SIZE),
+            ret == VirtAddr::from_spec(
+                (self.start_virt.offset() + (pfn * crate::types::PAGE_SIZE)) as usize,
+            ),
     {
         broadcast use crate::types::lemma_page_size;
 
@@ -78,7 +81,6 @@ impl SpecMemMapTr for LinearMap {
 
     type PAddr = int;
 
-    #[verifier(opaque)]
     open spec fn to_vaddrs(&self, paddr: int) -> Set<VirtAddr> {
         let s = self.to_vaddr(paddr);
         if s.is_some() {

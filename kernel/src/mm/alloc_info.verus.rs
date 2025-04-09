@@ -1,0 +1,549 @@
+use verify_proof::frac_ptr::*;
+
+verus! {
+
+pub closed spec fn spec_ptr_add<T>(base_ptr: *const T, idx: usize) -> *const T {
+    let vstd::raw_ptr::PtrData { addr, provenance, metadata } = base_ptr@;
+    vstd::raw_ptr::ptr_from_data(
+        vstd::raw_ptr::PtrData {
+            addr: (addr + idx * size_of::<T>()) as usize,
+            provenance,
+            metadata,
+        },
+    )
+}
+
+struct PageInfoInner {
+    pub ghost start_idx: usize,
+    pub ghost npages: usize,
+    pub ghost base_ptr: *const PageStorageType,
+    pub reserved: Map<usize, FracTypedPerm<PageStorageType>>,
+}
+
+struct PageInfoDb {
+    ghost start_idx: usize,
+    ghost npages: usize,
+    ghost base_ptr: *const PageStorageType,
+    reserved: Map<usize, FracTypedPerm<PageStorageType>>,
+}
+
+struct DeallocInfo(PageInfoDb);
+
+impl DeallocInfo {
+    #[verifier::type_invariant]
+    pub closed spec fn wf(&self) -> bool {
+        self.0.is_unit()
+    }
+
+    pub closed spec fn view(&self) -> PageInfoDb {
+        self.0
+    }
+
+    pub closed spec fn inner_view(&self) -> Map<usize, FracTypedPermData<PageStorageType>> {
+        self.0.inner_view()
+    }
+}
+
+trait ValidPageInfo {
+    spec fn is_valid_pginfo(&self) -> bool;
+
+    spec fn page_info(&self) -> Option<PageInfo>;
+
+    spec fn order(&self) -> usize;
+
+    spec fn size(&self) -> usize;
+
+    spec fn is_head(&self) -> bool;
+
+    spec fn is_free(&self) -> bool;
+}
+
+impl ValidPageInfo for FracTypedPerm<PageStorageType> {
+    spec fn is_valid_pginfo(&self) -> bool {
+        &&& self.page_info().is_some()
+        &&& self.page_info().unwrap().spec_order() < MAX_ORDER
+        &&& self.valid()
+        &&& self.total() == MAX_PGINFO_SHARES
+    }
+
+    spec fn page_info(&self) -> Option<PageInfo> {
+        spec_page_info(self.opt_value())
+    }
+
+    spec fn order(&self) -> usize {
+        self.page_info().unwrap().spec_order()
+    }
+
+    #[verifier(inline)]
+    spec fn size(&self) -> usize {
+        1usize << self.order()
+    }
+
+    spec fn is_head(&self) -> bool {
+        !matches!(self.page_info().unwrap(), PageInfo::Compound(_))
+    }
+
+    spec fn is_free(&self) -> bool {
+        matches!(self.page_info().unwrap(), PageInfo::Free(_))
+    }
+}
+
+impl PageInfoDb {
+    #[verifier::type_invariant]
+    pub closed spec fn wf(&self) -> bool
+        decreases self.npages(),
+    {
+        &&& self.end() <= usize::MAX
+        &&& self@.dom() =~= Set::new(|idx| self.start_idx <= idx < self.end())
+        &&& self.npages > 0 ==> self.is_head(self.start_idx)
+        &&& forall|idx|
+            #![trigger self@[idx]]
+            self.start_idx <= idx < self.end() ==> {
+                &&& self@[idx].is_valid_pginfo()
+                &&& self@[idx].ptr() == self.ptr(idx)
+                &&& self@[idx].is_head() ==> (idx + self@[idx].size()) <= self.end()
+                &&& self@[idx].is_head() && idx + self@[idx].size() < self.end() ==> self@[(idx
+                    + self@[idx].size()) as usize].is_head()
+                &&& self@[idx].is_head() && !self.is_unit() ==> self.restrict(idx).wf()
+            }
+        &&& self.is_unit() ==> self.wf_unit()
+    }
+
+    pub closed spec fn empty(base_ptr: *const PageStorageType) -> PageInfoDb {
+        PageInfoDb { npages: 0, start_idx: 0, base_ptr, reserved: Map::empty() }
+    }
+
+    /*** Basic spec functions ***/
+    pub closed spec fn view(&self) -> Map<usize, FracTypedPerm<PageStorageType>> {
+        self.reserved
+    }
+
+    pub closed spec fn base_ptr(&self) -> *const PageStorageType {
+        self.base_ptr
+    }
+
+    pub closed spec fn start_idx(&self) -> usize {
+        self.start_idx
+    }
+
+    pub closed spec fn npages(&self) -> usize {
+        self.npages
+    }
+
+    #[verifier(inline)]
+    spec fn end(&self) -> int {
+        self.start_idx + self.npages
+    }
+
+    /** Constructors **/
+    proof fn tracked_empty(base_ptr: *const PageStorageType) -> (tracked ret: PageInfoDb)
+        ensures
+            ret == PageInfoDb::empty(base_ptr),
+    {
+        let tracked reserved = Map::tracked_empty();
+        PageInfoDb { npages: 0, start_idx: 0, base_ptr, reserved }
+    }
+
+    /*** Useful spec functions ***/
+    pub open spec fn unit_size() -> usize {
+        size_of::<PageStorageType>()
+    }
+
+    pub open spec fn inner_view(&self) -> Map<usize, FracTypedPermData<PageStorageType>> {
+        self@.map_values(|v: FracTypedPerm<PageStorageType>| v@)
+    }
+
+    pub open spec fn data_view(&self) -> Map<usize, FracTypedPermData<PageStorageType>> {
+        self@.map_values(|v: FracTypedPerm<PageStorageType>| v@.data_view())
+    }
+
+    #[verifier(inline)]
+    spec fn ptr(&self, idx: usize) -> *const PageStorageType {
+        spec_ptr_add(self.base_ptr, idx)
+    }
+
+    pub closed spec fn page_info(&self, idx: usize) -> Option<PageInfo> {
+        self@[idx].page_info()
+    }
+
+    #[verifier(inline)]
+    spec fn is_head(&self, idx: usize) -> bool {
+        self@[idx].is_head()
+    }
+
+    pub closed spec fn restrict(&self, idx: usize) -> PageInfoDb {
+        let info = self.page_info(idx).unwrap();
+        match info {
+            PageInfo::Compound(_) => { PageInfoDb::empty(self.ptr(idx)) },
+            _ => {
+                let npages = 1usize << self@[idx].order();
+                PageInfoDb {
+                    npages,
+                    start_idx: idx,
+                    base_ptr: self.base_ptr,
+                    reserved: self@.restrict(Set::new(|k| idx <= k < idx + npages)),
+                }
+            },
+        }
+    }
+
+    broadcast proof fn lemma_head_no_overlap(&self, i: usize, j: usize)
+        requires
+            self.wf(),
+            self.is_head(i),
+            self.is_head(j),
+            self.start_idx() <= i < j < self.start_idx() + self.npages(),
+        ensures
+            #![trigger self@[i], self@[j]]
+            i + self@[i].size() <= j,
+    {
+        self.lemma_restrict(i);
+        self.lemma_restrict(j);
+    }
+
+    proof fn lemma_restrict(&self, idx: usize)
+        requires
+            self.wf(),
+            self.is_head(idx),
+            self.start_idx() <= idx < self.start_idx() + self.npages(),
+        ensures
+            self.restrict(idx).wf(),
+            self.restrict(idx)@.dom() =~= Set::new(|k| idx <= k < idx + self@[idx].size()),
+            forall|i|
+                #![trigger self@[i]]
+                #![trigger self.restrict(idx)@[i]]
+                idx <= i < idx + self@[idx].size() ==> self.restrict(idx)@[i] == self@[i],
+    {
+        if self.is_unit() {
+            assert(idx == self.start_idx);
+            assert(self.npages == self@[idx].size());
+            assert(self.restrict(idx)@ =~= self@);
+            assert(self.restrict(idx).wf());
+        } else {
+            assert(self.restrict(idx).wf());
+        }
+    }
+
+    pub closed spec fn writable(&self) -> bool {
+        forall|idx: usize|
+            self.start_idx <= idx < self.end() ==> (#[trigger] self@[idx]).shares()
+                == self@[idx].total()
+    }
+
+    #[verifier::opaque]
+    pub closed spec fn is_readonly_allocator_shares(&self) -> bool {
+        forall|idx: usize|
+            self.start_idx <= idx < self.end() ==> #[trigger] self@[idx].shares()
+                == ALLOCATOR_PGINFO_SHARES
+    }
+
+    #[verifier::opaque]
+    pub closed spec fn is_readonly_dealloc_shares(&self) -> bool {
+        forall|idx: usize|
+            self.start_idx <= idx < self.end() ==> (#[trigger] self@[idx]).shares()
+                == DEALLOC_PGINFO_SHARES
+    }
+
+    pub closed spec fn new(
+        npages: usize,
+        start_idx: usize,
+        base_ptr: *const PageStorageType,
+        reserved: Map<usize, FracTypedPerm<PageStorageType>>,
+    ) -> Self {
+        PageInfoDb { npages, start_idx, base_ptr, reserved }
+    }
+
+    proof fn tracked_new_unit(
+        order: usize,
+        start_idx: usize,
+        base_ptr: *const PageStorageType,
+        tracked reserved: Map<usize, FracTypedPerm<PageStorageType>>,
+    ) -> (tracked ret: Self)
+        requires
+            order < MAX_ORDER,
+            start_idx + (1usize << order) <= usize::MAX,
+            PageInfoDb::new(1usize << order, start_idx, base_ptr, reserved).wf_unit(),
+            reserved.dom() =~= Set::new(|k| start_idx <= k < start_idx + (1usize << order)),
+            PageInfoDb::new(1usize << order, start_idx, base_ptr, reserved).wf(),
+            reserved[start_idx].order() == order,
+        ensures
+            ret.is_unit(),
+            ret == PageInfoDb::new(1usize << order, start_idx, base_ptr, reserved),
+            ret@ == reserved,
+    {
+        PageInfoDb { npages: 1usize << order, start_idx, base_ptr, reserved }
+    }
+
+    #[verifier(spinoff_prover)]
+    #[verifier(rlimit(4))]
+    proof fn tracked_split(tracked self, idx: usize) -> (tracked ret: (PageInfoDb, PageInfoDb))
+        requires
+            self.is_head(idx),
+            self.start_idx() <= idx < self.start_idx() + self.npages(),
+        ensures
+            ret.0@ =~= self@.restrict(Set::new(|k: usize| k < idx)),
+            ret.0.base_ptr() == self.base_ptr(),
+            ret.0.start_idx() == self.start_idx(),
+            ret.0.npages() == idx - self.start_idx(),
+            ret.1@ =~= self@.restrict(Set::new(|k: usize| k >= idx)),
+            ret.1.base_ptr() == self.base_ptr(),
+            ret.1.start_idx() == idx,
+            ret.1.npages() + ret.0.npages() == self.npages(),
+            forall|i|
+                self.start_idx <= i < self.start_idx + self.npages ==> #[trigger] self@[i] == if i
+                    < idx {
+                    ret.0@[i]
+                } else {
+                    ret.1@[i]
+                },
+    {
+        use_type_invariant(&self);
+        self.lemma_restrict(idx);
+        let tracked PageInfoDb { npages, start_idx, base_ptr, mut reserved } = self;
+        if idx != start_idx {
+            self.lemma_head_no_overlap(start_idx, idx);
+        }
+        let tracked left_reserved = reserved.tracked_remove_keys(
+            Set::new(|k| start_idx <= k < idx),
+        );
+        let left = PageInfoDb::new((idx - start_idx) as usize, start_idx, base_ptr, left_reserved);
+        assert forall|i| start_idx <= i < idx && (#[trigger] left@[i]).is_head() implies i
+            + left@[i].size() <= idx && left.restrict(i) == self.restrict(i) by {
+            self.lemma_head_no_overlap(i, idx);
+            assert(left.restrict(i)@ =~= self.restrict(i)@);
+        }
+        let tracked left = PageInfoDb {
+            npages: (idx - start_idx) as usize,
+            start_idx: start_idx,
+            base_ptr: self.base_ptr,
+            reserved: left_reserved,
+        };
+
+        let right = PageInfoDb::new((npages - (idx - start_idx)) as usize, idx, base_ptr, reserved);
+        assert forall|i|
+            right.start_idx <= i < right.start_idx + right.npages && (!right.is_unit()
+                && right.is_head(i)) implies #[trigger] right.restrict(i) == self.restrict(i) by {
+            assert(right.restrict(i)@ =~= self.restrict(i)@);
+            assert(right.restrict(i) == self.restrict(i));
+        }
+        let tracked right = PageInfoDb {
+            npages: (npages - (idx - start_idx)) as usize,
+            start_idx: idx,
+            base_ptr: self.base_ptr,
+            reserved: reserved,
+        };
+
+        (left, right)
+    }
+
+    #[verifier(spinoff_prover)]
+    #[verifier(rlimit(2))]
+    proof fn tracked_extract(tracked self, idx: usize) -> (tracked ret: (
+        PageInfoDb,
+        PageInfoDb,
+        PageInfoDb,
+    ))
+        requires
+            self.is_head(idx),
+            self.start_idx() <= idx < self.start_idx() + self.npages(),
+        ensures
+            ret.1 == self.restrict(idx),
+            ret.1.is_unit(),
+            ret.0@ =~= self@.restrict(Set::new(|k: usize| k < idx)),
+            ret.0.base_ptr() == self.base_ptr(),
+            ret.0.start_idx() == self.start_idx(),
+            ret.0.npages() == idx - self.start_idx(),
+            ret.2@ =~= self@.restrict(Set::new(|k: usize| k >= idx + self@[idx].size())),
+            ret.2.base_ptr() == self.base_ptr(),
+            ret.2.npages() > 0 ==> ret.2.start_idx() == idx + self@[idx].size(),
+            ret.2.npages() + ret.0.npages() + ret.1.npages() == self.npages(),
+    {
+        use_type_invariant(&self);
+        let start = self.start_idx();
+        let end = self.end();
+        let old_self = self;
+        assert(self@[idx].is_valid_pginfo());
+        assert(self@[idx].order() < MAX_ORDER);
+        assert(self@[idx].size() > 0);
+        if idx + self@[idx].size() < self.end() {
+            let tracked (left, right) = self.tracked_split(idx);
+            use_type_invariant(&right);
+            assert(right.restrict(idx)@ =~= old_self.restrict(idx)@);
+            let tracked (ret, right2) = right.tracked_split((idx + self@[idx].size()) as usize);
+            assert(ret@ =~= right.restrict(idx)@);
+            assert(ret.npages() == self@[idx].size());
+            (left, ret, right2)
+        } else {
+            let tracked (left, right) = self.tracked_split(idx);
+            use_type_invariant(&right);
+            assert(right.npages() == self@[idx].size());
+            assert(idx + self@[idx].size() == end);
+            assert(right@ =~= self.restrict(idx)@);
+            (left, right, PageInfoDb::tracked_empty(self.base_ptr()))
+        }
+    }
+
+    proof fn tracked_get(tracked self) -> (tracked ret: PageInfoInner)
+        ensures
+            PageInfoDb::new(ret.npages, ret.start_idx, ret.base_ptr, ret.reserved).wf(),
+    {
+        use_type_invariant(&self);
+        let tracked PageInfoDb { npages, start_idx, base_ptr, reserved } = self;
+        let tracked ret = PageInfoInner { npages, start_idx, base_ptr, reserved };
+        ret
+    }
+
+    proof fn tracked_remove(tracked self, idx: usize) -> (tracked ret: (
+        FracTypedPerm<PageStorageType>,
+        PageInfoInner,
+    ))
+        requires
+            self.is_head(idx),
+            self.start_idx() <= idx < self.start_idx() + self.npages(),
+        ensures
+            ret.0 == self@[idx],
+            ret.0.valid(),
+            ret.1.npages == self.npages(),
+            ret.1.start_idx == self.start_idx(),
+            ret.1.base_ptr == self.base_ptr(),
+            ret.1.reserved == self@.remove(idx),
+    {
+        use_type_invariant(&self);
+        let tracked PageInfoDb { npages, start_idx, base_ptr, mut reserved } = self;
+        let tracked ret = reserved.tracked_remove(idx);
+        (ret, PageInfoInner { npages, start_idx, base_ptr, reserved })
+    }
+
+    #[verifier(spinoff_prover)]
+    #[verifier(rlimit(4))]
+    proof fn tracked_merge(tracked &mut self, tracked other: Self)
+        requires
+            old(self).start_idx() + old(self).npages() == other.start_idx(),
+            old(self).base_ptr() == other.base_ptr(),
+        ensures
+            self@ == old(self)@.union_prefer_right(other@),
+            self.base_ptr() == old(self).base_ptr(),
+            self.start_idx() == old(self).start_idx(),
+            self.npages() == old(self).npages() + other.npages(),
+    {
+        let old_self = *self;
+        let tracked mut tmp = PageInfoDb::tracked_empty(self.base_ptr());
+        tracked_swap(self, &mut tmp);
+        use_type_invariant(&tmp);
+        use_type_invariant(&other);
+        let tracked PageInfoDb { mut npages, start_idx, base_ptr, mut reserved } = tmp;
+        npages = (npages + other.npages()) as usize;
+        reserved.tracked_union_prefer_right(other.reserved);
+        let new = PageInfoDb::new(npages, start_idx, base_ptr, reserved);
+        assert forall|i| start_idx <= i < start_idx + npages implies (reserved[i]).ptr()
+            == #[trigger] spec_ptr_add(base_ptr, i) && if (!new.is_unit() && new.is_head(i)) {
+            new.restrict(i).wf()
+        } else {
+            true
+        } by {
+            if i >= start_idx + old(self).npages {
+                assert(other.reserved[i].ptr() == spec_ptr_add(base_ptr, i));
+                assert(new.restrict(i)@ =~= other.restrict(i)@);
+            } else {
+                assert(old(self).reserved[i].ptr() == spec_ptr_add(base_ptr, i));
+                assert(new.restrict(i)@ =~= old(self).restrict(i)@);
+            }
+        }
+        if (new.is_unit()) {
+            if (old(self).npages() > 0) {
+                assert(old(self).is_unit());
+                assert(old(self)@ =~= new@);
+            }
+            if (other.npages() > 0) {
+                assert(other.is_unit());
+                assert(other@ =~= new@);
+            }
+        }
+        *self = PageInfoDb { npages, start_idx, base_ptr, reserved };
+    }
+
+    #[verifier(spinoff_prover)]
+    #[verifier(rlimit(4))]
+    proof fn tracked_alloc(tracked &mut self, idx: usize) -> (tracked ret: DeallocInfo)
+        requires
+            old(self)@[idx].is_head(),
+            !old(self)@[idx].is_free(),
+            old(self).start_idx() <= idx < old(self).start_idx() + old(self).npages(),
+            old(self).restrict(idx).writable(),
+        ensures
+            ret.inner_view() =~= old(self).restrict(idx).inner_view().map_values(
+                |v: FracTypedPermData<PageStorageType>| v.update_shares(DEALLOC_PGINFO_SHARES),
+            ),
+            self.base_ptr() == old(self).base_ptr(),
+            self.start_idx() == old(self).start_idx(),
+            self.npages() == old(self).npages(),
+            self.restrict(idx).is_readonly_allocator_shares(),
+            ret@.is_readonly_dealloc_shares(),
+    {
+        reveal(PageInfoDb::is_readonly_allocator_shares);
+        reveal(PageInfoDb::is_readonly_dealloc_shares);
+        let old_self = *old(self);
+        let tracked mut tmp = PageInfoDb::tracked_empty(self.base_ptr());
+        tracked_swap(self, &mut tmp);
+        let tracked (mut left, mut mid, right) = tmp.tracked_extract(idx);
+        *self = left;
+        use_type_invariant(&mid);
+        let order = mid@[idx].order();
+        let tracked PageInfoDb { npages, start_idx, base_ptr, mut reserved } = mid;
+        let allocated_npages = self@[idx].size();
+        let tracked allocated_reserved = tracked_map_shares(&mut reserved, DEALLOC_PGINFO_SHARES);
+        mid = PageInfoDb::tracked_new_unit(order, start_idx, base_ptr, reserved);
+        self.tracked_merge(mid);
+        if right.npages() > 0 {
+            self.tracked_merge(right);
+        }
+        assert(!mid.writable());
+        assert(self.restrict(idx)@ =~= mid@);
+        let tracked ret = PageInfoDb::tracked_new_unit(
+            order,
+            start_idx,
+            base_ptr,
+            allocated_reserved,
+        );
+        assert(ret.is_unit());
+        DeallocInfo(ret)
+    }
+
+    pub closed spec fn is_unit(&self) -> bool {
+        let info = self.page_info(self.start_idx).unwrap();
+        let order = info.spec_order();
+
+        &&& self.npages > 0
+        &&& self.npages == 1usize << order
+        &&& !matches!(info, PageInfo::Compound(_))
+    }
+
+    pub closed spec fn page_type(&self) -> PageType {
+        self.page_info(self.start_idx).unwrap().spec_type()
+    }
+
+    pub closed spec fn marked_compound(&self, head_idx: usize, order: usize) -> bool {
+        let n = 1usize << order;
+        &&& order < MAX_ORDER
+        &&& forall|i|
+            #![trigger self@[i]]
+            head_idx < i < head_idx + n ==> self.page_info(i) == Some(
+                PageInfo::Compound(CompoundInfo { order }),
+            )
+    }
+
+    pub closed spec fn wf_unit(&self) -> bool {
+        let info = self.page_info(self.start_idx).unwrap();
+        &&& self.npages > 0
+        &&& match info {
+            PageInfo::Reserved(_) => true,
+            PageInfo::Compound(ci) => { false },
+            PageInfo::Slab(_) | PageInfo::File(_) => true,
+            PageInfo::Allocated(ai) => { self.marked_compound(self.start_idx, ai.order) },
+            PageInfo::Free(fi) => { self.marked_compound(self.start_idx, fi.order) },
+        }
+        &&& matches!(info, PageInfo::Free(_)) ==> self.writable()
+    }
+}
+
+} // verus!

@@ -45,6 +45,8 @@ broadcast group alloc_broadcast_group {
 
 broadcast use alloc_broadcast_group;
 
+include!("alloc_info.verus.rs");
+
 include!("alloc_mr.verus.rs");
 
 include!("alloc_proof.verus.rs");
@@ -137,8 +139,9 @@ impl MemoryRegion {
         self@.map.try_get_virt(pfn as usize)
     }
 
+    #[verifier(inline)]
     spec fn spec_get_virt(&self, pfn: int) -> VirtAddr {
-        self@.map.try_get_virt(pfn as usize).unwrap()
+        self.spec_try_get_virt(pfn).unwrap()
     }
 
     /// virt_offset == physical_offset
@@ -146,6 +149,7 @@ impl MemoryRegion {
         &&& ret.is_ok() == self.spec_get_pfn(vaddr).is_some()
         &&& ret.is_ok() ==> {
             &&& ret.unwrap() == self.spec_get_pfn(vaddr).unwrap()
+            &&& self.spec_try_get_virt(ret.unwrap() as int).is_some()
             &&& ret.unwrap() < self.page_count
             &&& vaddr@ % 0x1000 == 0 ==> self.spec_get_virt(ret.unwrap() as int) == vaddr
         }
@@ -176,7 +180,9 @@ impl MemoryRegion {
             &&& self@.inv_remove_pfn(new_self@)
             &&& new_self.nr_pages === self.nr_pages
             &&& new_self@.pfn_range_is_allocated(ret.unwrap(), order as usize)
+            &&& new_self@.marked_order(ret.unwrap(), order as usize)
             &&& new_self@.reserved === self@.reserved
+            &&& new_self@.pfn_order_is_writable(ret.unwrap(), order as usize)
         }
     }
 
@@ -218,6 +224,7 @@ impl MemoryRegion {
         &&& self.free_pages[order - 1] + 2 <= usize::MAX
         &&& self@.pfn_range_is_allocated(pfn, order)
         &&& self@.marked_order(pfn, order)
+        &&& self@.pfn_order_is_writable(pfn, order)
     }
 
     spec fn ens_split_page_ok(&self, new: &Self, pfn: usize, order: usize) -> bool {
@@ -244,13 +251,17 @@ impl MemoryRegion {
         &&& self.wf_params()
         &&& pfn < self@.reserved_pfn_count() ==> pi === PageInfo::Reserved(ReservedInfo)
         &&& pfn < self@.page_count()
+        &&& self@.reserved[pfn as int].writable()
     }
 
     spec fn ens_write_page_info(&self, new: Self, pfn: usize, pi: PageInfo) -> bool {
-        let new_order = pi.get_order();
-        let old_order = self@.spec_page_info(pfn as int).unwrap().get_order();
+        let new_order = pi.spec_order();
+        let old_order = self@.spec_page_info(pfn as int).unwrap().spec_order();
         &&& self.only_update_reserved(new)
         &&& new@.reserved =~~= self@.reserved.insert(pfn as int, new@.reserved[pfn as int])
+        &&& new@.reserved[pfn as int]@ === self@.reserved[pfn as int]@.update_value(
+            new@.reserved[pfn as int].opt_value(),
+        )
         &&& new@.spec_page_info(pfn as int) === Some(pi)
         &&& (new_order == old_order) ==> (forall|order|
             0 <= order < MAX_ORDER ==> #[trigger] self@.reserved().pfn_dom(order)
@@ -272,6 +283,7 @@ impl MemoryRegion {
     spec fn req_mark_compound_page(&self, pfn: usize, order: usize) -> bool {
         &&& self.wf_reserved()
         &&& self.valid_pfn_order(pfn, order)
+        &&& self@.pfn_order_is_writable(pfn, order)
     }
 
     spec fn ens_mark_compound_page(&self, new: Self, pfn: usize, n: usize, order: usize) -> bool {
@@ -279,6 +291,7 @@ impl MemoryRegion {
         &&& self.only_update_reserved(new)
         &&& new@.reserved =~~= self@.reserved.union_prefer_right(new@.reserved.restrict(pfn_set))
         &&& new.wf_reserved()
+        &&& new@.pfn_order_is_writable(pfn, order)
     }
 
     spec fn ens_mark_compound_page_loop(
@@ -301,6 +314,7 @@ impl MemoryRegion {
         &&& (self.valid_pfn_order(next_pfn, order) || next_pfn == 0)
         &&& self.wf_reserved()
         &&& self.wf_params()
+        &&& self@.pfn_order_is_writable(pfn, order)
     }
 
     spec fn only_update_reserved(&self, new: Self) -> bool {
@@ -340,6 +354,7 @@ impl MemoryRegion {
         &&& new@.reserved =~= self@.reserved.union_prefer_right(changes)
         &&& new@.marked_free(pfn, order, next_pfn)
         &&& new.wf_reserved()
+        &&& new@.pfn_order_is_writable(pfn, order)
     }
 
     spec fn ens_find_neighbor(pfn: usize, order: usize, ret_pfn: usize) -> bool {
@@ -376,6 +391,7 @@ impl MemoryRegion {
             order as int,
             (self.free_pages[order as int] - 1) as usize,
         )
+        &&& new@.pfn_order_is_writable(pfn, order)
     }
 
     spec fn req_try_to_merge_page(&self, pfn: usize, order: usize, perm: RawPerm) -> bool {
@@ -385,6 +401,7 @@ impl MemoryRegion {
         &&& self.valid_pfn_order(pfn, order)
         &&& self@.marked_not_free(pfn, order)
         &&& self@.pfn_range_is_allocated(pfn, order)
+        &&& self@.pfn_order_is_writable(pfn, order)
     }
 
     spec fn ens_try_to_merge_page_ok(
@@ -411,6 +428,7 @@ impl MemoryRegion {
         &&& new.free_pages@ === new_free_pages
         &&& new@.marked_not_free(new_pfn, new_order)
         &&& new@.pfn_range_is_allocated(new_pfn, new_order)
+        &&& new@.pfn_order_is_writable(new_pfn, new_order)
     }
 
     spec fn ens_try_to_merge_page(
@@ -445,6 +463,8 @@ impl MemoryRegion {
         &&& self@.pfn_range_is_allocated(pfn2, order)
         &&& self@.marked_order(pfn1, order)
         &&& self@.marked_order(pfn2, order)
+        &&& self@.pfn_order_is_writable(pfn1, order)
+        &&& self@.pfn_order_is_writable(pfn2, order)
     }
 
     spec fn ens_merge_pages_ok(
@@ -456,18 +476,19 @@ impl MemoryRegion {
         ret: usize,
         perm: RawPerm,
     ) -> bool {
-        let order = order as int;
-        let pfn = vstd::math::min(pfn1 as int, pfn2 as int);
-        let n1 = (self.nr_pages[order] - 2) as usize;
-        let n2 = (self.nr_pages[order + 1] + 1) as usize;
-        let new_nr_pages = self.nr_pages@.update(order, n1).update(order + 1, n2);
+        let pfn = vstd::math::min(pfn1 as int, pfn2 as int) as usize;
+        let new_order = (order + 1) as usize;
+        let n1 = (self.nr_pages[order as int] - 2) as usize;
+        let n2 = (self.nr_pages[new_order as int] + 1) as usize;
+        let new_nr_pages = self.nr_pages@.update(order as int, n1).update(order + 1, n2);
         &&& new.wf()
         &&& ret == pfn
-        &&& perm.wf_pfn_order(self@.map, pfn as usize, (order + 1) as usize)
+        &&& perm.wf_pfn_order(self@.map, pfn, new_order)
         &&& self.only_update_reserved_and_tmp_nr(new)
         &&& new.nr_pages@ === new_nr_pages
-        &&& new@.marked_allocated(pfn as usize, (order + 1) as usize)
-        &&& new@.pfn_range_is_allocated(pfn as usize, (order + 1) as usize)
+        &&& new@.marked_allocated(pfn, new_order)
+        &&& new@.pfn_range_is_allocated(pfn, new_order)
+        &&& new@.pfn_order_is_writable(pfn, new_order)
     }
 
     spec fn ens_merge_pages(
@@ -489,9 +510,10 @@ impl MemoryRegion {
 
     }
 
-    spec fn req_free_page(&self, vaddr: VirtAddr, tmp_perm: RawPerm) -> bool {
+    spec fn req_free_page(&self, vaddr: VirtAddr, perm: PermWithDealloc) -> bool {
+        let PermWithDealloc { perm: tmp_perm, dealloc } = perm;
         let pfn = self.spec_get_pfn(vaddr).unwrap();
-        let order = self@.reserved().spec_page_info(pfn).unwrap().get_order();
+        let order = self@.reserved().spec_page_info(pfn).unwrap().spec_order();
         &&& self.wf()
         &&& vaddr.is_canonical()
         &&& vaddr@ % 0x1000 == 0
@@ -511,8 +533,9 @@ impl MemoryRegion {
         &&& self.wf()
         &&& self@.marked_not_free(pfn, order)
         &&& self.valid_pfn_order(pfn, order)
-        &&& self@.pfn_range_is_allocated(pfn, order)
         &&& perm.wf_pfn_order(self@.map, pfn, order)
+        &&& self@.pfn_range_is_allocated(pfn, order)
+        &&& self@.pfn_order_is_writable(pfn, order)
     }
 
     spec fn ens_free_page_raw(&self, new: &Self, pfn: usize, order: usize) -> bool {
@@ -530,6 +553,32 @@ impl MemoryRegion {
             new@.next[order as int].len() - 1,
         )  // to prove contains_range*/
 
+    }
+
+    spec fn req_allocate_pages_info(&self, order: usize, pg: PageInfo) -> bool {
+        &&& self.wf()
+        &&& order < MAX_ORDER
+        &&& pg.spec_order() == order
+        &&& pg.spec_type().spec_is_deallocatable()
+    }
+
+    spec fn ens_allocate_pages_info(
+        &self,
+        new: &Self,
+        order: usize,
+        ret: Result<VirtAddr, AllocError>,
+        perm_with_dealloc: Option<PermWithDealloc>,
+    ) -> bool {
+        let PermWithDealloc { perm, dealloc } = perm_with_dealloc.unwrap();
+        &&& self.with_same_mapping(new)
+        &&& new.wf()
+        &&& ret.is_ok() ==> {
+            &&& perm.wf_vaddr_order(ret.unwrap(), order)
+            &&& perm.wf_pfn_order(new@.map, dealloc.pfn, order)
+            &&& perm_with_dealloc.is_some()
+            &&& dealloc.order == order
+            &&& ret.unwrap() == new.spec_get_virt(dealloc.pfn as int)
+        }
     }
 }
 

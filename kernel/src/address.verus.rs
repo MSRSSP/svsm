@@ -201,6 +201,7 @@ impl VirtAddr {
     pub open spec fn spec_add_ensures(self, offset: InnerAddr, ret: VirtAddr) -> bool {
         &&& self.offset() + offset == ret.offset()
         &&& ret === VirtAddr::from_spec((self@ + offset) as InnerAddr)
+        &&& ret === VirtAddr::from_spec((self.offset() + offset) as InnerAddr)
     }
 }
 

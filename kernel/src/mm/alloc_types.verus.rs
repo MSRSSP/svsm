@@ -5,19 +5,20 @@
 // Author: Ziqiao Zhou <ziqiaozhou@microsoft.com>
 //
 // Proves the encode/decode functions used in alloc.rs.
+use vstd::simple_pptr::MemContents;
 verus! {
 
-spec fn spec_page_storage_type(perm: FracTypedPerm<PageStorageType>) -> Option<PageStorageType> {
-    if perm.is_init() {
-        Some(perm.value())
+spec fn spec_page_storage_type(mem: MemContents<PageStorageType>) -> Option<PageStorageType> {
+    if mem.is_init() {
+        Some(mem.value())
     } else {
         None
     }
 }
 
 #[verifier(opaque)]
-spec fn spec_page_info(perm: FracTypedPerm<PageStorageType>) -> Option<PageInfo> {
-    let mem = spec_page_storage_type(perm);
+spec fn spec_page_info(mem: MemContents<PageStorageType>) -> Option<PageInfo> {
+    let mem = spec_page_storage_type(mem);
     if mem.is_some() {
         PageInfo::spec_decode(mem.unwrap())
     } else {
@@ -25,13 +26,55 @@ spec fn spec_page_info(perm: FracTypedPerm<PageStorageType>) -> Option<PageInfo>
     }
 }
 
-spec fn spec_free_info(perm: FracTypedPerm<PageStorageType>) -> Option<FreeInfo> {
+spec fn spec_free_info(perm: MemContents<PageStorageType>) -> Option<FreeInfo> {
     let p_info = spec_page_info(perm);
     if p_info.is_some() {
         let pi = p_info.unwrap();
-        pi.get_free()
+        pi.spec_get_free()
     } else {
         None
+    }
+}
+
+impl PageType {
+    spec fn spec_is_deallocatable(&self) -> bool {
+        match *self {
+            PageType::Free => false,
+            PageType::Allocated => true,
+            PageType::SlabPage => true,
+            PageType::Compound => true,
+            PageType::File => true,
+            PageType::Reserved => false,
+        }
+    }
+}
+
+impl PageInfo {
+    pub closed spec fn spec_order(&self) -> usize {
+        match *self {
+            PageInfo::Compound(CompoundInfo { order }) => order,
+            PageInfo::Allocated(AllocatedInfo { order }) => order,
+            PageInfo::Free(FreeInfo { order, .. }) => order,
+            _ => 0,
+        }
+    }
+
+    pub closed spec fn spec_type(&self) -> PageType {
+        match *self {
+            PageInfo::Free(_) => PageType::Free,
+            PageInfo::Allocated(_) => PageType::Allocated,
+            PageInfo::Slab(_) => PageType::SlabPage,
+            PageInfo::Compound(_) => PageType::Compound,
+            PageInfo::File(_) => PageType::File,
+            PageInfo::Reserved(_) => PageType::Reserved,
+        }
+    }
+
+    pub closed spec fn spec_get_free(&self) -> Option<FreeInfo> {
+        match *self {
+            PageInfo::Free(info) => { Some(info) },
+            _ => { None },
+        }
     }
 }
 
