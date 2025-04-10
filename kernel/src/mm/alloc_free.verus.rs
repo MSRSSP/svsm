@@ -159,6 +159,7 @@ impl MRFreePerms {
     #[verifier::type_invariant]
     spec fn wf(&self) -> bool {
         &&& self.map.wf()
+        &&& self.map.size >= self.page_count.page_count * PAGE_SIZE
         &&& self.next.len() == MAX_ORDER
         &&& self.avail.dom() =~= Set::new(
             |k: (usize, int)| 0 <= k.0 < MAX_ORDER && 0 <= k.1 < self.next[k.0 as int].len(),
@@ -325,7 +326,7 @@ impl MRFreePerms {
                 order as int,
                 (old(self).nr_free()[order as int] - 1) as usize,
             ),
-            old(self).nr_free()[order as int] >= 0,
+            old(self).nr_free()[order as int] > 0,
     {
         use_type_invariant(&*self);
         let tracked mut tmp = MRFreePerms::tracked_empty(old(self).map());

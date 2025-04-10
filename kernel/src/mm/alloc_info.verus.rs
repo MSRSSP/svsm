@@ -3,17 +3,6 @@ use verify_proof::set::axiom_set_usize_range;
 
 verus! {
 
-pub closed spec fn spec_ptr_add<T>(base_ptr: *const T, idx: usize) -> *const T {
-    let vstd::raw_ptr::PtrData { addr, provenance, metadata } = base_ptr@;
-    vstd::raw_ptr::ptr_from_data(
-        vstd::raw_ptr::PtrData {
-            addr: (addr + idx * size_of::<T>()) as usize,
-            provenance,
-            metadata,
-        },
-    )
-}
-
 struct PageInfoInner {
     pub ghost start_idx: usize,
     pub ghost npages: usize,
@@ -83,11 +72,11 @@ impl ValidPageInfo for FracTypedPerm<PageStorageType> {
     }
 
     spec fn is_head(&self) -> bool {
-        !matches!(self.page_info().unwrap(), PageInfo::Compound(_))
+        !matches!(self.page_info(), Some(PageInfo::Compound(_)))
     }
 
     spec fn is_free(&self) -> bool {
-        matches!(self.page_info().unwrap(), PageInfo::Free(_))
+        matches!(self.page_info(), Some(PageInfo::Free(_)))
     }
 }
 
