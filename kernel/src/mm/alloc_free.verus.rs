@@ -2,7 +2,7 @@ verus! {
 
 use vstd::arithmetic::mul::lemma_mul_is_distributive_add_other_way;
 
-tracked struct MemoryRegionPerms {
+tracked struct FreePerms {
     tracked avail: Map<(usize, int), RawPerm>,  //(order, idx) -> perm
     ghost next: Seq<Seq<usize>>,  // order -> next page list
     ghost map: LinearMap,  // pfn -> virt address
@@ -91,7 +91,7 @@ proof fn lemma_order_disjoint_len(s: Seq<usize>, o: usize, max_count: usize)
     }
 }
 
-impl MemoryRegionPerms {
+impl FreePerms {
     /* properties to external */
     pub closed spec fn nr_free(&self) -> Seq<usize> {
         Seq::new(MAX_ORDER as nat, |order| self.next[order].len() as usize)
@@ -137,7 +137,7 @@ impl MemoryRegionPerms {
             self.next_lists() == Seq::new(MAX_ORDER as nat, |order| Seq::empty()),
             ret.map() == map,
     {
-        let tracked ret = MemoryRegionPerms {
+        let tracked ret = FreePerms {
             avail: Map::tracked_empty(),
             next: Seq::new(MAX_ORDER as nat, |order| Seq::empty()),
             map,
@@ -184,9 +184,9 @@ impl MemoryRegionPerms {
             order_disjoint(self.next[o1 as int][i], o1, self.next[o2 as int][j], o2),
     {
         use_type_invariant(&*self);
-        let tracked mut tmp = MemoryRegionPerms::tracked_empty(old(self).map());
+        let tracked mut tmp = FreePerms::tracked_empty(old(self).map());
         tracked_swap(&mut tmp, self);
-        let tracked MemoryRegionPerms { mut avail, next, map, page_count } = tmp;
+        let tracked FreePerms { mut avail, next, map, page_count } = tmp;
         let pfn1 = next[o1 as int][i];
         let pfn2 = next[o2 as int][j];
         let tracked mut p1 = avail.tracked_remove((o1, i));
@@ -195,7 +195,7 @@ impl MemoryRegionPerms {
         avail.tracked_insert((o1, i), p1);
         avail.tracked_insert((o2, j), p2);
         assert(avail =~= old(self).avail);
-        *self = MemoryRegionPerms { avail, next, map, page_count };
+        *self = FreePerms { avail, next, map, page_count };
     }
 
     proof fn tracked_next_no_dup_len(tracked &mut self, o: usize)
@@ -269,12 +269,12 @@ impl MemoryRegionPerms {
             ).pg_params().page_count - 1,
     {
         use_type_invariant(&*self);
-        let tracked mut tmp = MemoryRegionPerms::tracked_empty(old(self).map());
+        let tracked mut tmp = FreePerms::tracked_empty(old(self).map());
         tracked_swap(&mut tmp, self);
-        let tracked MemoryRegionPerms { mut avail, next, map, page_count } = tmp;
+        let tracked FreePerms { mut avail, next, map, page_count } = tmp;
         avail.tracked_insert((order, next[order as int].len() as int), perm);
         *self =
-        MemoryRegionPerms {
+        FreePerms {
             avail,
             next: next.update(order as int, next[order as int].push(pfn)),
             map: map,
@@ -328,12 +328,12 @@ impl MemoryRegionPerms {
             old(self).nr_free()[order as int] >= 0,
     {
         use_type_invariant(&*self);
-        let tracked mut tmp = MemoryRegionPerms::tracked_empty(old(self).map());
+        let tracked mut tmp = FreePerms::tracked_empty(old(self).map());
         tracked_swap(&mut tmp, self);
         tmp.tracked_next_no_dup_len(order);
         assert(old(self).nr_free()[order as int] == old(self).next[order as int].len());
 
-        let tracked MemoryRegionPerms { mut avail, next, map, page_count } = tmp;
+        let tracked FreePerms { mut avail, next, map, page_count } = tmp;
         let len = next[order as int].len();
         let m = Map::new(
             |k: (usize, int)| avail.dom().contains(k) && k != (order, len - 1),
@@ -347,7 +347,7 @@ impl MemoryRegionPerms {
         let tracked perm = avail.tracked_remove((order, i));
         avail.tracked_map_keys_in_place(m);
         *self =
-        MemoryRegionPerms {
+        FreePerms {
             avail,
             next: next.update(order as int, next[order as int].remove(i)),
             map: map,

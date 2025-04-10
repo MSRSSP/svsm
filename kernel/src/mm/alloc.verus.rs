@@ -49,6 +49,8 @@ include!("alloc_info.verus.rs");
 
 include!("alloc_free.verus.rs");
 
+include!("alloc_perms.verus.rs");
+
 include!("alloc_mr.verus.rs");
 
 include!("alloc_proof.verus.rs");
