@@ -47,6 +47,23 @@ impl MemoryRegionPerms {
         spec_ptr_add(self.base_info_ptr(), pfn)
     }
 
+    spec fn wf_next(&self, order: usize, i: int) -> bool {
+        let list = self.free.next_lists()[order as int];
+        let pfn = list[i];
+        self.info.unwrap()@[pfn].page_info() == Some(
+            PageInfo::Free(
+                FreeInfo {
+                    order: order,
+                    next_page: if i > 0 {
+                        list[i - 1]
+                    } else {
+                        0
+                    },
+                },
+            ),
+        )
+    }
+
     /** Invariants for page info **/
     spec fn wf_info(&self) -> bool {
         let info = self.info.unwrap();
@@ -56,7 +73,8 @@ impl MemoryRegionPerms {
         &&& info.start_idx() == 0
         &&& info@.dom() =~= Set::new(|idx| 0 <= idx < self.npages())
         &&& forall|order|
-            0 <= order < MAX_ORDER ==> #[trigger]info.nr_page(order) >= self.free.nr_free()[order as int]
+            0 <= order < MAX_ORDER ==> #[trigger] info.nr_page(order)
+                >= self.free.nr_free()[order as int]
         &&& forall|pfn: usize|
             0 <= pfn < self.npages() && info@[pfn].is_free()
                 ==> self.free.next_lists()[info@[pfn].order() as int].contains(pfn)
@@ -66,6 +84,10 @@ impl MemoryRegionPerms {
                 == Some(PageInfo::Reserved(ReservedInfo)) && #[trigger] info.restrict(
                 pfn,
             ).writable()
+        &&& forall|order: usize, i: int|
+            #![trigger self.free.next_lists()[order as int][i]]
+            0 <= order < MAX_ORDER && 0 <= i < self.free.next_lists()[order as int].len() as int
+                ==> self.wf_next(order, i)
     }
 
     #[verifier::type_invariant]
