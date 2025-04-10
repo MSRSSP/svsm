@@ -297,18 +297,6 @@ impl PageInfoDb {
         }
     }
 
-    spec fn ens_split_left_restrict(&self, idx: usize, left: Self) -> bool {
-        &&& forall|k: usize|
-            #![trigger left.restrict(k)]
-            self.start_idx() < k < idx ==> left.restrict(k) == self.restrict(k)
-    }
-
-    spec fn ens_split_right_restrict(&self, idx: usize, right: Self) -> bool {
-        &&& forall|k: usize|
-            #![trigger right.restrict(k)]
-            idx <= k < self.end() ==> right.restrict(k) == self.restrict(k)
-    }
-
     spec fn ens_split_restrict(&self, idx: usize, left: Self, right: Self) -> bool {
         forall|i|
             #![trigger self.restrict(i)]
@@ -743,7 +731,7 @@ impl PageInfoDb {
     }
 
     #[verifier(spinoff_prover)]
-    #[verifier(rlimit(8))]
+    #[verifier(rlimit(4))]
     proof fn tracked_extract(tracked self, idx: usize) -> (tracked ret: (
         PageInfoDb,
         PageInfoDb,
@@ -809,7 +797,6 @@ impl PageInfoDb {
             assert(right@ =~= self.restrict(idx)@);
             let tracked empty = PageInfoDb::tracked_empty(self.base_ptr);
             assert(empty@.is_empty());
-            assert(empty.restrict_view().is_empty());
             (right, empty)
         };
 
