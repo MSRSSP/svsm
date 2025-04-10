@@ -97,6 +97,10 @@ impl MemoryRegionPerms {
         Seq::new(MAX_ORDER as nat, |order| self.next[order].len() as usize)
     }
 
+    pub closed spec fn next_lists(&self) -> Seq<Seq<usize>> {
+        self.next
+    }
+
     pub closed spec fn next_pages(&self) -> Seq<usize> {
         Seq::new(
             MAX_ORDER as nat,
@@ -155,9 +159,9 @@ impl MemoryRegionPerms {
     spec fn wf(&self) -> bool {
         &&& self.map.wf()
         &&& self.next.len() == MAX_ORDER
-        &&& forall|order: usize, i: int|
-            0 <= order < MAX_ORDER && 0 <= i < self.next[order as int].len()
-                ==> #[trigger] self.avail.contains_key((order, i))
+        &&& self.avail.dom() =~= Set::new(
+            |k: (usize, int)| 0 <= k.0 < MAX_ORDER && 0 <= k.1 < self.next[k.0 as int].len(),
+        )
         &&& forall|order: usize, i: int|
             #![trigger self.next[order as int][i]]
             #![trigger self.avail[(order, i)]]
@@ -293,6 +297,62 @@ impl MemoryRegionPerms {
             order as int,
             (old(self).nr_free()[order as int] + 1) as usize,
         ));
+    }
+
+    #[verifier::spinoff_prover]
+    proof fn tracked_remove(tracked &mut self, order: usize, i: int) -> (tracked perm: RawPerm)
+        requires
+            0 <= order < MAX_ORDER,
+            0 <= i < old(self).next_lists()[order as int].len(),
+        ensures
+            self.next_pages() == old(self).next_pages().update(
+                order as int,
+                self.next_pages()[order as int],
+            ),
+            perm.wf_pfn_order(self.map, old(self).next_lists()[order as int][i], order),
+            self.map() == old(self).map(),
+            self.pg_params() == old(self).pg_params(),
+            self.nr_free() == old(self).nr_free().update(
+                order as int,
+                (old(self).nr_free()[order as int] - 1) as usize,
+            ),
+            old(self).nr_free()[order as int] >= 0,
+    {
+        use_type_invariant(&*self);
+        let tracked mut tmp = MemoryRegionPerms::tracked_empty(old(self).map());
+        tracked_swap(&mut tmp, self);
+        tmp.tracked_next_no_dup_len(order);
+        assert(old(self).nr_free()[order as int] == old(self).next[order as int].len());
+
+        let tracked MemoryRegionPerms { mut avail, next, map, page_count } = tmp;
+        let len = next[order as int].len();
+        let m = Map::new(
+            |k: (usize, int)| avail.dom().contains(k) && k != (order, len - 1),
+            |k: (usize, int)|
+                if k.0 == order && k.1 >= i {
+                    (k.0, k.1 + 1)
+                } else {
+                    k
+                },
+        );
+        let tracked perm = avail.tracked_remove((order, i));
+        avail.tracked_map_keys_in_place(m);
+        *self =
+        MemoryRegionPerms {
+            avail,
+            next: next.update(order as int, next[order as int].remove(i)),
+            map: map,
+            page_count: page_count,
+        };
+        assert(self.nr_free() =~= old(self).nr_free().update(
+            order as int,
+            (old(self).nr_free()[order as int] - 1) as usize,
+        ));
+        assert(self.next_pages() =~= old(self).next_pages().update(
+            order as int,
+            self.next_pages()[order as int],
+        ));
+        perm
     }
 }
 
