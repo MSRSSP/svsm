@@ -210,7 +210,9 @@ impl PageInfoDb {
             self.start_idx() <= idx < self.start_idx() + self.npages(),
             self@[idx].is_head(),
         ensures
-            self.restrict_view() =~= left.restrict_view().union_prefer_right(right.restrict_view()),
+            left.restrict_view() == self.restrict_view().restrict(Set::new(|k: usize| k < idx)),
+            right.restrict_view() == self.restrict_view().restrict(Set::new(|k: usize| k >= idx)),
+            self.restrict_view() == left.restrict_view().union_prefer_right(right.restrict_view()),
     {
         assert(self.restrict_view().dom() =~= left.restrict_view().dom()
             + right.restrict_view().dom());
@@ -223,6 +225,25 @@ impl PageInfoDb {
         } by {
             self.lemma_split_restrict(idx, left, right, i);
         }
+        assert forall|i|
+            left.restrict_view().dom().contains(i) implies #[trigger] left.restrict_view()[i]
+            == self.restrict_view()[i] by {
+            self.lemma_split_restrict(idx, left, right, i);
+        }
+        assert forall|i|
+            right.restrict_view().dom().contains(i) implies #[trigger] right.restrict_view()[i]
+            == self.restrict_view()[i] by {
+            self.lemma_split_restrict(idx, left, right, i);
+        }
+        assert(left.restrict_view() =~= self.restrict_view().restrict(
+            Set::new(|k: usize| k < idx),
+        ));
+        assert(right.restrict_view() =~= self.restrict_view().restrict(
+            Set::new(|k: usize| k >= idx),
+        ));
+        assert(self.restrict_view() =~= left.restrict_view().union_prefer_right(
+            right.restrict_view(),
+        ))
     }
 
     proof fn lemma_split_restrict(&self, idx: usize, left: Self, right: Self, i: usize)
@@ -500,9 +521,8 @@ impl PageInfoDb {
             self.start_idx() <= idx < self.start_idx() + self.npages(),
         ensures
             self.ens_split(idx, ret.0, ret.1),
-            self.restrict_view() === ret.0.restrict_view().union_prefer_right(
-                ret.1.restrict_view(),
-            ),
+            ret.0.restrict_view() == self.restrict_view().restrict(Set::new(|k: usize| k < idx)),
+            ret.1.restrict_view() == self.restrict_view().restrict(Set::new(|k: usize| k >= idx)),
             forall|order| #[trigger]
                 self.nr_page(order) == ret.0.nr_page(order) + ret.1.nr_page(order),
     {
@@ -563,6 +583,7 @@ impl PageInfoDb {
         (left, right)
     }
 
+    #[verifier(spinoff_prover)]
     proof fn tracked_merge_extracted(
         tracked &mut self,
         tracked mid: PageInfoDb,
@@ -575,6 +596,9 @@ impl PageInfoDb {
             old(self).base_ptr() == right.base_ptr(),
         ensures
             self.ens_merge3(*old(self), mid, right),
+            self.restrict_view() === old(self).restrict_view().union_prefer_right(
+                mid.restrict_view(),
+            ).union_prefer_right(right.restrict_view()),
             forall|order| #[trigger]
                 self.nr_page(order) == (old(self).nr_page(order) + mid.nr_page(order)
                     + right.nr_page(order)),
@@ -589,7 +613,13 @@ impl PageInfoDb {
             self.tracked_merge(right);
         } else {
             assert(right@.is_empty());
+            assert(right.restrict_view().is_empty());
             assert(self@ =~= self@.union_prefer_right(right@));
+            assert(old(self).restrict_view().union_prefer_right(
+                mid.restrict_view(),
+            ).union_prefer_right(right.restrict_view()) =~= old(
+                self,
+            ).restrict_view().union_prefer_right(mid.restrict_view()));
         }
 
         assert forall|order: usize| #[trigger]
@@ -602,7 +632,7 @@ impl PageInfoDb {
     }
 
     #[verifier(spinoff_prover)]
-    #[verifier(rlimit(2))]
+    #[verifier(rlimit(4))]
     proof fn tracked_extract(tracked self, idx: usize) -> (tracked ret: (
         PageInfoDb,
         PageInfoDb,
@@ -626,9 +656,10 @@ impl PageInfoDb {
                 self.nr_page(order) == ret.0.nr_page(order) + ret.1.nr_page(order) + ret.2.nr_page(
                     order,
                 ),
-            self.restrict_view() === ret.0.restrict_view().union_prefer_right(
-                ret.1.restrict_view(),
-            ).union_prefer_right(ret.2.restrict_view()),
+            ret.0.restrict_view() =~= self.restrict_view().restrict(Set::new(|k: usize| k < idx)),
+            ret.2.restrict_view() =~= self.restrict_view().restrict(
+                Set::new(|k: usize| k >= idx + self@[idx].size()),
+            ),
     {
         use_type_invariant(&self);
         let start = self.start_idx();
@@ -654,10 +685,6 @@ impl PageInfoDb {
             let empty = PageInfoDb::tracked_empty(self.base_ptr());
             assert(empty@.is_empty());
             assert(empty.restrict_view().is_empty());
-            assert(left.restrict_view().union_prefer_right(right.restrict_view())
-                =~= left.restrict_view().union_prefer_right(
-                right.restrict_view(),
-            ).union_prefer_right(empty.restrict_view()));
             (left, right, PageInfoDb::tracked_empty(self.base_ptr()))
         }
     }
@@ -717,7 +744,9 @@ impl PageInfoDb {
         } else {
             assert(other@.is_empty());
             assert(self@ =~= old(self)@);
-            assert(self.restrict_view() =~= old(self).restrict_view());
+            assert(self.restrict_view() =~= old(self).restrict_view().union_prefer_right(
+                other.restrict_view(),
+            ));
         }
     }
 
