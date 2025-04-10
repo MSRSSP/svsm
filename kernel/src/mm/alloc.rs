@@ -489,6 +489,8 @@ struct MemoryRegion {
     next_page: [usize; MAX_ORDER],
     free_pages: [usize; MAX_ORDER],
     #[cfg(verus_keep_ghost_body)]
+    perms2: Tracked<MemoryRegionPerms>,
+    #[cfg(verus_keep_ghost_body)]
     perms: Tracked<MemoryRegionTracked<MAX_ORDER>>,
 }
 
@@ -510,6 +512,8 @@ impl MemoryRegion {
             free_pages: [0; MAX_ORDER],
             #[cfg(verus_keep_ghost_body)]
             perms: Tracked::assume_new(),
+            #[cfg(verus_keep_ghost_body)]
+            perms2: Tracked::assume_new(),
         }
     }
 
@@ -551,7 +555,7 @@ impl MemoryRegion {
     )]
     fn page_info_mut_ptr(&self, pfn: usize) -> *mut PageStorageType {
         let offset = pfn * size_of::<PageStorageType>();
-        verus_with!(Tracked(self.perms.borrow().is_exposed));
+        verus_with!(Tracked(self.perms2.borrow().info_ptr_exposed));
         self.start_virt
             .const_add(offset)
             .as_mut_ptr_with_provenance()
@@ -566,7 +570,7 @@ impl MemoryRegion {
     )]
     fn page_info_pptr(&self, pfn: usize) -> *const PageStorageType {
         let offset = pfn * size_of::<PageStorageType>();
-        verus_with!(Tracked(self.perms.borrow().is_exposed));
+        verus_with!(Tracked(self.perms2.borrow().info_ptr_exposed));
         self.start_virt.const_add(offset).as_ptr_with_provenance()
     }
 
@@ -584,7 +588,7 @@ impl MemoryRegion {
     fn get_page_storage_type(&self, pfn: usize) -> &PageStorageType {
         proof_decl! {
             reveal(spec_page_info);
-            let tracked perm = self.perms.borrow().reserved.tracked_borrow(pfn as int);
+            let tracked perm = self.perms2.borrow().info.tracked_borrow().tracked_borrow(pfn);
         }
         unsafe {
             verus_with!(Tracked(perm));
@@ -622,14 +626,23 @@ impl MemoryRegion {
         let info: PageStorageType = pi.to_mem();
 
         proof_decl! {
-            let tracked mut perm = self.perms.borrow_mut().reserved.tracked_remove(pfn as int);
+            let tracked mut perms = self.perms2.borrow_mut().info.tracked_take();
+            let tracked (mut perm, rawperms) = perms.tracked_remove(pfn);
         }
         unsafe {
             verus_with!(Tracked(&mut perm));
             self.page_info_mut_ptr(pfn).v_write(info);
         }
         proof! {
-            self.perms.borrow_mut().reserved.tracked_insert(pfn as int, perm);
+            rawperms.reserved.tracked_insert(pfn, perm);
+            self.perms2.borrow_mut().info = Some(
+                PageInfoDb {
+                    reserved: rawperms.reserved,
+                    start_idx: rawperms.start_idx,
+                    npages: rawperms.npages,
+                    base_ptr: rawperms.base_ptr,
+                }
+            );
             reveal(ReservedPerms::pfn_dom);
             reveal(spec_page_info);
         }

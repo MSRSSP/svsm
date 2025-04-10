@@ -8,7 +8,6 @@ tracked struct MemoryRegionPerms {
 
 // Increment a thin pointer.
 // It does not make sense to increment a fat pointer.
-#[verifier(opaque)]
 pub closed spec fn spec_ptr_add<T>(base_ptr: *const T, idx: usize) -> *const T
     recommends
         base_ptr@.metadata == vstd::raw_ptr::Metadata::Thin,
@@ -27,6 +26,10 @@ impl MemoryRegionPerms {
     /** Attributes from free && info_ptr_exposed **/
     spec fn npages(&self) -> usize {
         self.free.pg_params().page_count
+    }
+
+    spec fn map(&self) -> LinearMap {
+        self.free.map()
     }
 
     spec fn reserved_count(&self) -> nat {
