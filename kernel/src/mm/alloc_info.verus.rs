@@ -1,4 +1,5 @@
 use verify_proof::frac_ptr::*;
+use verify_proof::set::axiom_set_usize_range;
 
 verus! {
 
@@ -31,6 +32,7 @@ struct RawDeallocPerm(PageInfoDb);
 
 impl RawDeallocPerm {
     #[verifier::type_invariant]
+    #[verifier(opaque)]
     pub closed spec fn wf(&self) -> bool {
         &&& self.0.is_unit()
         &&& self.0.is_readonly_dealloc_shares()
@@ -114,12 +116,73 @@ impl PageInfoDb {
         PageInfoDb { npages: 0, start_idx: 0, base_ptr, reserved: Map::empty() }
     }
 
-    pub closed spec fn info_dom(&self, order: usize) -> Set<usize> {
-        self@.dom().filter(|i| self@[i].is_head() && self@[i].order() == order)
+    pub closed spec fn _info_dom(&self, order: usize) -> Set<usize> {
+        self@.dom().filter(|i| self@[i].order() == order)
     }
 
     pub closed spec fn nr_page(&self, order: usize) -> nat {
-        self.info_dom(order).len()
+        self._info_dom(order).len()
+    }
+
+    proof fn lemma_nr_page_pair(&self, order: usize, order2: usize)
+        requires
+            self.wf(),
+            order != order2,
+        ensures
+            self.nr_page(order) + self.nr_page(order2) <= self.npages(),
+    {
+        let s1 = self._info_dom(order);
+        let s2 = self._info_dom(order2);
+        assert(s1.disjoint(s2));
+        vstd::set_lib::lemma_set_disjoint_lens(s1, s2);
+        let s = s1 + s2;
+        assert(s.subset_of(self@.dom()));
+        self.lemma_dom_len();
+    }
+
+    proof fn lemma_dom_len(&self)
+        requires
+            self.wf(),
+        ensures
+            self@.dom().len() == self.npages(),
+    {
+        axiom_set_usize_range(self.start_idx(), self.end());
+    }
+
+    proof fn lemma_nr_page_npages(&self, order: usize)
+        requires
+            self.wf(),
+        ensures
+            self.nr_page(order) <= self.npages(),
+    {
+        self.lemma_dom_len();
+        assert(self._info_dom(order).subset_of(self@.dom()));
+    }
+
+    spec fn const_nr_page(npages: usize, order: usize) -> usize {
+        if order < MAX_ORDER && (1usize << order) == npages {
+            npages
+        } else {
+            0
+        }
+    }
+
+    proof fn proof_unit_nr_page(&self)
+        requires
+            self.wf(),
+            self.is_unit(),
+        ensures
+            forall|order| #[trigger]
+                self.nr_page(order) == Self::const_nr_page(self.npages(), order),
+    {
+        assert forall|order| #[trigger]
+            self.nr_page(order) == Self::const_nr_page(self.npages(), order) by {
+            assert(1usize << self@[self.start_idx()].order() == self.npages());
+            if (order < MAX_ORDER && (1usize << order) == self.npages()) {
+                assert(order == self@[self.start_idx()].order());
+            }
+            self.lemma_unit_nr_page(order);
+        }
     }
 
     proof fn lemma_unit_nr_page(&self, order: usize)
@@ -127,13 +190,42 @@ impl PageInfoDb {
             self.wf(),
             self.is_unit(),
         ensures
-            order == self@[self.start_idx()].order() ==> self.nr_page(order) == 1,
+            order == self@[self.start_idx()].order() ==> self.nr_page(order) == self.npages(),
             order != self@[self.start_idx()].order() ==> self.nr_page(order) == 0,
     {
+        self.lemma_dom_len();
         if order == self@[self.start_idx()].order() {
-            assert(self.info_dom(order) =~= set![self.start_idx()]);
+            assert(self._info_dom(order) =~= self@.dom());
         } else {
-            assert(self.info_dom(order).is_empty());
+            assert(self._info_dom(order).is_empty());
+        }
+    }
+
+    proof fn lemma_split_nr_page(&self, idx: usize, left: Self, right: Self, order: usize)
+        requires
+            self.wf(),
+            self.ens_split(idx, left, right),
+        ensures
+            self.nr_page(order) == left.nr_page(order) + right.nr_page(order),
+    {
+        let s1 = left._info_dom(order);
+        let s2 = right._info_dom(order);
+        let s = self._info_dom(order);
+        vstd::set_lib::lemma_set_disjoint_lens(s1, s2);
+        assert(s1 + s2 =~= s);
+    }
+
+    proof fn proof_split_nr_page(&self, idx: usize, left: Self, right: Self)
+        requires
+            self.wf(),
+            self.ens_split(idx, left, right),
+        ensures
+            forall|order: usize| #[trigger]
+                self.nr_page(order) == left.nr_page(order) + right.nr_page(order),
+    {
+        assert forall|order: usize| #[trigger]
+            self.nr_page(order) == left.nr_page(order) + right.nr_page(order) by {
+            self.lemma_split_nr_page(idx, left, right, order);
         }
     }
 
@@ -225,6 +317,27 @@ impl PageInfoDb {
         self.lemma_restrict(j);
     }
 
+    proof fn lemma_wf_recursive(&self)
+        requires
+            self.wf(),
+        ensures
+            forall|idx|
+                #![trigger self@[idx]]
+                self.start_idx() <= idx < self.start_idx() + self.npages() ==> self.restrict(
+                    idx,
+                ).wf(),
+    {
+        assert forall|idx|
+            #![trigger self@[idx]]
+            self.start_idx() <= idx < self.start_idx() + self.npages() implies self.restrict(
+            idx,
+        ).wf() by {
+            if self.is_head(idx) {
+                self.lemma_restrict(idx);
+            }
+        }
+    }
+
     proof fn lemma_restrict(&self, idx: usize)
         requires
             self.wf(),
@@ -294,8 +407,11 @@ impl PageInfoDb {
             ret.is_unit(),
             ret == PageInfoDb::new(1usize << order, start_idx, base_ptr, reserved),
             ret@ == reserved,
+            forall|order| #[trigger] ret.nr_page(order) == Self::const_nr_page(ret.npages(), order),
     {
-        PageInfoDb { npages: 1usize << order, start_idx, base_ptr, reserved }
+        let tracked ret = PageInfoDb { npages: 1usize << order, start_idx, base_ptr, reserved };
+        ret.proof_unit_nr_page();
+        ret
     }
 
     pub open spec fn ens_split(&self, idx: usize, left: Self, right: Self) -> bool {
@@ -307,18 +423,43 @@ impl PageInfoDb {
         &&& right.base_ptr() == self.base_ptr()
         &&& right.start_idx() == idx
         &&& right.npages() + left.npages() == self.npages()
-        &&& forall|i|
-            self.start_idx() <= i < self.start_idx() + self.npages() ==> #[trigger] self@[i] == if i
-                < idx {
-                left@[i]
-            } else {
-                right@[i]
-            }
+    }
+
+    pub open spec fn ens_merge(&self, left: Self, right: Self) -> bool {
+        &&& self@ == left@.union_prefer_right(right@)
+        &&& self.base_ptr() == left.base_ptr()
+        &&& self.start_idx() == left.start_idx()
+        &&& self.npages() == left.npages() + right.npages()
+    }
+
+    pub open spec fn ens_merge3(&self, left: Self, mid: Self, right: Self) -> bool {
+        &&& self@ == left@.union_prefer_right(mid@).union_prefer_right(right@)
+        &&& self.base_ptr() == left.base_ptr()
+        &&& self.start_idx() == left.start_idx()
+        &&& self.npages() == left.npages() + mid.npages() + right.npages()
+    }
+
+    #[verifier(rlimit(4))]
+    proof fn tracked_split(tracked self, idx: usize) -> (tracked ret: (PageInfoDb, PageInfoDb))
+        requires
+            self.is_head(idx),
+            self.start_idx() <= idx < self.start_idx() + self.npages(),
+        ensures
+            self.ens_split(idx, ret.0, ret.1),
+            forall|order| #[trigger]
+                self.nr_page(order) == ret.0.nr_page(order) + ret.1.nr_page(order),
+    {
+        use_type_invariant(&self);
+        let tracked (left, right) = self._tracked_split(idx);
+        use_type_invariant(&left);
+        use_type_invariant(&right);
+        self.proof_split_nr_page(idx, left, right);
+        (left, right)
     }
 
     #[verifier(spinoff_prover)]
     #[verifier(rlimit(4))]
-    proof fn tracked_split(tracked self, idx: usize) -> (tracked ret: (PageInfoDb, PageInfoDb))
+    proof fn _tracked_split(tracked self, idx: usize) -> (tracked ret: (PageInfoDb, PageInfoDb))
         requires
             self.is_head(idx),
             self.start_idx() <= idx < self.start_idx() + self.npages(),
@@ -364,6 +505,44 @@ impl PageInfoDb {
         (left, right)
     }
 
+    proof fn tracked_merge_extracted(
+        tracked &mut self,
+        tracked mid: PageInfoDb,
+        tracked right: PageInfoDb,
+    )
+        requires
+            old(self).start_idx() + old(self).npages() == mid.start_idx(),
+            right.npages() > 0 ==> mid.start_idx() + mid.npages() == right.start_idx(),
+            old(self).base_ptr() == mid.base_ptr(),
+            old(self).base_ptr() == right.base_ptr(),
+        ensures
+            self.ens_merge3(*old(self), mid, right),
+            forall|order| #[trigger]
+                self.nr_page(order) == (old(self).nr_page(order) + mid.nr_page(order)
+                    + right.nr_page(order)),
+    {
+        use_type_invariant(&*self);
+        use_type_invariant(&mid);
+        let left = *self;
+        self.tracked_merge(mid);
+        let tmp_self = *self;
+        use_type_invariant(&right);
+        if right.npages() > 0 {
+            self.tracked_merge(right);
+        } else {
+            assert(right@.is_empty());
+            assert(self@ =~= self@.union_prefer_right(right@));
+        }
+
+        assert forall|order: usize| #[trigger]
+            self.nr_page(order) == old(self).nr_page(order) + mid.nr_page(order) + right.nr_page(
+                order,
+            ) by {
+            assert(tmp_self.nr_page(order) == left.nr_page(order) + mid.nr_page(order));
+            assert(self.nr_page(order) == tmp_self.nr_page(order) + right.nr_page(order));
+        }
+    }
+
     #[verifier(spinoff_prover)]
     #[verifier(rlimit(2))]
     proof fn tracked_extract(tracked self, idx: usize) -> (tracked ret: (
@@ -385,6 +564,10 @@ impl PageInfoDb {
             ret.2.base_ptr() == self.base_ptr(),
             ret.2.npages() > 0 ==> ret.2.start_idx() == idx + self@[idx].size(),
             ret.2.npages() + ret.0.npages() + ret.1.npages() == self.npages(),
+            forall|order: usize| #[trigger]
+                self.nr_page(order) == ret.0.nr_page(order) + ret.1.nr_page(order) + ret.2.nr_page(
+                    order,
+                ),
     {
         use_type_invariant(&self);
         let start = self.start_idx();
@@ -442,17 +625,30 @@ impl PageInfoDb {
         (ret, PageInfoInner { npages, start_idx, base_ptr, reserved })
     }
 
-    #[verifier(spinoff_prover)]
-    #[verifier(rlimit(4))]
     proof fn tracked_merge(tracked &mut self, tracked other: Self)
         requires
             old(self).start_idx() + old(self).npages() == other.start_idx(),
             old(self).base_ptr() == other.base_ptr(),
         ensures
-            self@ == old(self)@.union_prefer_right(other@),
-            self.base_ptr() == old(self).base_ptr(),
-            self.start_idx() == old(self).start_idx(),
-            self.npages() == old(self).npages() + other.npages(),
+            forall|order| #[trigger]
+                self.nr_page(order) == (old(self).nr_page(order) + other.nr_page(order)),
+            self.ens_merge(*old(self), other),
+    {
+        use_type_invariant(&*self);
+        use_type_invariant(&other);
+        self._tracked_merge(other);
+        use_type_invariant(&*self);
+        self.proof_split_nr_page(other.start_idx(), *old(self), other);
+    }
+
+    #[verifier(spinoff_prover)]
+    #[verifier(rlimit(4))]
+    proof fn _tracked_merge(tracked &mut self, tracked other: Self)
+        requires
+            old(self).start_idx() + old(self).npages() == other.start_idx(),
+            old(self).base_ptr() == other.base_ptr(),
+        ensures
+            self.ens_merge(*old(self), other),
     {
         let old_self = *self;
         let tracked mut tmp = PageInfoDb::tracked_empty(self.base_ptr());
@@ -507,6 +703,7 @@ impl PageInfoDb {
             self.npages() == old(self).npages(),
             self.restrict(idx).is_readonly_allocator_shares(),
             ret@.is_readonly_dealloc_shares(),
+            forall|order: usize| #[trigger] self.nr_page(order) == old(self).nr_page(order),
     {
         reveal(PageInfoDb::is_readonly_allocator_shares);
         reveal(PageInfoDb::is_readonly_dealloc_shares);
@@ -516,17 +713,16 @@ impl PageInfoDb {
         let tracked (mut left, mut mid, right) = tmp.tracked_extract(idx);
         *self = left;
         use_type_invariant(&mid);
+        mid.proof_unit_nr_page();
         let order = mid@[idx].order();
         let tracked PageInfoDb { npages, start_idx, base_ptr, mut reserved } = mid;
         let allocated_npages = self@[idx].size();
         let tracked allocated_reserved = tracked_map_shares(&mut reserved, DEALLOC_PGINFO_SHARES);
-        mid = PageInfoDb::tracked_new_unit(order, start_idx, base_ptr, reserved);
-        self.tracked_merge(mid);
-        if right.npages() > 0 {
-            self.tracked_merge(right);
-        }
-        assert(!mid.writable());
-        assert(self.restrict(idx)@ =~= mid@);
+        let tracked new_mid = PageInfoDb::tracked_new_unit(order, start_idx, base_ptr, reserved);
+        self.tracked_merge_extracted(new_mid, right);
+        assert(!new_mid.writable());
+        //new_mid.proof_unit_nr_page();
+        assert(self.restrict(idx)@ =~= new_mid@);
         let tracked ret = PageInfoDb::tracked_new_unit(
             order,
             start_idx,
@@ -534,6 +730,7 @@ impl PageInfoDb {
             allocated_reserved,
         );
         assert(ret.is_unit());
+        reveal(RawDeallocPerm::wf);
         RawDeallocPerm(ret)
     }
 
