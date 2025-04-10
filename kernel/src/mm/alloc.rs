@@ -551,7 +551,7 @@ impl MemoryRegion {
             pfn < self.page_count,
             self.wf_params(),
         ensures
-            ret@.addr == self@.spec_page_info_addr(pfn)@,
+            ret == self.view2().page_info_ptr(pfn)
     )]
     fn page_info_mut_ptr(&self, pfn: usize) -> *mut PageStorageType {
         let offset = pfn * size_of::<PageStorageType>();
@@ -614,35 +614,21 @@ impl MemoryRegion {
 
     /// Writes page information for a given page frame number.
     #[verus_spec(
+        with Tracked(perm): Tracked<&mut FracTypedPerm<PageStorageType>>
         requires
-            (*old(self)).req_write_page_info(pfn, pi),
+            self.req_write_page_info(pfn, pi, *old(perm)),
         ensures
-            (*old(self)).ens_write_page_info(*self, pfn, pi),
+            self.ens_write_page_info(pfn, pi, *old(perm), *perm),
     )]
-    #[allow(clippy::needless_pass_by_ref_mut)]
-    fn write_page_info(&mut self, pfn: usize, pi: PageInfo) {
+    fn write_page_info(&self, pfn: usize, pi: PageInfo) {
         self.check_pfn(pfn);
 
         let info: PageStorageType = pi.to_mem();
-
-        proof_decl! {
-            let tracked mut perms = self.perms2.borrow_mut().info.tracked_take();
-            let tracked (mut perm, rawperms) = perms.tracked_remove(pfn);
-        }
         unsafe {
-            verus_with!(Tracked(&mut perm));
+            verus_with!(Tracked(perm));
             self.page_info_mut_ptr(pfn).v_write(info);
         }
         proof! {
-            rawperms.reserved.tracked_insert(pfn, perm);
-            self.perms2.borrow_mut().info = Some(
-                PageInfoDb {
-                    reserved: rawperms.reserved,
-                    start_idx: rawperms.start_idx,
-                    npages: rawperms.npages,
-                    base_ptr: rawperms.base_ptr,
-                }
-            );
             reveal(ReservedPerms::pfn_dom);
             reveal(spec_page_info);
         }
@@ -758,37 +744,56 @@ impl MemoryRegion {
 
     /// Marks a compound page and updates page information for neighboring pages.
     #[verus_spec(
-        requires old(self).req_mark_compound_page(pfn, order),
+        with Tracked(perms): Tracked<&mut Map<usize, PInfoPerm>>
+        requires
+            self.req_mark_compound_page(pfn, order, *old(perms)),
         ensures
-            old(self).ens_mark_compound_page(*self, pfn, 1usize << order, order),
-            self@.marked_compound(pfn, order),
+            self.ens_mark_compound_page(pfn, order, *old(perms), *perms),
+            //self@.marked_compound(pfn, order),
     )]
     #[verus_verify(rlimit(2))]
-    fn mark_compound_page(&mut self, pfn: usize, order: usize) {
+    fn mark_compound_page(&self, pfn: usize, order: usize) {
         let nr_pages: usize = 1 << order;
         let compound = PageInfo::Compound(CompoundInfo { order });
         #[cfg_attr(verus_keep_ghost, verus_spec(
             invariant
-                old(self).ens_mark_compound_page_loop(*self, pfn, i, order),
+                self.ens_mark_compound_page_loop(pfn, i, order, *old(perms), *perms),
         ))]
         #[cfg_attr(verus_keep_ghost, verifier::loop_isolation(false))]
         for i in 1..nr_pages {
+            proof_decl!{
+                let ghost current = (pfn + i) as usize;
+                let tracked mut perm = perms.tracked_remove(current);
+            }
+            verus_with!(Tracked(&mut perm));
             self.write_page_info(pfn + i, compound);
+            proof!{
+                perms.tracked_insert(current, perm);
+            }
         }
     }
 
     /// Initializes a compound page with given page frame numbers and order.
     #[verus_spec(
-        requires old(self).req_init_compound_page(pfn, order, next_pfn),
-        ensures old(self).ens_init_compound_page(*self, pfn, order, next_pfn),
+        with Tracked(perms): Tracked<&mut Map<usize, PInfoPerm>>
+        requires old(self).req_init_compound_page(pfn, order, next_pfn, *old(perms)),
+        ensures old(self).ens_init_compound_page(*self, pfn, order, next_pfn, *old(perms), *perms),
     )]
     fn init_compound_page(&mut self, pfn: usize, order: usize, next_pfn: usize) {
         let head = PageInfo::Free(FreeInfo {
             next_page: next_pfn,
             order,
         });
+        proof_decl!{
+            let tracked mut perm = perms.tracked_remove(pfn);
+        }
+        verus_with!(Tracked(&mut perm));
         self.write_page_info(pfn, head);
+        verus_with!(Tracked(perms));
         self.mark_compound_page(pfn, order);
+        proof!{
+            perms.tracked_insert(pfn, perm);
+        }
     }
 
     /// Splits a page into two pages of the next lower order.
@@ -898,7 +903,7 @@ impl MemoryRegion {
         let pfn = self.get_next_page(order)?;
         proof! {
             assert(self@.wf());
-            broadcast use MemoryRegion::lemma_wf_ens_write_page_info;
+            //broadcast use MemoryRegion::lemma_wf_ens_write_page_info;
             self@.map.lemma_get_virt(pfn);
         }
         self.write_page_info(pfn, pg);

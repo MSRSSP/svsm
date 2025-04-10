@@ -1397,9 +1397,7 @@ impl MemoryRegion {
             self.nr_pages[order as int] >= 1,
     {
         self@.reserved().lemma_pfn_dom_len_with_one(pfn, order);
-    }
-
-    broadcast proof fn lemma_wf_ens_write_page_info(&self, new: Self, pfn: usize, pi: PageInfo)
+    }/*broadcast proof fn lemma_wf_ens_write_page_info(&self, new: Self, pfn: usize, pi: PageInfo)
         requires
             #[trigger] self.ens_write_page_info(new, pfn, pi),
         ensures
@@ -1418,7 +1416,8 @@ impl MemoryRegion {
             let order = pi.spec_order();
             self@.reserved().lemma_reserved_info_update(new@.reserved(), pfn, order);
         }
-    }
+    }*/
+
 }
 
 } // verus!

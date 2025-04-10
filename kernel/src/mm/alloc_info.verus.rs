@@ -10,6 +10,104 @@ struct PageInfoInner {
     pub reserved: Map<usize, FracTypedPerm<PageStorageType>>,
 }
 
+type PInfoPerm = FracTypedPerm<PageStorageType>;
+
+trait ValidRange {
+    spec fn contains_range(
+        &self,
+        base_ptr: *const PageStorageType,
+        pfn: usize,
+        npage: usize,
+    ) -> bool;
+}
+
+impl ValidRange for Map<usize, FracTypedPerm<PageStorageType>> {
+    spec fn contains_range(
+        &self,
+        base_ptr: *const PageStorageType,
+        pfn: usize,
+        npage: usize,
+    ) -> bool {
+        &&& forall|idx|
+            pfn <= idx < pfn + npage ==> {
+                #[trigger] self.contains_key(idx)
+            }
+        &&& forall|idx|
+            #![trigger self[idx]]
+            pfn <= idx < pfn + npage ==> {
+                &&& self[idx].is_valid_pginfo()
+                &&& self[idx].ptr() == spec_ptr_add(base_ptr, idx)
+            }
+    }
+}
+
+impl PageInfoInner {
+    #[verifier(spinoff_prover)]
+    #[verifier(rlimit(2))]
+    proof fn tracked_insert(
+        tracked self,
+        idx: usize,
+        oldperm: FracTypedPerm<PageStorageType>,
+        tracked perm: FracTypedPerm<PageStorageType>,
+    ) -> PageInfoDb
+        requires
+            PageInfoDb::new(
+                self.npages,
+                self.start_idx,
+                self.base_ptr,
+                self.reserved.insert(idx, oldperm),
+            ).wf(),
+            perm@ == oldperm@.update_value(perm.opt_value()),
+            perm.is_valid_pginfo(),
+            oldperm.is_valid_pginfo(),
+            self.start_idx <= idx < self.start_idx + self.npages,
+            perm.order() == oldperm.order(),
+            perm.page_info().unwrap().spec_type() == oldperm.page_info().unwrap().spec_type(),
+    {
+        let oldinfo = PageInfoDb::new(
+            self.npages,
+            self.start_idx,
+            self.base_ptr,
+            self.reserved.insert(idx, oldperm),
+        );
+        let tracked PageInfoInner { npages, start_idx, base_ptr, mut reserved } = self;
+        reserved.tracked_insert(idx, perm);
+        let info = PageInfoDb::new(self.npages, self.start_idx, self.base_ptr, reserved);
+
+        assert forall|i| start_idx <= i < start_idx + npages implies if i != idx {
+            #[trigger] info@[i] == oldinfo@[i]
+        } else {
+            info@[i] == perm && perm.ptr() == oldinfo@[i].ptr()
+        } by {}
+
+        assert forall|i| start_idx <= i < start_idx + npages implies (#[trigger] info.restrict(
+            i,
+        )).wf() by {
+            if oldinfo@[i].is_head() {
+                oldinfo.lemma_restrict(i);
+                assert(oldinfo.restrict(i).wf_unit());
+                assert(info@[i].is_head());
+                assert(info.restrict(i).is_unit());
+                if i > idx {
+                    assert(info.restrict(i)@ =~= oldinfo.restrict(i)@);
+                } else if i < idx && oldinfo@[idx].is_head() {
+                    oldinfo.lemma_head_no_overlap(i, idx);
+                    assert(info.restrict(i)@ =~= oldinfo.restrict(i)@);
+                } else if i == idx {
+                    assert forall|j| i < j < i + info@[i].size() implies info@[j]
+                        == oldinfo@[j] by {}
+                    assert(info.restrict(i).wf_unit());
+                } else {
+                    assert(info.restrict(i).wf_unit());
+                }
+            } else {
+                assert(info.restrict(i)@.is_empty());
+            }
+        }
+        PageInfoDb { npages, start_idx, base_ptr, reserved }
+    }
+}
+
 struct PageInfoDb {
     ghost start_idx: usize,
     ghost npages: usize,
@@ -48,6 +146,8 @@ trait ValidPageInfo {
     spec fn is_head(&self) -> bool;
 
     spec fn is_free(&self) -> bool;
+
+    spec fn ens_write_page_info(&self, new: &Self, pfn: usize, pi: PageInfo) -> bool;
 }
 
 impl ValidPageInfo for FracTypedPerm<PageStorageType> {
@@ -56,6 +156,13 @@ impl ValidPageInfo for FracTypedPerm<PageStorageType> {
         &&& self.page_info().unwrap().spec_order() < MAX_ORDER
         &&& self.valid()
         &&& self.total() == MAX_PGINFO_SHARES
+    }
+
+    spec fn ens_write_page_info(&self, perm: &Self, pfn: usize, pi: PageInfo) -> bool {
+        let old_perm = *self;
+        &&& perm@ == old_perm@.update_value(perm.opt_value())
+        &&& perm.valid()
+        &&& perm.page_info() == Some(pi)
     }
 
     spec fn page_info(&self) -> Option<PageInfo> {
@@ -701,71 +808,6 @@ impl PageInfoDb {
     {
         use_type_invariant(&self);
         self.reserved.tracked_borrow(idx)
-    }
-
-    #[verifier(spinoff_prover)]
-    #[verifier(rlimit(2))]
-    proof fn tracked_insert(
-        tracked other: PageInfoInner,
-        idx: usize,
-        oldperm: FracTypedPerm<PageStorageType>,
-        tracked perm: FracTypedPerm<PageStorageType>,
-    ) -> Self
-        requires
-            PageInfoDb::new(
-                other.npages,
-                other.start_idx,
-                other.base_ptr,
-                other.reserved.insert(idx, oldperm),
-            ).wf(),
-            perm@ == oldperm@.update_value(perm.opt_value()),
-            perm.is_valid_pginfo(),
-            oldperm.is_valid_pginfo(),
-            other.start_idx <= idx < other.start_idx + other.npages,
-            perm.order() == oldperm.order(),
-            perm.page_info().unwrap().spec_type() == oldperm.page_info().unwrap().spec_type(),
-    {
-        let oldinfo = PageInfoDb::new(
-            other.npages,
-            other.start_idx,
-            other.base_ptr,
-            other.reserved.insert(idx, oldperm),
-        );
-        let tracked PageInfoInner { npages, start_idx, base_ptr, mut reserved } = other;
-        reserved.tracked_insert(idx, perm);
-        let info = PageInfoDb::new(other.npages, other.start_idx, other.base_ptr, reserved);
-
-        assert forall|i| start_idx <= i < start_idx + npages implies if i != idx {
-            #[trigger] info@[i] == oldinfo@[i]
-        } else {
-            info@[i] == perm && perm.ptr() == oldinfo@[i].ptr()
-        } by {}
-
-        assert forall|i| start_idx <= i < start_idx + npages implies (#[trigger] info.restrict(
-            i,
-        )).wf() by {
-            if oldinfo@[i].is_head() {
-                oldinfo.lemma_restrict(i);
-                assert(oldinfo.restrict(i).wf_unit());
-                assert(info@[i].is_head());
-                assert(info.restrict(i).is_unit());
-                if i > idx {
-                    assert(info.restrict(i)@ =~= oldinfo.restrict(i)@);
-                } else if i < idx && oldinfo@[idx].is_head() {
-                    oldinfo.lemma_head_no_overlap(i, idx);
-                    assert(info.restrict(i)@ =~= oldinfo.restrict(i)@);
-                } else if i == idx {
-                    assert forall|j| i < j < i + info@[i].size() implies info@[j]
-                        == oldinfo@[j] by {}
-                    assert(info.restrict(i).wf_unit());
-                } else {
-                    assert(info.restrict(i).wf_unit());
-                }
-            } else {
-                assert(info.restrict(i)@.is_empty());
-            }
-        }
-        PageInfoDb { npages, start_idx, base_ptr, reserved }
     }
 
     proof fn tracked_remove(tracked self, idx: usize) -> (tracked ret: (

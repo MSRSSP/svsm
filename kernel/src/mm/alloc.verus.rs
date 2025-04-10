@@ -75,6 +75,127 @@ spec fn order_disjoint(start1: usize, order1: usize, start2: usize, order2: usiz
 }
 
 impl MemoryRegion {
+    spec fn writable_page_info(&self, pfn: usize, perm: FracTypedPerm<PageStorageType>) -> bool {
+        &&& perm.writable()
+        &&& perm.valid()
+        &&& perm.ptr() == self.view2().page_info_ptr(pfn)
+    }
+
+    spec fn writable_page_infos(
+        &self,
+        pfn: usize,
+        size: usize,
+        perms: Map<usize, PInfoPerm>,
+    ) -> bool {
+        &&& perms.contains_range(self.perms2@.base_info_ptr(), pfn, size)
+        &&& forall|i: usize|
+            pfn <= i < pfn + size ==> self.writable_page_info(i, (#[trigger] perms[i]))
+    }
+
+    #[verifier(inline)]
+    spec fn req_write_page_info(
+        &self,
+        pfn: usize,
+        pi: PageInfo,
+        perm: FracTypedPerm<PageStorageType>,
+    ) -> bool {
+        self.writable_page_info(pfn, perm)
+    }
+
+    spec fn ens_write_page_info(
+        &self,
+        pfn: usize,
+        pi: PageInfo,
+        old_perm: FracTypedPerm<PageStorageType>,
+        perm: FracTypedPerm<PageStorageType>,
+    ) -> bool {
+        old_perm.ens_write_page_info(&perm, pfn, pi)
+    }
+
+    spec fn req_mark_compound_page(
+        &self,
+        pfn: usize,
+        order: usize,
+        perms: Map<usize, PInfoPerm>,
+    ) -> bool {
+        let size = (1usize << order);
+        &&& self.writable_page_infos((pfn + 1) as usize, (size - 1) as usize, perms)
+        &&& self.valid_pfn_order(pfn, order)
+    }
+
+    spec fn ens_mark_compound_page(
+        &self,
+        pfn: usize,
+        order: usize,
+        perms: Map<usize, PInfoPerm>,
+        new_perms: Map<usize, PInfoPerm>,
+    ) -> bool {
+        self.ens_mark_compound_page_loop(pfn, 1usize << order, order, perms, new_perms)
+    }
+
+    spec fn ens_mark_compound_page_loop(
+        &self,
+        pfn: usize,
+        size: usize,
+        order: usize,
+        perms: Map<usize, PInfoPerm>,
+        new_perms: Map<usize, PInfoPerm>,
+    ) -> bool {
+        let pi = PageInfo::Compound(CompoundInfo { order });
+        &&& new_perms.dom() =~= perms.dom()
+        &&& forall|i: usize|
+            #![trigger new_perms[i]]
+            perms.contains_key(i) ==> if pfn < i < pfn + size {
+                perms[i].ens_write_page_info(&new_perms[i], i, pi)
+            } else {
+                new_perms[i] == perms[i]
+            }
+    }
+
+    spec fn req_init_compound_page(
+        &self,
+        pfn: usize,
+        order: usize,
+        next_pfn: usize,
+        perms: Map<usize, PInfoPerm>,
+    ) -> bool {
+        &&& self.valid_pfn_order(pfn, order)
+        &&& (self.valid_pfn_order(next_pfn, order) || next_pfn == 0)
+        &&& self.writable_page_infos(pfn, 1usize << order, perms)
+    }
+
+    spec fn ens_init_compound_page(
+        &self,
+        new: Self,
+        pfn: usize,
+        order: usize,
+        next_pfn: usize,
+        perms: Map<usize, PInfoPerm>,
+        new_perms: Map<usize, PInfoPerm>,
+    ) -> bool {
+        let size = 1usize << order;
+        let pi = PageInfo::Free(FreeInfo { next_page: next_pfn, order });
+        let cpi = PageInfo::Compound(CompoundInfo { order });
+        &&& new_perms.dom() =~= perms.dom()
+        &&& forall|i: usize|
+            #![trigger new_perms[i]]
+            pfn <= i < pfn + size ==> perms[i].ens_write_page_info(
+                &new_perms[i],
+                i,
+                if i == pfn {
+                    pi
+                } else {
+                    cpi
+                },
+            )
+    }
+}
+
+impl MemoryRegion {
+    pub closed spec fn view2(&self) -> MemoryRegionPerms {
+        self.perms2@
+    }
+
     pub closed spec fn view(&self) -> MemoryRegionTracked<MAX_ORDER> {
         self.perms@
     }
@@ -202,7 +323,8 @@ impl MemoryRegion {
 
     #[verifier(inline)]
     spec fn valid_pfn_order(&self, pfn: usize, order: usize) -> bool {
-        self@.valid_pfn_order(pfn, order)
+        &&& self@.valid_pfn_order(pfn, order)
+        &&& pfn < MAX_PAGE_COUNT
     }
 
     spec fn ens_refill_page_list(&self, new: Self, ret: bool, order: usize) -> bool {
@@ -250,15 +372,7 @@ impl MemoryRegion {
         &&& new.next_page@ =~= self.next_page@.update(order - 1, pfn)
     }
 
-    spec fn req_write_page_info(&self, pfn: usize, pi: PageInfo) -> bool {
-        &&& self@.wf_reserved()
-        &&& self.wf_params()
-        &&& pfn < self@.reserved_pfn_count() ==> pi === PageInfo::Reserved(ReservedInfo)
-        &&& pfn < self@.page_count()
-        &&& self@.reserved[pfn as int].writable()
-    }
-
-    spec fn ens_write_page_info(&self, new: Self, pfn: usize, pi: PageInfo) -> bool {
+    /*spec fn ens_write_page_info(&self, new: Self, pfn: usize, pi: PageInfo, perm: FracTypedPerm<PageStorageType>) -> bool {
         let new_order = pi.spec_order();
         let old_order = self@.spec_page_info(pfn as int).unwrap().spec_order();
         &&& self.only_update_reserved(new)
@@ -282,45 +396,7 @@ impl MemoryRegion {
             )
         }
         &&& new@.wf_reserved()
-    }
-
-    spec fn req_mark_compound_page(&self, pfn: usize, order: usize) -> bool {
-        &&& self.wf_reserved()
-        &&& self.valid_pfn_order(pfn, order)
-        &&& self@.pfn_order_is_writable(pfn, order)
-    }
-
-    spec fn ens_mark_compound_page(&self, new: Self, pfn: usize, n: usize, order: usize) -> bool {
-        let pfn_set = set_int_range(pfn + 1, pfn + n);
-        &&& self.only_update_reserved(new)
-        &&& new@.reserved =~~= self@.reserved.union_prefer_right(new@.reserved.restrict(pfn_set))
-        &&& new.wf_reserved()
-        &&& new@.pfn_order_is_writable(pfn, order)
-    }
-
-    spec fn ens_mark_compound_page_loop(
-        &self,
-        new: Self,
-        pfn: usize,
-        n: usize,
-        order: usize,
-    ) -> bool {
-        &&& self.ens_mark_compound_page(new, pfn, n, order)
-        &&& forall|i|
-            #![trigger new@.reserved[i]]
-            pfn < i < pfn + n ==> new@.spec_page_info(i) == Some(
-                PageInfo::Compound(CompoundInfo { order }),
-            )
-    }
-
-    spec fn req_init_compound_page(&self, pfn: usize, order: usize, next_pfn: usize) -> bool {
-        &&& self.valid_pfn_order(pfn, order)
-        &&& (self.valid_pfn_order(next_pfn, order) || next_pfn == 0)
-        &&& self.wf_reserved()
-        &&& self.wf_params()
-        &&& self@.pfn_order_is_writable(pfn, order)
-    }
-
+    }*/
     spec fn only_update_reserved(&self, new: Self) -> bool {
         let expected_perm = MemoryRegionTracked { reserved: new@.reserved, ..self@ };
         let expected_self = MemoryRegion { perms: new.perms, ..*self };
@@ -343,22 +419,6 @@ impl MemoryRegion {
                 &&& self.nr_pages[i] == new.nr_pages[i]
                 &&& self.next_page[i] == new.next_page[i]
             }
-    }
-
-    spec fn ens_init_compound_page(
-        &self,
-        new: Self,
-        pfn: usize,
-        order: usize,
-        next_pfn: usize,
-    ) -> bool {
-        let n = 1usize << order;
-        let changes = Map::new(|i| pfn <= i < pfn + n, |i| new@.reserved[i]);
-        &&& self.only_update_reserved(new)
-        &&& new@.reserved =~= self@.reserved.union_prefer_right(changes)
-        &&& new@.marked_free(pfn, order, next_pfn)
-        &&& new.wf_reserved()
-        &&& new@.pfn_order_is_writable(pfn, order)
     }
 
     spec fn ens_find_neighbor(pfn: usize, order: usize, ret_pfn: usize) -> bool {
