@@ -134,6 +134,7 @@ impl MemoryRegionPerms {
             ret.pg_params().page_count == 0,
             ret.nr_free() == Seq::new(MAX_ORDER as nat, |order| 0usize),
             ret.next_pages() == Seq::new(MAX_ORDER as nat, |order| 0usize),
+            self.next_lists() == Seq::new(MAX_ORDER as nat, |order| Seq::empty()),
             ret.map() == map,
     {
         let tracked ret = MemoryRegionPerms {
@@ -252,6 +253,10 @@ impl MemoryRegionPerms {
             perm.wf_pfn_order(old(self).map, pfn, order),
         ensures
             self.next_pages() == old(self).next_pages().update(order as int, pfn),
+            self.next_lists() == old(self).next_lists().update(
+                order as int,
+                old(self).next_lists()[order as int].push(pfn),
+            ),
             self.map() == old(self).map(),
             self.pg_params() == old(self).pg_params(),
             self.nr_free() == old(self).nr_free().update(
@@ -308,6 +313,10 @@ impl MemoryRegionPerms {
             self.next_pages() == old(self).next_pages().update(
                 order as int,
                 self.next_pages()[order as int],
+            ),
+            self.next_lists() == old(self).next_lists().update(
+                order as int,
+                old(self).next_lists()[order as int].remove(i),
             ),
             perm.wf_pfn_order(self.map, old(self).next_lists()[order as int][i], order),
             self.map() == old(self).map(),

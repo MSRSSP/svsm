@@ -59,6 +59,11 @@ trait ValidPageInfo {
     spec fn is_head(&self) -> bool;
 
     spec fn is_free(&self) -> bool;
+
+    spec fn next_pfn(&self) -> usize
+        recommends
+            self.is_free(),
+    ;
 }
 
 impl ValidPageInfo for FracTypedPerm<PageStorageType> {
