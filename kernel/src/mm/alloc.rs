@@ -876,7 +876,7 @@ impl MemoryRegion {
     )]
     #[verus_verify(spinoff_prover)]
     fn allocate_pages_info(&mut self, order: usize, pg: PageInfo) -> Result<VirtAddr, AllocError> {
-        proof_decl!{
+        proof_decl! {
             broadcast use lemma_wf_next_page_info;
             let tracked mut perm = RawPerm::empty(allocator_provenance());
         }
@@ -890,7 +890,7 @@ impl MemoryRegion {
         }
         self.write_page_info(pfn, pg);
         let vaddr = self.start_virt + (pfn * PAGE_SIZE);
-        proof!{
+        proof! {
             let tracked mut reserved = Map::tracked_empty();
             let tracked dealloc = DeallocPerm {
                 vaddr,

@@ -48,7 +48,7 @@ impl<T> SafePtrWithFracTypedPerm<T> for *const T {
         with Tracked(perm): Tracked<&'a FracTypedPerm<T>>
     )]
     unsafe fn v_borrow<'a>(self) -> &'a T {
-        proof_decl!{
+        proof_decl! {
             let tracked ptr_perm = perm.borrow();
         }
         vstd::raw_ptr::ptr_ref(self, verus_exec_expr!(Tracked(&ptr_perm)))
@@ -81,12 +81,12 @@ impl<T> SafeMutPtrWithFracTypedPerm<T> for *mut T {
             perm@ == old(perm)@.update_value(MemContents::Init(v)),
     )]
     unsafe fn v_write(self, v: T) {
-        proof_decl!{
+        proof_decl! {
             let tracked mut ptr_perm = perm.extract();
             ptr_perm.leak_contents();
         }
         vstd::raw_ptr::ptr_mut_write(self, verus_exec_expr!(Tracked(&mut ptr_perm)), v);
-        proof!{
+        proof! {
             perm.update(ptr_perm);
         }
     }

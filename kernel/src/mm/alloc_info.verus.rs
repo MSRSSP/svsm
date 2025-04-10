@@ -59,11 +59,6 @@ trait ValidPageInfo {
     spec fn is_head(&self) -> bool;
 
     spec fn is_free(&self) -> bool;
-
-    spec fn next_pfn(&self) -> usize
-        recommends
-            self.is_free(),
-    ;
 }
 
 impl ValidPageInfo for FracTypedPerm<PageStorageType> {
@@ -206,6 +201,39 @@ impl PageInfoDb {
         }
     }
 
+    proof fn lemma_split_restrict(
+        &self,
+        idx: usize,
+        left: Self,
+        right: Self,
+        order: usize,
+        i: usize,
+    )
+        requires
+            self.wf(),
+            left.wf(),
+            right.wf(),
+            self.ens_split(idx, left, right),
+            self.start_idx() <= idx < self.start_idx() + self.npages(),
+            self.start_idx() <= i < self.start_idx() + self.npages(),
+            self@[i].is_head(),
+            self@[idx].is_head(),
+        ensures
+            self.restrict(i) == if i < idx {
+                left.restrict(i)
+            } else {
+                right.restrict(i)
+            },
+    {
+        if i < idx {
+            self.lemma_head_no_overlap(i, idx);
+            assert(self.restrict(i)@ =~= left.restrict(i)@);
+        } else {
+            assert(self.restrict(i)@ =~= right.restrict(i)@);
+        }
+
+    }
+
     proof fn lemma_split_nr_page(&self, idx: usize, left: Self, right: Self, order: usize)
         requires
             self.wf(),
@@ -237,6 +265,26 @@ impl PageInfoDb {
     /*** Basic spec functions ***/
     pub closed spec fn view(&self) -> Map<usize, FracTypedPerm<PageStorageType>> {
         self.reserved
+    }
+
+    pub closed spec fn restrict_view(&self) -> Map<usize, PageInfoDb> {
+        Map::new(|k| self@[k].is_head(), |k| self.restrict(k))
+    }
+
+    pub closed spec fn restrict(&self, idx: usize) -> PageInfoDb {
+        let info = self.page_info(idx).unwrap();
+        match info {
+            PageInfo::Compound(_) => { PageInfoDb::empty(self.ptr(idx)) },
+            _ => {
+                let npages = 1usize << self@[idx].order();
+                PageInfoDb {
+                    npages,
+                    start_idx: idx,
+                    base_ptr: self.base_ptr,
+                    reserved: self@.restrict(Set::new(|k| idx <= k < idx + npages)),
+                }
+            },
+        }
     }
 
     pub closed spec fn base_ptr(&self) -> *const PageStorageType {
@@ -290,22 +338,6 @@ impl PageInfoDb {
     #[verifier(inline)]
     spec fn is_head(&self, idx: usize) -> bool {
         self@[idx].is_head()
-    }
-
-    pub closed spec fn restrict(&self, idx: usize) -> PageInfoDb {
-        let info = self.page_info(idx).unwrap();
-        match info {
-            PageInfo::Compound(_) => { PageInfoDb::empty(self.ptr(idx)) },
-            _ => {
-                let npages = 1usize << self@[idx].order();
-                PageInfoDb {
-                    npages,
-                    start_idx: idx,
-                    base_ptr: self.base_ptr,
-                    reserved: self@.restrict(Set::new(|k| idx <= k < idx + npages)),
-                }
-            },
-        }
     }
 
     broadcast proof fn lemma_head_no_overlap(&self, i: usize, j: usize)
