@@ -1066,19 +1066,29 @@ impl MemoryRegion {
         }
 
         let new_order = order + 1;
-
-        proof! {
-            self.lemma_pfn_dom_len_with_two(pfn1, pfn2, order);
-            self.lemma_accounting_basic(new_order);
-            tracked_merge(perm, p2, self@.map, pfn1, pfn2, order);
-        }
-
         let pfn: usize = pfn1.min(pfn2);
+
+        proof_decl! {
+            use_type_invariant(&self.perms2.borrow().free);
+            use_type_invariant(&self.perms2.borrow());
+            tracked_merge(perm, p2, self.view2().map(), pfn1, pfn2, order);
+            let tracked mut info = self.perms2.borrow_mut().info.tracked_take();
+            let tracked (left, info_perms1, right) = info.tracked_extract(pfn);
+            assert(info_perms1.writable());
+            let tracked (_, info_perms2, right2) = right.tracked_extract((pfn + (1usize << order)) as usize);
+            assert(info_perms2.writable());
+            let tracked PageInfoInner {base_ptr, reserved: mut info_perms, ..} = info_perms1.tracked_get();
+            let tracked PageInfoInner {reserved, ..} = info_perms2.tracked_get();
+            let tracked mut info_perm = info_perms.tracked_remove(pfn);
+            info_perms.tracked_union_prefer_right(reserved);
+        }
         // Write new compound head
         let pg = PageInfo::Allocated(AllocatedInfo { order: new_order });
+        verus_with!(Tracked(&mut info_perm));
         self.write_page_info(pfn, pg);
 
         // Write compound pages
+        verus_with!(Tracked(&mut info_perms));
         self.mark_compound_page(pfn, new_order);
 
         // Do the accounting - none of the pages is free yet, so free_pages is
@@ -1086,15 +1096,11 @@ impl MemoryRegion {
         self.nr_pages[order] -= 2;
         self.nr_pages[new_order] += 1;
 
-        proof_mr_forall_wf_at!(self);
-        proof! {
-            old(self)@.reserved().lemma_pfn_dom_update(self@.reserved(), order_set(pfn, new_order), order, new_order);
-            old(self).lemma_nr_page_add(self, -2, order);
-            old(self).lemma_nr_page_add(self, 1, new_order);
-            old(self)@.reserved().lemma_reserved_info_merge(self@.reserved(), pfn, order);
-            self.perms.borrow().lemma_perm_disjoint(perm, pfn, new_order);
+        proof!{
+            let tracked new_unit = PageInfoDb::tracked_new_unit(new_order, pfn, base_ptr, info_perms);
+            left.tracked_merge_extracted(new_unit, right2);
+            self.perms2.borrow_mut().info = Some(left);
         }
-
         Ok(pfn)
     }
 

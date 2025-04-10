@@ -189,6 +189,31 @@ impl MemoryRegion {
                 },
             )
     }
+
+    spec fn req_merge_pages(
+        &self,
+        pfn1: usize,
+        pfn2: usize,
+        order: usize,
+        p1: RawPerm,
+        p2: RawPerm,
+    ) -> bool {
+        let pfn = vstd::math::min(pfn1 as int, pfn2 as int);
+        let info = self.view2().info.unwrap();
+        &&& self.wf()
+        &&& self.view2().info.is_some()
+        &&& self.valid_pfn_order(pfn as usize, (order + 1) as usize)
+        &&& info.restrict(pfn1).writable()
+        &&& info.restrict(pfn2).writable()
+        &&& info.is_head(pfn1)
+        &&& info.is_head(pfn2)
+        &&& info@[pfn1].order() == order
+        &&& info@[pfn2].order() == order
+        &&& 0 <= order < MAX_ORDER - 1
+        &&& p1.wf_pfn_order(self.view2().map(), pfn1, order)
+        &&& p2.wf_pfn_order(self.view2().map(), pfn2, order)
+        &&& (pfn1 == pfn2 + (1usize << order)) || (pfn1 == pfn2 - (1usize << order))
+    }
 }
 
 impl MemoryRegion {
@@ -506,29 +531,6 @@ impl MemoryRegion {
     ) -> bool {
         &&& ret.is_ok() ==> self.ens_try_to_merge_page_ok(new, pfn, order, ret, perm)
         &&& ret.is_err() ==> (self == new) && perm == old_perm
-    }
-
-    spec fn req_merge_pages(
-        &self,
-        pfn1: usize,
-        pfn2: usize,
-        order: usize,
-        p1: RawPerm,
-        p2: RawPerm,
-    ) -> bool {
-        let pfn = vstd::math::min(pfn1 as int, pfn2 as int);
-        &&& self.wf()
-        &&& p1.wf_pfn_order(self@.map, pfn1, order)
-        &&& p2.wf_pfn_order(self@.map, pfn2, order)
-        &&& (pfn1 == pfn2 + (1usize << order)) || (pfn1 == pfn2 - (1usize << order))
-        &&& self.valid_pfn_order(pfn as usize, (order + 1) as usize)
-        &&& 0 <= order < MAX_ORDER - 1
-        &&& self@.pfn_range_is_allocated(pfn1, order)
-        &&& self@.pfn_range_is_allocated(pfn2, order)
-        &&& self@.marked_order(pfn1, order)
-        &&& self@.marked_order(pfn2, order)
-        &&& self@.pfn_order_is_writable(pfn1, order)
-        &&& self@.pfn_order_is_writable(pfn2, order)
     }
 
     spec fn ens_merge_pages_ok(
