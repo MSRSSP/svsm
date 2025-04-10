@@ -201,14 +201,31 @@ impl PageInfoDb {
         }
     }
 
-    proof fn lemma_split_restrict(
-        &self,
-        idx: usize,
-        left: Self,
-        right: Self,
-        order: usize,
-        i: usize,
-    )
+    proof fn lemma_split_restrict_view(&self, idx: usize, left: Self, right: Self)
+        requires
+            self.wf(),
+            left.wf(),
+            right.wf(),
+            self.ens_split(idx, left, right),
+            self.start_idx() <= idx < self.start_idx() + self.npages(),
+            self@[idx].is_head(),
+        ensures
+            self.restrict_view() =~= left.restrict_view().union_prefer_right(right.restrict_view()),
+    {
+        assert(self.restrict_view().dom() =~= left.restrict_view().dom()
+            + right.restrict_view().dom());
+        assert forall|i|
+            self.restrict_view().dom().contains(i) implies #[trigger] self.restrict_view()[i]
+            == if i < idx {
+            left.restrict_view()[i]
+        } else {
+            right.restrict_view()[i]
+        } by {
+            self.lemma_split_restrict(idx, left, right, i);
+        }
+    }
+
+    proof fn lemma_split_restrict(&self, idx: usize, left: Self, right: Self, i: usize)
         requires
             self.wf(),
             left.wf(),
@@ -268,7 +285,7 @@ impl PageInfoDb {
     }
 
     pub closed spec fn restrict_view(&self) -> Map<usize, PageInfoDb> {
-        Map::new(|k| self@[k].is_head(), |k| self.restrict(k))
+        Map::new(|k| self@[k].is_head() && self.start_idx() <= k < self.end(), |k| self.restrict(k))
     }
 
     pub closed spec fn restrict(&self, idx: usize) -> PageInfoDb {
@@ -483,6 +500,9 @@ impl PageInfoDb {
             self.start_idx() <= idx < self.start_idx() + self.npages(),
         ensures
             self.ens_split(idx, ret.0, ret.1),
+            self.restrict_view() === ret.0.restrict_view().union_prefer_right(
+                ret.1.restrict_view(),
+            ),
             forall|order| #[trigger]
                 self.nr_page(order) == ret.0.nr_page(order) + ret.1.nr_page(order),
     {
@@ -491,6 +511,7 @@ impl PageInfoDb {
         use_type_invariant(&left);
         use_type_invariant(&right);
         self.proof_split_nr_page(idx, left, right);
+        self.lemma_split_restrict_view(idx, left, right);
         (left, right)
     }
 
@@ -605,6 +626,9 @@ impl PageInfoDb {
                 self.nr_page(order) == ret.0.nr_page(order) + ret.1.nr_page(order) + ret.2.nr_page(
                     order,
                 ),
+            self.restrict_view() === ret.0.restrict_view().union_prefer_right(
+                ret.1.restrict_view(),
+            ).union_prefer_right(ret.2.restrict_view()),
     {
         use_type_invariant(&self);
         let start = self.start_idx();
@@ -627,6 +651,13 @@ impl PageInfoDb {
             assert(right.npages() == self@[idx].size());
             assert(idx + self@[idx].size() == end);
             assert(right@ =~= self.restrict(idx)@);
+            let empty = PageInfoDb::tracked_empty(self.base_ptr());
+            assert(empty@.is_empty());
+            assert(empty.restrict_view().is_empty());
+            assert(left.restrict_view().union_prefer_right(right.restrict_view())
+                =~= left.restrict_view().union_prefer_right(
+                right.restrict_view(),
+            ).union_prefer_right(empty.restrict_view()));
             (left, right, PageInfoDb::tracked_empty(self.base_ptr()))
         }
     }
@@ -670,12 +701,24 @@ impl PageInfoDb {
             forall|order| #[trigger]
                 self.nr_page(order) == (old(self).nr_page(order) + other.nr_page(order)),
             self.ens_merge(*old(self), other),
+            self.restrict_view() == old(self).restrict_view().union_prefer_right(
+                other.restrict_view(),
+            ),
     {
         use_type_invariant(&*self);
         use_type_invariant(&other);
         self._tracked_merge(other);
         use_type_invariant(&*self);
-        self.proof_split_nr_page(other.start_idx(), *old(self), other);
+        let idx = other.start_idx();
+        let left = *old(self);
+        self.proof_split_nr_page(idx, left, other);
+        if other.npages() > 0 {
+            self.lemma_split_restrict_view(idx, left, other);
+        } else {
+            assert(other@.is_empty());
+            assert(self@ =~= old(self)@);
+            assert(self.restrict_view() =~= old(self).restrict_view());
+        }
     }
 
     #[verifier(spinoff_prover)]
