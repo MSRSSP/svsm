@@ -220,6 +220,16 @@ impl PageInfoDb {
         self._info_dom(order).len()
     }
 
+    proof fn tracked_nr_page_pair(tracked &self, order: usize, order2: usize)
+        requires
+            order != order2,
+        ensures
+            self.nr_page(order) + self.nr_page(order2) <= self.npages(),
+    {
+        use_type_invariant(self);
+        self.lemma_nr_page_pair(order, order2);
+    }
+
     proof fn lemma_nr_page_pair(&self, order: usize, order2: usize)
         requires
             self.wf(),
@@ -261,6 +271,17 @@ impl PageInfoDb {
         } else {
             0
         }
+    }
+
+    proof fn tracked_unit_nr_page(tracked &self)
+        requires
+            self.is_unit(),
+        ensures
+            forall|order| #[trigger]
+                self.nr_page(order) == Self::const_nr_page(self.npages(), order),
+    {
+        use_type_invariant(self);
+        self.proof_unit_nr_page()
     }
 
     proof fn proof_unit_nr_page(&self)
@@ -1001,7 +1022,7 @@ impl PageInfoDb {
     }
 
     pub closed spec fn wf_unit(&self) -> bool {
-        let info = self.page_info(self.start_idx).unwrap();
+        let info = self@[self.start_idx()].page_info().unwrap();
         &&& self.npages > 0
         &&& match info {
             PageInfo::Reserved(_) => true,

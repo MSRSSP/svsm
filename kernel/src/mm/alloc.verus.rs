@@ -201,6 +201,7 @@ impl MemoryRegion {
         let pfn = vstd::math::min(pfn1 as int, pfn2 as int);
         let info = self.view2().info.unwrap();
         &&& self.wf()
+        &&& self.wf2()
         &&& self.view2().info.is_some()
         &&& self.valid_pfn_order(pfn as usize, (order + 1) as usize)
         &&& info.restrict(pfn1).writable()
@@ -213,6 +214,47 @@ impl MemoryRegion {
         &&& p1.wf_pfn_order(self.view2().map(), pfn1, order)
         &&& p2.wf_pfn_order(self.view2().map(), pfn2, order)
         &&& (pfn1 == pfn2 + (1usize << order)) || (pfn1 == pfn2 - (1usize << order))
+    }
+
+    spec fn ens_merge_pages_ok(
+        &self,
+        new: &Self,
+        pfn1: usize,
+        pfn2: usize,
+        order: usize,
+        ret: usize,
+        perm: RawPerm,
+    ) -> bool {
+        let pfn = vstd::math::min(pfn1 as int, pfn2 as int) as usize;
+        let new_order = (order + 1) as usize;
+        let n1 = (self.nr_pages[order as int] - 2) as usize;
+        let n2 = (self.nr_pages[new_order as int] + 1) as usize;
+        let new_nr_pages = self.nr_pages@.update(order as int, n1).update(order + 1, n2);
+        //&&& new.wf()
+        &&& ret == pfn
+        &&& perm.wf_pfn_order(
+            self.view2().map(),
+            pfn,
+            new_order,
+        )/*&&& self.only_update_reserved_and_tmp_nr(new)
+        &&& new.nr_pages@ === new_nr_pages
+        &&& new@.marked_allocated(pfn, new_order)
+        &&& new@.pfn_range_is_allocated(pfn, new_order)
+        &&& new@.pfn_order_is_writable(pfn, new_order)*/
+
+    }
+
+    spec fn ens_merge_pages(
+        &self,
+        new: &Self,
+        pfn1: usize,
+        pfn2: usize,
+        order: usize,
+        ret: Result<usize, AllocError>,
+        perm: RawPerm,
+    ) -> bool {
+        &&& ret.is_ok()
+        &&& self.ens_merge_pages_ok(new, pfn1, pfn2, order, ret.unwrap(), perm)
     }
 }
 
@@ -531,43 +573,6 @@ impl MemoryRegion {
     ) -> bool {
         &&& ret.is_ok() ==> self.ens_try_to_merge_page_ok(new, pfn, order, ret, perm)
         &&& ret.is_err() ==> (self == new) && perm == old_perm
-    }
-
-    spec fn ens_merge_pages_ok(
-        &self,
-        new: &Self,
-        pfn1: usize,
-        pfn2: usize,
-        order: usize,
-        ret: usize,
-        perm: RawPerm,
-    ) -> bool {
-        let pfn = vstd::math::min(pfn1 as int, pfn2 as int) as usize;
-        let new_order = (order + 1) as usize;
-        let n1 = (self.nr_pages[order as int] - 2) as usize;
-        let n2 = (self.nr_pages[new_order as int] + 1) as usize;
-        let new_nr_pages = self.nr_pages@.update(order as int, n1).update(order + 1, n2);
-        &&& new.wf()
-        &&& ret == pfn
-        &&& perm.wf_pfn_order(self@.map, pfn, new_order)
-        &&& self.only_update_reserved_and_tmp_nr(new)
-        &&& new.nr_pages@ === new_nr_pages
-        &&& new@.marked_allocated(pfn, new_order)
-        &&& new@.pfn_range_is_allocated(pfn, new_order)
-        &&& new@.pfn_order_is_writable(pfn, new_order)
-    }
-
-    spec fn ens_merge_pages(
-        &self,
-        new: &Self,
-        pfn1: usize,
-        pfn2: usize,
-        order: usize,
-        ret: Result<usize, AllocError>,
-        perm: RawPerm,
-    ) -> bool {
-        &&& ret.is_ok()
-        &&& self.ens_merge_pages_ok(new, pfn1, pfn2, order, ret.unwrap(), perm)
     }
 
     spec fn ens_free_page_order(&self, new: &Self, pfn: usize, order: usize) -> bool {

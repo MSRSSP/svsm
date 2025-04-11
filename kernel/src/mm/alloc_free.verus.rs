@@ -92,6 +92,51 @@ proof fn lemma_order_disjoint_len(s: Seq<usize>, o: usize, max_count: usize)
 }
 
 impl MRFreePerms {
+    pub proof fn tracked_merge(
+        tracked &self,
+        tracked p1: &mut RawPerm,
+        tracked p2: RawPerm,
+        pfn1: usize,
+        pfn2: usize,
+        order: usize,
+    )
+        requires
+            0 <= order < 64,
+            pfn1 == pfn2 + (1usize << order) || pfn2 == pfn1 + (1usize << order),
+            p2.wf_pfn_order(self.map(), pfn2, order),
+            old(p1).wf_pfn_order(self.map(), pfn1, order),
+        ensures
+            p1.wf_pfn_order(
+                self.map(),
+                if pfn1 < pfn2 {
+                    pfn1
+                } else {
+                    pfn2
+                },
+                (order + 1) as usize,
+            ),
+    {
+        broadcast use lemma_bit_usize_shl_values;
+
+        let map = self.map();
+        use_type_invariant(self);
+        assert(map.wf());
+        reveal(<VirtAddr as SpecVAddrImpl>::region_to_dom);
+        map.lemma_get_virt(pfn1);
+        map.lemma_get_virt(pfn2);
+        let size = 1usize << order;
+        let tracked mut owned_p1 = RawPerm::empty(p1.provenance());
+        tracked_swap(&mut owned_p1, p1);
+        let tracked p = if pfn1 < pfn2 {
+            assert(pfn2 == pfn1 + size);
+            owned_p1.join(p2)
+        } else {
+            assert(pfn1 == pfn2 + size);
+            p2.join(owned_p1)
+        };
+        *p1 = p;
+    }
+
     /* properties to external */
     pub closed spec fn nr_free(&self) -> Seq<usize> {
         Seq::new(MAX_ORDER as nat, |order| self.next[order].len() as usize)
@@ -171,6 +216,91 @@ impl MRFreePerms {
                 order,
                 i,
             )
+    }
+
+    proof fn tracked_disjoint_with_perm_rec1(
+        tracked &self,
+        pfn: usize,
+        order: usize,
+        tracked perm: &mut RawPerm,
+        o: usize,
+        len: nat,
+    )
+        requires
+            old(perm).wf_pfn_order(self.map(), pfn, order),
+            0 <= len <= self.next_lists()[o as int].len(),
+            0 <= o < MAX_ORDER,
+        ensures
+            *perm == *old(perm),
+            forall|i: int|
+                #![trigger self.next_lists()[o as int][i]]
+                0 <= i < len ==> order_disjoint(self.next_lists()[o as int][i], o, pfn, order),
+        decreases len,
+    {
+        if len > 0 {
+            self.tracked_disjoint_with_perm_rec1(pfn, order, perm, o, (len - 1) as nat);
+            use_type_invariant(&*self);
+            let pfn2 = self.next[o as int][len - 1];
+            let tracked perm2 = self.avail.tracked_borrow((o, len - 1));
+            raw_perm_order_disjoint(self.map, pfn, order, pfn2, o, perm, perm2);
+        }
+    }
+
+    proof fn tracked_disjoint_with_perm_rec2(
+        tracked &self,
+        pfn: usize,
+        order: usize,
+        tracked perm: &mut RawPerm,
+        max_order: usize,
+    )
+        requires
+            old(perm).wf_pfn_order(self.map(), pfn, order),
+            0 <= max_order <= MAX_ORDER,
+        ensures
+            *perm == *old(perm),
+            forall|o: usize, i: int|
+                #![trigger self.next_lists()[o as int][i]]
+                0 <= o < max_order && 0 <= i < self.next_lists()[o as int].len() ==> order_disjoint(
+                    self.next_lists()[o as int][i],
+                    o,
+                    pfn,
+                    order,
+                ),
+        decreases max_order,
+    {
+        if max_order > 0 {
+            self.tracked_disjoint_with_perm_rec2(pfn, order, perm, (max_order - 1) as usize);
+            let o = (max_order - 1) as usize;
+            self.tracked_disjoint_with_perm_rec1(
+                pfn,
+                order,
+                perm,
+                o,
+                self.next_lists()[o as int].len(),
+            );
+        }
+    }
+
+    proof fn tracked_disjoint_with_perm(
+        tracked &self,
+        pfn: usize,
+        order: usize,
+        tracked perm: &mut RawPerm,
+    )
+        requires
+            old(perm).wf_pfn_order(self.map(), pfn, order),
+        ensures
+            *perm == *old(perm),
+            forall|o: usize, i: int|
+                #![trigger self.next_lists()[o as int][i]]
+                0 <= o < MAX_ORDER && 0 <= i < self.next_lists()[o as int].len() ==> order_disjoint(
+                    self.next_lists()[o as int][i],
+                    o,
+                    pfn,
+                    order,
+                ),
+    {
+        self.tracked_disjoint_with_perm_rec2(pfn, order, perm, MAX_ORDER);
     }
 
     proof fn tracked_disjoint_pfn(tracked &mut self, o1: usize, i: int, o2: usize, j: int)

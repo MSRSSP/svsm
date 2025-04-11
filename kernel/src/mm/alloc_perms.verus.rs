@@ -100,4 +100,14 @@ impl MemoryRegionPerms {
     }
 }
 
+impl MemoryRegion {
+    pub closed spec fn wf2(&self) -> bool {
+        let info = self.view2().info.unwrap();
+        &&& self.view2().info.is_some()
+        &&& forall|order|
+            0 <= order < MAX_ORDER ==> info.nr_page(order) == #[trigger] self.nr_pages[order as int]
+        &&& self.view2().free.nr_free() =~= self.free_pages@
+    }
+}
+
 } // verus!
