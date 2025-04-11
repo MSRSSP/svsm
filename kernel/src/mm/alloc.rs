@@ -1082,9 +1082,9 @@ impl MemoryRegion {
             let tracked (_, info_perms2, right2) = right.tracked_extract((pfn + (1usize << order)) as usize);
             info_perms2.tracked_unit_nr_page(order);
             let tracked PageInfoInner {base_ptr, reserved: mut info_perms, ..} = info_perms1.tracked_get();
-            let tracked PageInfoInner {reserved, ..} = info_perms2.tracked_get();
             let tracked mut info_perm = info_perms.tracked_remove(pfn);
-            info_perms.tracked_union_prefer_right(reserved);
+            let tracked reserved2 = info_perms2.tracked_get().reserved;
+            info_perms.tracked_union_prefer_right(reserved2);
             assert(old_info.nr_page(order) >= (1usize << order) * 2);
         }
         // Write new compound head
@@ -1105,6 +1105,11 @@ impl MemoryRegion {
             info_perms.tracked_insert(pfn, info_perm);
             let tracked new_unit = PageInfoDb::tracked_new_unit(new_order, pfn, base_ptr, info_perms);
             let tracked mut info = left;
+            assert(new_unit.start_idx() == pfn);
+            assert(new_unit.npages() == (1usize << new_order));
+            if right2.npages() > 0 {
+                assert(right2.start_idx() == pfn + (1usize << new_order));
+            }
             info.tracked_merge_extracted(new_unit, right2);
             let perms = self.perms2@;
             self.perms2.borrow().free.tracked_disjoint_with_perm(pfn, new_order, perm);
@@ -1132,6 +1137,14 @@ impl MemoryRegion {
                 assert(old_perms.wf_next(o, i));
                 let r = right2@[target_pfn];
                 let l = left@[target_pfn];
+                let e = info@[target_pfn];
+                if target_pfn < pfn {
+                    assert(e == l);
+                }
+                /*if target_pfn >= pfn + (1usize << new_order) {
+                    assert(e == r);
+                }*/
+                //assert(e == l || e== r);
                 //assert(info@[target_pfn] == old_info@[target_pfn]);
             }
             //self.perms2.borrow_mut().tracked_update_info(info);
