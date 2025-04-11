@@ -7,7 +7,7 @@ pub open spec fn set_usize_range(start: usize, end: int) -> Set<usize> {
     Set::new(|i| start <= i < end)
 }
 
-pub proof fn axiom_set_usize_range(start: usize, end: int)
+pub broadcast proof fn lemma_set_usize_range(start: usize, end: int)
     requires
         start <= end,
         end <= usize::MAX + 1,
@@ -20,19 +20,19 @@ pub proof fn axiom_set_usize_range(start: usize, end: int)
         let e2 = (end - 1) as usize;
         let s1 = set_usize_range(start, end);
         let s2 = set_usize_range(start, e2 as int);
-        axiom_set_usize_range(start, e2 as int);
+        lemma_set_usize_range(start, e2 as int);
         assert(s1 =~= s2.insert(e2));
     } else {
         assert(set_usize_range(start, end) =~= Set::empty());
     }
 }
 
-pub broadcast proof fn axiom_set_usize_finite(s: Set<usize>)
+pub broadcast proof fn lemma_set_usize_finite(s: Set<usize>)
     ensures
         #[trigger] s.finite(),
 {
     let maxset = set_usize_range(0, usize::MAX + 1);
-    axiom_set_usize_range(0, usize::MAX + 1);
+    lemma_set_usize_range(0, usize::MAX + 1);
     assert(s.subset_of(maxset));
 }
 

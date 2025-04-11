@@ -17,19 +17,7 @@
 // Those invariants are used to prove the correct implementation of allocator.
 verus! {
 
-use vstd::arithmetic::div_mod::{lemma_mod_self_0, lemma_small_mod, lemma_add_mod_noop};
-use verify_proof::nonlinear::lemma_align_down_properties;
-use vstd::modes::tracked_swap;
-use verify_proof::frac_ptr::raw_perm_is_disjoint;
-
 global size_of PageStorageType == 8;
-
-broadcast group set_len_group {
-    verify_proof::set::lemma_set_filter_disjoint_len,
-    verify_proof::set::lemma_int_range,
-    verify_proof::set::lemma_len_filter,
-    verify_proof::set::lemma_len_subset,
-}
 
 impl MemoryRegionTracked<MAX_ORDER> {
     #[verifier::spinoff_prover]
@@ -972,6 +960,7 @@ impl<const N: usize> MemoryRegionTracked<N> {
             next: Seq::new(N as nat, |k| Seq::empty()),
             map: LinearMap::spec_new(virt_start, virt_start, phys_start),
             is_exposed,
+            inv: arbitrary(),
         };
         assert(ret.reserved.dom() =~= set_int_range(0, 0));
         reveal(ReservedPerms::wf_page_info);

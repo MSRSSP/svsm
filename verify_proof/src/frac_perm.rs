@@ -87,6 +87,11 @@ tokenized_state_machine!(frac_inner<Perm> {
         forall |v| #[trigger] self.reader.count(v) > 0 ==> self.storage == v.0
     }
 
+    #[invariant]
+    pub fn reader_agrees_total(&self) -> bool {
+        forall |v| #[trigger] self.reader.count(v) > 0 ==> v.1 <= self.total
+    }
+
     init!{
         initialize_once(total: nat) {
             require total > 0;
@@ -109,6 +114,14 @@ tokenized_state_machine!(frac_inner<Perm> {
             birds_eye let r1 = pre.reader.contains(p1);
             birds_eye let r2 = pre.reader.contains(p2);
             assert p1.0 == p2.0;
+        }
+    }
+
+    property! {
+        shares_agree_totals(p: (Option<Perm>, nat)) {
+            have reader >= {p};
+            birds_eye let r1 = pre.reader.contains(p);
+            assert p.1 <= pre.total;
         }
     }
 
@@ -287,7 +300,15 @@ impl<T> FracPerm<T> {
     {
         use_type_invariant(self);
         use_type_invariant(other);
-        self.inst.is_same((self@, self.shares()), (other@, other.shares()), &self.reader,&other.reader);
+        self.inst.is_same((self@, self.shares()), (other@, other.shares()), &self.reader, &other.reader);
+    }
+
+    pub proof fn shares_agree_totals(tracked &self)
+    ensures
+        self.shares() <= self.total(),
+    {
+        use_type_invariant(self);
+        self.inst.shares_agree_totals((self@, self.shares()), &self.reader);
     }
 
     pub proof fn share(tracked &mut self, n: nat) -> (tracked ret: Self)

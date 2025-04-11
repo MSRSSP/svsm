@@ -18,24 +18,24 @@ spec fn spec_map_page_info_ptr(map: LinearMap, pfn: usize) -> *const PageStorage
 }
 
 pub trait MemPermWithVAddrOrder<VAddr: SpecVAddrImpl> {
-    spec fn wf_vaddr_order(&self, vaddr: VAddr, order: usize) -> bool;
+    spec fn wf_vaddr_order(&self, map: MemRegionMapping, vaddr: VAddr, order: usize) -> bool;
 }
 
 pub trait MemPermWithPfnOrder {
-    spec fn wf_pfn_order(&self, map: LinearMap, pfn: usize, order: usize) -> bool;
+    spec fn wf_pfn_order(&self, map: MemRegionMapping, pfn: usize, order: usize) -> bool;
 }
 
 impl<VAddr: SpecVAddrImpl> MemPermWithVAddrOrder<VAddr> for RawPerm {
-    open spec fn wf_vaddr_order(&self, vaddr: VAddr, order: usize) -> bool {
+    open spec fn wf_vaddr_order(&self, map: MemRegionMapping, vaddr: VAddr, order: usize) -> bool {
         let size = ((1usize << order) * PAGE_SIZE) as nat;
         &&& self.dom() =~= vaddr.region_to_dom(size)
-        &&& self.provenance() === allocator_provenance()
+        &&& self.provenance() === map@.provenance
     }
 }
 
 impl MemPermWithPfnOrder for RawPerm {
-    open spec fn wf_pfn_order(&self, map: LinearMap, pfn: usize, order: usize) -> bool {
-        let vaddr = map.try_get_virt(pfn);
+    open spec fn wf_pfn_order(&self, map: MemRegionMapping, pfn: usize, order: usize) -> bool {
+        let vaddr = map@.map.try_get_virt(pfn);
         &&& vaddr.is_some()
         &&& pfn < map.size / PAGE_SIZE as nat
         &&& self.wf_vaddr_order(vaddr.unwrap(), order)
@@ -51,7 +51,7 @@ tracked struct MemoryRegionTracked<const N: usize> {
     tracked avail: Map<(int, int), RawPerm>,  //(order, idx) -> perm
     tracked reserved: Map<int, FracTypedPerm<PageStorageType>>,  //pfn -> pginfo
     ghost next: Seq<Seq<usize>>,  // order -> next page list
-    ghost map: LinearMap,  // pfn -> virt address
+    ghost map: MemRegionMapping,  // pfn -> virt address
     tracked is_exposed: IsExposed,
 }
 
@@ -116,50 +116,6 @@ struct ReservedPerms<const N: usize> {
     reserved: Map<int, FracTypedPerm<PageStorageType>>,
     page_count: PageCountParam<N>,
 }
-
-#[allow(missing_debug_implementations)]
-pub struct PageCountParam<const N: usize> {
-    pub page_count: usize,
-}
-
-impl<const N: usize> PageCountParam<N> {
-    #[verifier(opaque)]
-    pub open spec fn reserved_pfn_count(&self) -> nat {
-        (spec_align_up(self.page_count * 8 as int, PAGE_SIZE as int) / PAGE_SIZE as int) as nat
-    }
-
-    pub open spec fn valid_pfn_order(&self, pfn: usize, order: usize) -> bool {
-        let n = 1usize << order;
-        &&& self.reserved_pfn_count() <= pfn < self.page_count
-        &&& pfn + n <= self.page_count
-        &&& n > 0
-        &&& pfn % n == 0
-        &&& order < N
-    }
-
-    proof fn lemma_reserved_pfn_count(&self)
-        ensures
-            self.reserved_pfn_count() == self.page_count / 512 || self.reserved_pfn_count() == 1 + (
-            self.page_count / 512),
-            self.page_count > 0 ==> self.reserved_pfn_count() > 0,
-    {
-        broadcast use lemma_page_size;
-
-        reveal(PageCountParam::reserved_pfn_count);
-
-        let x = self.page_count * 8 as int;
-        assert(PAGE_SIZE == 0x1000);
-        let count = spec_align_up(x, PAGE_SIZE as int);
-        verify_proof::nonlinear::lemma_align_up_properties(x, PAGE_SIZE as int, count);
-        assert(self.page_count * 8 / 0x1000 == self.page_count / 512);
-    }
-}
-
-pub spec const MAX_PGINFO_SHARES: nat = 2;
-
-pub spec const ALLOCATOR_PGINFO_SHARES: nat = 1;
-
-pub spec const DEALLOC_PGINFO_SHARES: nat = 1;
 
 impl<const N: usize> ReservedPerms<N> {
     #[verifier(inline)]

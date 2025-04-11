@@ -301,6 +301,22 @@ impl<T> FracTypedPerm<T> {
         self.unique.inst.check_ids(self.addr(), self.id(), other.id(), &self.unique.id, &other.unique.id);
     }
 
+    pub proof fn is_same(tracked &self, tracked other: &Self)
+    requires
+        self.valid(),
+        other.valid(),
+        self.ptr() == other.ptr(),
+    ensures
+        self@.points_to == other@.points_to,
+        self@.id == other@.id,
+    {
+        use_type_invariant(&*self);
+        use_type_invariant(&*other);
+        assert(self.ptr() == other.ptr());
+        self.has_same_id(&other);
+        self.p.is_same(&other.p);
+    }
+
     pub proof fn extract(tracked &mut self) -> (tracked ret: PointsTo<T>)
     requires
         old(self).valid(),
@@ -366,16 +382,19 @@ impl<T> FracTypedPerm<T> {
     requires
         other.valid(),
         old(self).valid(),
-        old(self).addr() == other.addr(),
+        old(self).ptr() == other.ptr(),
     ensures
         self@ === old(self)@.update_shares(old(self).shares() + other.shares()),
+        old(self).shares() + other.shares() <= old(self).total(),
     {
         use_type_invariant(&*self);
         use_type_invariant(&other);
         let tracked mut other = other;
-        self.has_same_id(&other);
+        self.is_same(&other);
         self.p.is_same(&other.p);
         self.p.merge(other.p);
+        use_type_invariant(&self.p);
+        self.p.shares_agree_totals();
     }
 }
 
@@ -433,6 +452,31 @@ decreases
     } else {
         assert(s =~= Set::empty());
         Map::tracked_empty()
+    }
+}
+
+pub proof fn tracked_map_merge_right_shares<Idx, T>(tracked m: &mut Map<Idx, FracTypedPerm<T>>, tracked right: Map<Idx, FracTypedPerm<T>>)
+requires
+    right.dom().subset_of(old(m).dom()),
+    right.dom().finite(),
+    forall |i| right.contains_key(i) ==> (#[trigger]old(m)[i]).valid() && old(m)[i].ptr() == right[i].ptr(),
+    forall |i| right.contains_key(i) ==> (#[trigger]right[i]).valid(),
+ensures
+    forall |i: Idx| #![trigger m[i]] #![trigger old(m)[i]] old(m).contains_key(i)  && right.contains_key(i) ==> m[i]@ == old(m)[i]@.update_shares((old(m)[i].shares() + right[i].shares()) as nat),
+    m.dom() =~= old(m).dom(),
+decreases
+    right.dom().len(),
+{
+    let s = right.dom();
+    if !s.is_empty() {
+        let idx = s.choose();
+        assert(right.contains_key(idx));
+        let tracked mut right = right;
+        let tracked mut right_tmp = right.tracked_remove(idx);
+        let tracked mut tmp = m.tracked_remove(idx);
+        tmp.merge(right_tmp);
+        tracked_map_merge_right_shares(m, right);
+        m.tracked_insert(idx, tmp);
     }
 }
 }

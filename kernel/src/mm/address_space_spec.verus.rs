@@ -74,6 +74,44 @@ impl LinearMap {
     {
         reveal(<LinearMap as SpecMemMapTr>::to_paddr);
     }
+
+    pub open spec fn get_pfn(&self, vaddr: VirtAddr) -> Option<usize> {
+        if let Some(paddr) = self.to_paddr(vaddr) {
+            Some(((paddr - self.start_phys) / crate::types::PAGE_SIZE as int) as usize)
+        } else {
+            None
+        }
+    }
+
+    pub broadcast proof fn lemma_get_pfn_get_virt(&self, vaddr: VirtAddr)
+        requires
+            self.wf(),
+            vaddr.is_canonical(),
+            self.start_virt.offset() <= vaddr.offset() < self.start_virt.offset() + self.size,
+        ensures
+            vaddr@ % 0x1000 == 0 ==> (#[trigger] self.get_pfn(vaddr)).is_some()
+                ==> self.try_get_virt(self.get_pfn(vaddr).unwrap()) == Some(vaddr),
+            (#[trigger] self.get_pfn(vaddr)).is_some() ==> self.try_get_virt(
+                self.get_pfn(vaddr).unwrap(),
+            ).is_some(),
+    {
+        broadcast use crate::types::lemma_page_size;
+
+        reveal(<LinearMap as SpecMemMapTr>::to_paddr);
+        reveal(<LinearMap as SpecMemMapTr>::to_vaddr);
+        assert(self.start_virt@ % 0x1000 == 0);
+        if vaddr@ % 0x1000 == 0 {
+            assert(vaddr.offset() - self.start_virt.offset() == (vaddr.offset()
+                - self.start_virt.offset()) / 0x1000 * 0x1000) by {
+                vaddr.property_canonical();
+                self.start_virt.property_canonical();
+                assert(self.start_virt.offset() % 0x1000 == 0);
+                broadcast use verify_proof::bits::lemma_bit_usize_not_is_sub;
+
+            }
+        }
+        self.proof_one_to_one_mapping_vaddr(vaddr);
+    }
 }
 
 impl SpecMemMapTr for LinearMap {
