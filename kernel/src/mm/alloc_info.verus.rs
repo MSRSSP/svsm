@@ -188,9 +188,20 @@ impl ValidPageInfo for FracTypedPerm<PageStorageType> {
 }
 
 impl PageInfoDb {
+    #[via_fn]
+    proof fn restrict_decreases(&self) {
+        reveal(PageInfoDb::restrict);
+        if !self.is_unit() {
+            assert forall|i| self.start_idx <= i < self.end() implies #[trigger] self.restrict(
+                i,
+            ).npages() <= self.npages() by {}
+        }
+    }
+
     #[verifier::type_invariant]
     pub closed spec fn wf(&self) -> bool
         decreases self.npages(),
+        via Self::restrict_decreases
     {
         &&& self.end() <= usize::MAX
         &&& self@.dom() =~= Set::new(|idx| self.start_idx <= idx < self.end())
@@ -273,7 +284,7 @@ impl PageInfoDb {
         }
     }
 
-    proof fn tracked_unit_nr_page(tracked &self)
+    proof fn tracked_unit_nr_page_all(tracked &self)
         requires
             self.is_unit(),
         ensures
@@ -300,6 +311,17 @@ impl PageInfoDb {
             }
             self.lemma_unit_nr_page(order);
         }
+    }
+
+    proof fn tracked_unit_nr_page(tracked &self, order: usize)
+        requires
+            self.is_unit(),
+        ensures
+            order == self@[self.start_idx()].order() ==> self.nr_page(order) == self.npages(),
+            order != self@[self.start_idx()].order() ==> self.nr_page(order) == 0,
+    {
+        use_type_invariant(self);
+        self.lemma_unit_nr_page(order);
     }
 
     proof fn lemma_unit_nr_page(&self, order: usize)
@@ -340,6 +362,7 @@ impl PageInfoDb {
         ensures
             self.ens_split_restrict(idx, left, right),
     {
+        reveal(PageInfoDb::restrict);
         assert(self.restrict_view().dom() =~= left.restrict_view().dom()
             + right.restrict_view().dom());
         assert forall|i|
@@ -379,6 +402,7 @@ impl PageInfoDb {
                 right.restrict(i)
             },
     {
+        reveal(PageInfoDb::restrict);
         if i < idx {
             self.lemma_head_no_overlap(i, idx);
             assert(self.restrict(i)@ =~= left.restrict(i)@);
@@ -425,6 +449,7 @@ impl PageInfoDb {
         Map::new(|k| self.start_idx() <= k < self.end(), |k| self.restrict(k))
     }
 
+    #[verifier(opaque)]
     pub closed spec fn restrict(&self, idx: usize) -> PageInfoDb {
         if self@[idx].is_head() && self.start_idx() <= idx < self.end() {
             let npages = 1usize << self@[idx].order();
@@ -502,6 +527,7 @@ impl PageInfoDb {
             #![trigger self@[i], self@[j]]
             i + self@[i].size() <= j,
     {
+        reveal(PageInfoDb::restrict);
         self.lemma_restrict(i);
         self.lemma_restrict(j);
     }
@@ -516,6 +542,7 @@ impl PageInfoDb {
                     idx,
                 ).wf(),
     {
+        reveal(PageInfoDb::restrict);
         assert forall|idx|
             #![trigger self@[idx]]
             self.start_idx() <= idx < self.start_idx() + self.npages() implies self.restrict(
@@ -541,6 +568,7 @@ impl PageInfoDb {
                 #![trigger self.restrict(idx)@[i]]
                 idx <= i < idx + self@[idx].size() ==> self.restrict(idx)@[i] == self@[i],
     {
+        reveal(PageInfoDb::restrict);
         if self.is_unit() {
             assert(idx == self.start_idx);
             assert(self.npages == self@[idx].size());
@@ -599,6 +627,7 @@ impl PageInfoDb {
             ret@ == reserved,
             forall|order| #[trigger] ret.nr_page(order) == Self::const_nr_page(ret.npages(), order),
     {
+        reveal(PageInfoDb::restrict);
         let tracked ret = PageInfoDb { npages: 1usize << order, start_idx, base_ptr, reserved };
         ret.proof_unit_nr_page();
         ret
@@ -650,7 +679,7 @@ impl PageInfoDb {
     }
 
     #[verifier(spinoff_prover)]
-    #[verifier(rlimit(4))]
+    #[verifier(rlimit(6))]
     proof fn _tracked_split(tracked self, idx: usize) -> (tracked ret: (PageInfoDb, PageInfoDb))
         requires
             self.is_head(idx),
@@ -658,6 +687,7 @@ impl PageInfoDb {
         ensures
             self.ens_split(idx, ret.0, ret.1),
     {
+        reveal(PageInfoDb::restrict);
         use_type_invariant(&self);
         self.lemma_restrict(idx);
         let tracked PageInfoDb { npages, start_idx, base_ptr, mut reserved } = self;
@@ -723,6 +753,7 @@ impl PageInfoDb {
                 self.nr_page(order) == (old(self).nr_page(order) + mid.nr_page(order)
                     + right.nr_page(order)),
     {
+        reveal(PageInfoDb::restrict);
         use_type_invariant(&*self);
         use_type_invariant(&mid);
         let left = *self;
@@ -786,6 +817,7 @@ impl PageInfoDb {
                     ret.2.restrict(i)
                 },
     {
+        reveal(PageInfoDb::restrict);
         use_type_invariant(&self);
         let start = self.start_idx();
         let end = self.end();
@@ -914,6 +946,7 @@ impl PageInfoDb {
         ensures
             self.ens_merge(*old(self), other),
     {
+        reveal(PageInfoDb::restrict);
         let old_self = *self;
         let tracked mut tmp = PageInfoDb::tracked_empty(self.base_ptr);
         tracked_swap(self, &mut tmp);
@@ -969,6 +1002,7 @@ impl PageInfoDb {
             ret@.is_readonly_dealloc_shares(),
             forall|order: usize| #[trigger] self.nr_page(order) == old(self).nr_page(order),
     {
+        reveal(PageInfoDb::restrict);
         reveal(PageInfoDb::is_readonly_allocator_shares);
         reveal(PageInfoDb::is_readonly_dealloc_shares);
         let old_self = *old(self);

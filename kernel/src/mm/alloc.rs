@@ -1059,7 +1059,7 @@ impl MemoryRegion {
         ensures
             old(self).ens_merge_pages(self, pfn1, pfn2, order, ret, *perm),
     )]
-    #[verus_verify(spinoff_prover, rlimit(16))]
+    #[verus_verify(spinoff_prover, rlimit(4))]
     fn merge_pages(&mut self, pfn1: usize, pfn2: usize, order: usize) -> Result<usize, AllocError> {
         if order >= MAX_ORDER - 1 {
             return Err(AllocError::InvalidPageOrder(order));
@@ -1070,19 +1070,32 @@ impl MemoryRegion {
 
         proof_decl! {
             use_type_invariant(&self.perms2.borrow());
+            let ghost old_perms = self.perms2@;
             self.perms2.borrow().free.tracked_merge(perm, p2, pfn1, pfn2, order);
             let tracked mut info = self.perms2.borrow_mut().info.tracked_take();
             info.tracked_nr_page_pair(order, new_order);
             let ghost old_info = info;
             let tracked (left, info_perms1, right) = info.tracked_extract(pfn);
-            info_perms1.tracked_unit_nr_page();
+            info_perms1.tracked_unit_nr_page(order);
             let tracked (_, info_perms2, right2) = right.tracked_extract((pfn + (1usize << order)) as usize);
-            info_perms2.tracked_unit_nr_page();
+            info_perms2.tracked_unit_nr_page(order);
             let tracked PageInfoInner {base_ptr, reserved: mut info_perms, ..} = info_perms1.tracked_get();
             let tracked PageInfoInner {reserved, ..} = info_perms2.tracked_get();
             let tracked mut info_perm = info_perms.tracked_remove(pfn);
             info_perms.tracked_union_prefer_right(reserved);
             assert(old_info.nr_page(order) >= (1usize << order) * 2);
+            assert forall|i: usize| #![trigger info@[i]]
+            0 <= i < old_perms.npages() && i < pfn
+            implies
+                true
+                /*perms.free.next_lists()[info@[pfn].order() as int].contains(pfn)
+                && #[trigger]info.restrict(pfn).writable()*/
+            by {
+                let r = right.restrict(i);
+                let r2 = right2.restrict(i);
+                assert(order_disjoint(pfn, order, i, 0));
+                assert(info.restrict(pfn) == old_info.restrict(pfn));
+            }
         }
         // Write new compound head
         let pg = PageInfo::Allocated(AllocatedInfo { order: new_order });
@@ -1102,7 +1115,12 @@ impl MemoryRegion {
             info_perms.tracked_insert(pfn, info_perm);
             let tracked new_unit = PageInfoDb::tracked_new_unit(new_order, pfn, base_ptr, info_perms);
             left.tracked_merge_extracted(new_unit, right2);
-            //self.perms2.borrow_mut().info = Some(left);
+            let tracked info = left;
+            let perms = self.perms2@;
+            self.perms2.borrow().free.tracked_disjoint_with_perm(pfn, new_order, perm);
+            assert(info@.dom() =~= Set::new(|idx| 0 <= idx < perms.npages()));
+            
+            //self.perms2.borrow_mut().tracked_update_info(left);
         }
         Ok(pfn)
     }

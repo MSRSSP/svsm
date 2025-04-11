@@ -120,7 +120,7 @@ impl MemoryRegion {
     ) -> bool {
         let size = (1usize << order);
         &&& self.writable_page_infos((pfn + 1) as usize, (size - 1) as usize, perms)
-        &&& self.valid_pfn_order(pfn, order)
+        &&& self.view2().valid_pfn_order(pfn, order)
     }
 
     spec fn ens_mark_compound_page(
@@ -203,7 +203,7 @@ impl MemoryRegion {
         &&& self.wf()
         &&& self.wf2()
         &&& self.view2().info.is_some()
-        &&& self.valid_pfn_order(pfn as usize, (order + 1) as usize)
+        &&& self.view2().valid_pfn_order(pfn as usize, (order + 1) as usize)
         &&& info.restrict(pfn1).writable()
         &&& info.restrict(pfn2).writable()
         &&& info.is_head(pfn1)
@@ -390,7 +390,7 @@ impl MemoryRegion {
 
     #[verifier(inline)]
     spec fn valid_pfn_order(&self, pfn: usize, order: usize) -> bool {
-        &&& self@.valid_pfn_order(pfn, order)
+        &&& self.view().valid_pfn_order(pfn, order)
         &&& pfn < MAX_PAGE_COUNT
     }
 
