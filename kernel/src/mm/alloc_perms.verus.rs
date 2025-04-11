@@ -22,6 +22,69 @@ pub closed spec fn spec_ptr_add<T>(base_ptr: *const T, idx: usize) -> *const T
     )
 }
 
+#[allow(missing_debug_implementations)]
+pub tracked struct PgUnitPerm {
+    mem: RawPerm,
+    info: PageInfoDb,
+}
+
+#[allow(missing_debug_implementations)]
+pub tracked struct UnitDeallocPerm(PgUnitPerm);
+
+impl UnitDeallocPerm {
+    #[verifier::type_invariant]
+    pub closed spec fn wf(&self) -> bool {
+        self@.info.is_readonly_dealloc_shares()
+    }
+
+    pub closed spec fn view(&self) -> PgUnitPerm {
+        self.0
+    }
+}
+
+impl PgUnitPerm {
+    pub closed spec fn wf_pfn_order(&self, map: LinearMap, pfn: usize, order: usize) -> bool {
+        &&& self.mem.wf_pfn_order(map, pfn, order)
+        &&& self.info.is_unit_for(pfn, order)
+    }
+
+    pub closed spec fn wf_writable_pfn_order(
+        &self,
+        map: LinearMap,
+        pfn: usize,
+        order: usize,
+    ) -> bool {
+        &&& self.wf_pfn_order(map, pfn, order)
+        &&& self.info.writable()
+    }
+
+    pub closed spec fn wf_dealloc_pfn_order(
+        &self,
+        map: LinearMap,
+        pfn: usize,
+        order: usize,
+    ) -> bool {
+        &&& self.wf_pfn_order(map, pfn, order)
+        &&& self.info.is_readonly_dealloc_shares()
+    }
+
+    pub proof fn empty(ptrdata: PtrData) -> (tracked ret: PgUnitPerm) {
+        PgUnitPerm {
+            mem: RawPerm::empty(ptrdata.provenance),
+            info: PageInfoDb::tracked_empty(ptrdata),
+        }
+    }
+
+    proof fn tracked_take(tracked &mut self) -> (tracked ret: (RawPerm, PageInfoDb))
+        ensures
+            ret == (old(self).mem, old(self).info),
+    {
+        let tracked mut tmp = PgUnitPerm::empty(self.info.base_ptr);
+        tracked_swap(self, &mut tmp);
+        (tmp.mem, tmp.info)
+    }
+}
+
 impl MemoryRegionPerms {
     /** Attributes from free && info_ptr_exposed **/
     spec fn npages(&self) -> usize {
@@ -133,6 +196,41 @@ impl MemoryRegionPerms {
             self.info == Some(info),
     {
         self.info = Some(info);
+    }
+
+    proof fn tracked_pop(tracked &mut self, order: usize) -> (tracked perm: PgUnitPerm)
+        requires
+            old(self).info.is_some(),
+            0 <= order < MAX_ORDER,
+            old(self).free.next_pages()[order as int] > 0,
+        ensures
+            perm.wf_pfn_order(self.map(), self.free.next_pages()[order as int], order),
+    {
+        assert(self.info.unwrap()@[self.free.next_pages()[order as int]].is_free());
+        let tracked mut info = self.info.tracked_take();
+        let pfn = self.free.next_pages()[order as int];
+        let tracked mem = self.free.tracked_pop(order);
+        let tracked RawDeallocPerm(dealloc) = info.tracked_alloc(pfn);
+        self.info = Some(info);
+        mem.0
+    }
+
+    proof fn tracked_remove(tracked &mut self, order: usize, i: int) -> (tracked perm: PgUnitPerm)
+        requires
+            old(self).info.is_some(),
+            0 <= order < MAX_ORDER,
+            old(self).free.next_pages()[order as int] > 0,
+            0 <= i < old(self).free.next_lists()[order as int].len() as int,
+        ensures
+            perm.wf_pfn_order(self.map(), self.free.next_lists()[order as int][i], order),
+    {
+        let pfn = self.free.next_pages()[order as int];
+        assert(self.info.unwrap()@[pfn].is_free());
+        let tracked mut info = self.info.tracked_take();
+        let tracked mem = self.free.tracked_pop(order);
+        let tracked RawDeallocPerm(dealloc) = info.tracked_alloc(pfn);
+        self.info = Some(info);
+        mem.0
     }
 }
 

@@ -12,6 +12,8 @@ struct PageInfoInner {
 
 type PInfoPerm = FracTypedPerm<PageStorageType>;
 
+uninterp spec fn dummy_ptr() -> PtrData;
+
 trait ValidRange {
     spec fn contains_range(
         &self,
@@ -1023,6 +1025,25 @@ impl PageInfoDb {
 
     #[verifier(spinoff_prover)]
     #[verifier(rlimit(4))]
+    proof fn tracked_dealloc(tracked &mut self, perm: Self)
+        requires
+            old(self).is_unit(),
+            perm.is_unit(),
+            old(self).base_ptr() == perm.base_ptr(),
+            old(self).start_idx() == perm.start_idx(),
+            old(self).npages() == perm.npages(),
+        ensures
+            self.writable(),
+            self.is_unit(),
+            self.base_ptr() == old(self).base_ptr(),
+            self.start_idx() == old(self).start_idx(),
+            self.npages() == old(self).npages(),
+            forall|order: usize| self.nr_page(order) == old(self).nr_page(order),
+    {
+    }
+
+    #[verifier(spinoff_prover)]
+    #[verifier(rlimit(4))]
     proof fn tracked_alloc(tracked &mut self, idx: usize) -> (tracked ret: RawDeallocPerm)
         requires
             old(self)@[idx].is_head(),
@@ -1077,6 +1098,12 @@ impl PageInfoDb {
         &&& self.npages > 0
         &&& self.npages == 1usize << order
         &&& !matches!(info, PageInfo::Compound(_))
+    }
+
+    pub closed spec fn is_unit_for(&self, start_idx: usize, order: usize) -> bool {
+        &&& self.is_unit()
+        &&& self.start_idx() == start_idx
+        &&& self@[start_idx].order() == order
     }
 
     pub closed spec fn page_type(&self) -> PageType {

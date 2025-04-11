@@ -2,8 +2,25 @@ verus! {
 
 use vstd::arithmetic::mul::lemma_mul_is_distributive_add_other_way;
 
+struct FreeUnitPerm(PgUnitPerm);
+
+impl FreeUnitPerm {
+    #[verifier::type_invariant]
+    spec fn wf(&self) -> bool {
+        &&& self@.info.is_readonly_allocator_shares()
+    }
+
+    spec fn view(&self) -> PgUnitPerm {
+        self.0
+    }
+
+    spec fn dom(&self) -> Set<int> {
+        self@.mem.dom()
+    }
+}
+
 tracked struct MRFreePerms {
-    tracked avail: Map<(usize, int), RawPerm>,  //(order, idx) -> perm
+    tracked avail: Map<(usize, int), FreeUnitPerm>,  //(order, idx) -> perm
     ghost next: Seq<Seq<usize>>,  // order -> next page list
     ghost map: LinearMap,  // pfn -> virt address
     ghost page_count: PageCountParam<MAX_ORDER>,
@@ -197,7 +214,7 @@ impl MRFreePerms {
         let pfn = self.next[order as int][i];
         let perm = self.avail[(order, i)];
         &&& self.page_count.valid_pfn_order(pfn, order as usize)
-        &&& perm.wf_pfn_order(self.map, pfn, order as usize)
+        &&& perm@.wf_pfn_order(self.map, pfn, order as usize)
         &&& pfn > 0
     }
 
@@ -242,7 +259,7 @@ impl MRFreePerms {
             use_type_invariant(&*self);
             let pfn2 = self.next[o as int][len - 1];
             let tracked perm2 = self.avail.tracked_borrow((o, len - 1));
-            raw_perm_order_disjoint(self.map, pfn, order, pfn2, o, perm, perm2);
+            raw_perm_order_disjoint(self.map, pfn, order, pfn2, o, perm, &perm2.0.mem);
         }
     }
 
@@ -322,7 +339,7 @@ impl MRFreePerms {
         let pfn2 = next[o2 as int][j];
         let tracked mut p1 = avail.tracked_remove((o1, i));
         let tracked p2 = avail.tracked_remove((o2, j));
-        raw_perm_order_disjoint(self.map, pfn1, o1, pfn2, o2, &mut p1, &p2);
+        raw_perm_order_disjoint(self.map, pfn1, o1, pfn2, o2, &mut p1.0.mem, &p2.0.mem);
         avail.tracked_insert((o1, i), p1);
         avail.tracked_insert((o2, j), p2);
         assert(avail =~= old(self).avail);
@@ -377,11 +394,11 @@ impl MRFreePerms {
     }
 
     #[verifier::spinoff_prover]
-    proof fn tracked_push(tracked &mut self, order: usize, pfn: usize, tracked perm: RawPerm)
+    proof fn tracked_push(tracked &mut self, order: usize, pfn: usize, tracked perm: FreeUnitPerm)
         requires
             0 <= order < MAX_ORDER,
             old(self).valid_pfn_order(pfn, order),
-            perm.wf_pfn_order(old(self).map, pfn, order),
+            perm@.wf_pfn_order(old(self).map, pfn, order),
         ensures
             self.next_pages() == old(self).next_pages().update(order as int, pfn),
             self.next_lists() == old(self).next_lists().update(
@@ -436,7 +453,34 @@ impl MRFreePerms {
     }
 
     #[verifier::spinoff_prover]
-    proof fn tracked_remove(tracked &mut self, order: usize, i: int) -> (tracked perm: RawPerm)
+    proof fn tracked_pop(tracked &mut self, order: usize) -> (tracked perm: FreeUnitPerm)
+        requires
+            0 <= order < MAX_ORDER,
+            old(self).next_pages()[order as int] > 0,
+        ensures
+            self.next_pages() == old(self).next_pages().update(
+                order as int,
+                self.next_pages()[order as int],
+            ),
+            self.next_pages()[order as int] == self.next[order as int].last(),
+            self.next_lists() == old(self).next_lists().update(
+                order as int,
+                old(self).next_lists()[order as int].take(old(self).next[order as int].len() - 1),
+            ),
+            perm@.wf_pfn_order(self.map, old(self).next_pages()[order as int], order),
+            self.map() == old(self).map(),
+            self.pg_params() == old(self).pg_params(),
+            self.nr_free() == old(self).nr_free().update(
+                order as int,
+                (old(self).nr_free()[order as int] - 1) as usize,
+            ),
+            old(self).nr_free()[order as int] > 0,
+    {
+        self.tracked_remove(order, self.next[order as int].len() - 1)
+    }
+
+    #[verifier::spinoff_prover]
+    proof fn tracked_remove(tracked &mut self, order: usize, i: int) -> (tracked perm: FreeUnitPerm)
         requires
             0 <= order < MAX_ORDER,
             0 <= i < old(self).next_lists()[order as int].len(),
@@ -449,7 +493,7 @@ impl MRFreePerms {
                 order as int,
                 old(self).next_lists()[order as int].remove(i),
             ),
-            perm.wf_pfn_order(self.map, old(self).next_lists()[order as int][i], order),
+            perm@.wf_pfn_order(self.map, old(self).next_lists()[order as int][i], order),
             self.map() == old(self).map(),
             self.pg_params() == old(self).pg_params(),
             self.nr_free() == old(self).nr_free().update(
