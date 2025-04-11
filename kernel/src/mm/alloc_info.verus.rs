@@ -742,7 +742,7 @@ impl PageInfoDb {
             self.ens_merge3(*old(self), mid, right),
             forall|i|
                 #![trigger self.restrict(i)]
-                self.start_idx() < i < self.end() ==> self.restrict(i) == if i < mid.start_idx() {
+                self.start_idx() <= i < self.end() ==> self.restrict(i) == if i < mid.start_idx() {
                     old(self).restrict(i)
                 } else if mid.start_idx() <= i < mid.start_idx() + mid.npages() {
                     mid.restrict(i)
@@ -795,6 +795,9 @@ impl PageInfoDb {
         ensures
             ret.1 == self.restrict(idx),
             ret.1.is_unit(),
+            ret.1.base_ptr() == self.base_ptr(),
+            ret.1.npages() == self@[idx].size(),
+            ret.1.start_idx() == idx,
             ret.0@ =~= self@.restrict(Set::new(|k: usize| k < idx)),
             ret.0.base_ptr() == self.base_ptr(),
             ret.0.start_idx() == self.start_idx(),
@@ -809,7 +812,7 @@ impl PageInfoDb {
                 ),
             forall|i|
                 #![trigger self.restrict(i)]
-                self.start_idx() < i < self.end() ==> self.restrict(i) == if i < idx {
+                self.start_idx() <= i < self.end() ==> self.restrict(i) == if i < idx {
                     ret.0.restrict(i)
                 } else if ret.1.start_idx() <= i < ret.1.start_idx() + ret.1.npages() {
                     ret.1.restrict(i)

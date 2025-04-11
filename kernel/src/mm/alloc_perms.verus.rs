@@ -82,17 +82,16 @@ impl MemoryRegionPerms {
             #![trigger info@[pfn]]
             0 <= pfn < self.npages() && info@[pfn].is_free()
                 ==> self.free.next_lists()[info@[pfn].order() as int].contains(pfn)
-                && info.restrict(
-                pfn,
-            ).writable()/*&&& forall|pfn: usize| #![trigger info@[pfn]]
-            self.reserved_count() <= pfn < info.npages() && info@[pfn].page_info()
-                == Some(PageInfo::Reserved(ReservedInfo)) && info.restrict(
-                pfn,
-            ).writable()*/
+                && info.restrict(pfn).writable()
         &&& forall|order: usize, i: int|
             #![trigger self.free.next_lists()[order as int][i]]
             0 <= order < MAX_ORDER && 0 <= i < self.free.next_lists()[order as int].len() as int
                 ==> self.wf_next(order, i)
+        &&& forall|pfn: usize|
+            #![trigger info@[pfn]]
+            self.reserved_count() <= pfn < info.npages() && info@[pfn].page_info() == Some(
+                PageInfo::Reserved(ReservedInfo),
+            ) && info.restrict(pfn).writable()
     }
 
     /** Invariants for page info **/

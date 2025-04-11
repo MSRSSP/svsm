@@ -1073,6 +1073,8 @@ impl MemoryRegion {
             let ghost old_perms = self.perms2@;
             self.perms2.borrow().free.tracked_merge(perm, p2, pfn1, pfn2, order);
             let tracked mut info = self.perms2.borrow_mut().info.tracked_take();
+            assert(old_perms.npages() == info.end());
+            assert(info.start_idx() == 0);
             info.tracked_nr_page_pair(order, new_order);
             let ghost old_info = info;
             let tracked (left, info_perms1, right) = info.tracked_extract(pfn);
@@ -1084,18 +1086,6 @@ impl MemoryRegion {
             let tracked mut info_perm = info_perms.tracked_remove(pfn);
             info_perms.tracked_union_prefer_right(reserved);
             assert(old_info.nr_page(order) >= (1usize << order) * 2);
-            assert forall|i: usize| #![trigger info@[i]]
-            0 <= i < old_perms.npages() && i < pfn
-            implies
-                true
-                /*perms.free.next_lists()[info@[pfn].order() as int].contains(pfn)
-                && #[trigger]info.restrict(pfn).writable()*/
-            by {
-                let r = right.restrict(i);
-                let r2 = right2.restrict(i);
-                assert(order_disjoint(pfn, order, i, 0));
-                assert(info.restrict(pfn) == old_info.restrict(pfn));
-            }
         }
         // Write new compound head
         let pg = PageInfo::Allocated(AllocatedInfo { order: new_order });
@@ -1114,13 +1104,37 @@ impl MemoryRegion {
         proof!{
             info_perms.tracked_insert(pfn, info_perm);
             let tracked new_unit = PageInfoDb::tracked_new_unit(new_order, pfn, base_ptr, info_perms);
-            left.tracked_merge_extracted(new_unit, right2);
-            let tracked info = left;
+            let tracked mut info = left;
+            info.tracked_merge_extracted(new_unit, right2);
             let perms = self.perms2@;
             self.perms2.borrow().free.tracked_disjoint_with_perm(pfn, new_order, perm);
             assert(info@.dom() =~= Set::new(|idx| 0 <= idx < perms.npages()));
-            
-            //self.perms2.borrow_mut().tracked_update_info(left);
+            assert(old_perms.npages() == perms.npages());
+            assert forall|i: usize| #![trigger info@[i]]
+                0 <= i < old_perms.npages() && info@[i].is_free()
+            implies
+                perms.free.next_lists()[info@[i].order() as int].contains(i)
+                && #[trigger]info.restrict(i).writable()
+            by {
+                assert(info@[i] == old_info@[i]);
+                assert(info.restrict(i) == old_info.restrict(i));
+                assert(old_info.restrict(i).writable());
+            }
+            assert forall|o: usize, i: int|
+            #![trigger perms.free.next_lists()[o as int][i]]
+            0 <= o < MAX_ORDER && 0 <= i < perms.free.next_lists()[o as int].len() as int
+             implies
+                true
+                //perms.wf_next(o, i)
+            by {
+                let target_pfn = perms.free.next_lists()[o as int][i];
+                assert(order_disjoint(target_pfn, o, pfn, new_order));
+                assert(old_perms.wf_next(o, i));
+                let r = right2@[target_pfn];
+                let l = left@[target_pfn];
+                //assert(info@[target_pfn] == old_info@[target_pfn]);
+            }
+            //self.perms2.borrow_mut().tracked_update_info(info);
         }
         Ok(pfn)
     }
