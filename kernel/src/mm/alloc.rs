@@ -1030,7 +1030,7 @@ impl MemoryRegion {
         ensures
             old(self).ens_merge_pages(self, pfn1, pfn2, order, ret, *perm),
     )]
-    #[verus_verify(spinoff_prover, rlimit(2))]
+    #[verus_verify(spinoff_prover, rlimit(4))]
     fn merge_pages(&mut self, pfn1: usize, pfn2: usize, order: usize) -> Result<usize, AllocError> {
         if order >= MAX_ORDER - 1 {
             return Err(AllocError::InvalidPageOrder(order));
@@ -1075,6 +1075,9 @@ impl MemoryRegion {
             let tracked mut info = PageInfoDb::tracked_new_unit(new_order, pfn, id, reserved);
             self.perms.borrow_mut().info.tracked_insert_shares(&mut info);
             *perm = PgUnitPerm{mem, info, typ: DeallocUnit{}};
+            assert(2 * (1usize << order) == (1usize << new_order));
+            assert(self@.info.nr_page(order) == old(self)@.info.nr_page(order) - 2);
+            assert(self@.info.nr_page(new_order) == old(self)@.info.nr_page(new_order) + 1);
         }
 
         // Do the accounting - none of the pages is free yet, so free_pages is

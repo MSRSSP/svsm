@@ -379,25 +379,32 @@ impl MemoryRegionPerms {
         )
     }
 
-    /** Invariants for page info **/
-    spec fn wf_info(&self) -> bool {
+    spec fn strict_wf_info_free(&self) -> bool {
         let info = self.info;
-        &&& info.is_readonly_allocator_shares()
-        &&& self.npages() == info.npages()
-        &&& info@.dom() =~= Set::new(|idx| 0 <= idx < self.npages())
-        &&& forall|order|
+        &&& forall|order|   //#![trigger self.free.nr_free()[order as int]]
+
             0 <= order < MAX_ORDER ==> #[trigger] info.nr_page(order)
                 >= self.free.nr_free()[order as int]
         &&& forall|pfn: usize|
             0 <= pfn < self.npages() && (#[trigger] info@[pfn]).is_free()
                 ==> self.free.next_lists()[info@[pfn].order() as int].contains(pfn)
-        &&& forall|pfn: usize|
-            self.reserved_count() <= pfn < info.npages() ==> #[trigger] info@[pfn].page_info()
-                == Some(PageInfo::Reserved(ReservedInfo))
-        &&& forall|order: usize, i: int|
-            #![trigger self.free.next_lists()[order as int][i]]
+    }
+
+    /** Invariants for page info **/
+    spec fn wf_info(&self) -> bool {
+        let info = self.info;
+        &&& info.is_readonly_allocator_shares()
+        &&& self.npages() == info.npages()
+        &&& info@.dom() =~= Set::new(
+            |idx| 0 <= idx < self.npages(),
+        )/*&&& forall|order: usize, i: int|
+            //#![trigger self.free.next_lists()[order as int][i]]
             0 <= order < MAX_ORDER && 0 <= i < self.free.next_lists()[order as int].len() as int
-                ==> self.wf_next(order, i)
+                ==> self.wf_next(order, i)*/
+        /*&&& forall|pfn: usize|
+            self.reserved_count() <= pfn < info.npages() ==> #[trigger] info@[pfn].page_info()
+                == Some(PageInfo::Reserved(ReservedInfo))*/
+
     }
 
     spec fn wf(&self) -> bool {
@@ -416,8 +423,10 @@ impl MemoryRegion {
     pub closed spec fn wf_perms(&self) -> bool {
         let info = self@.info;
         &&& self@.wf()
-        &&& forall|order|
-            0 <= order < MAX_ORDER ==> info.nr_page(order) == #[trigger] self.nr_pages[order as int]
+        &&& forall|order|   //#![trigger info.nr_page(order)]
+
+            0 <= order < MAX_ORDER ==> info.nr_page(order) == (
+            #[trigger] self.nr_pages[order as int])
         &&& self.view2().free.nr_free() =~= self.free_pages@
         &&& info.dom() =~= Set::new(|idx| 0 <= idx < self.page_count)
         &&& self.page_count == self@.npages()

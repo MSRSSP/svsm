@@ -1,7 +1,5 @@
 verus! {
 
-use vstd::arithmetic::mul::lemma_mul_is_distributive_add_other_way;
-
 tracked struct MRFreePerms {
     tracked avail: Map<(usize, int), PgUnitPerm<DeallocUnit>>,  //(order, idx) -> perm
     ghost next: Seq<Seq<usize>>,  // order -> next page list

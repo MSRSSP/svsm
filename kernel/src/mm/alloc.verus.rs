@@ -30,6 +30,9 @@ use verify_proof::set::{lemma_int_range_disjoint, spec_int_range_disjoint};
 use vstd::arithmetic::div_mod::{lemma_add_mod_noop, lemma_mod_self_0, lemma_small_mod};
 use vstd::arithmetic::mul::group_mul_properties;
 use vstd::arithmetic::mul::{lemma_mul_inequality, lemma_mul_ordering};
+use vstd::arithmetic::mul::{
+    lemma_mul_is_distributive_add_other_way, lemma_mul_is_distributive_sub_other_way,
+};
 use vstd::modes::tracked_swap;
 use vstd::raw_ptr::PointsToRaw;
 use vstd::raw_ptr::{IsExposed, Provenance};
@@ -297,18 +300,9 @@ impl MemoryRegion {
         let n1 = (self.nr_pages[order as int] - 2) as usize;
         let n2 = (self.nr_pages[new_order as int] + 1) as usize;
         let new_nr_pages = self.nr_pages@.update(order as int, n1).update(order + 1, n2);
-        //&&& new.wf()
+        &&& new.wf()
         &&& ret == pfn
-        &&& perm.wf_pfn_order(
-            self@.mr_map,
-            pfn,
-            new_order,
-        )/*&&& self.only_update_reserved_and_tmp_nr(new)
-        &&& new.nr_pages@ === new_nr_pages
-        &&& new@.marked_allocated(pfn, new_order)
-        &&& new@.pfn_range_is_allocated(pfn, new_order)
-        &&& new@.pfn_order_is_writable(pfn, new_order)*/
-
+        &&& perm.wf_pfn_order(self@.mr_map, pfn, new_order)
     }
 
     spec fn ens_merge_pages(
@@ -322,6 +316,39 @@ impl MemoryRegion {
     ) -> bool {
         &&& ret.is_ok()
         &&& self.ens_merge_pages_ok(new, pfn1, pfn2, order, ret.unwrap(), perm)
+    }
+
+    spec fn req_split_page(&self, pfn: usize, order: usize, perm: PgUnitPerm<DeallocUnit>) -> bool {
+        let new_size = (1usize << (order - 1) as usize);
+        &&& perm.wf_pfn_order(self@.mr_map, pfn, order)
+        &&& self.valid_pfn_order(pfn, order)
+        &&& order >= 1
+        &&& self.wf()
+        &&& self.free_pages[order - 1] + 2
+            <= usize::MAX
+        //&&& self@.pfn_range_is_allocated(pfn, order)
+        //&&& self@.marked_order(pfn, order)
+        //&&& self@.pfn_order_is_writable(pfn, order)
+
+    }
+
+    spec fn ens_split_page_ok(&self, new: &Self, pfn: usize, order: usize) -> bool {
+        let rhs_pfn = (pfn + (1usize << order) / 2) as usize;
+        let new_order = order - 1;
+        let order = order as int;
+        //let newp = self@.next[new_order].push(rhs_pfn).push(pfn);
+        //&&& new@.next =~= self@.next.update(new_order, newp)
+        &&& self.with_same_mapping(new)
+        &&& new.wf()/*&&& new.nr_pages@[new_order] == self.nr_pages[new_order] + 2
+        &&& new.nr_pages@[order] == self.nr_pages[order] - 1
+        &&& new.free_pages[new_order] == self.free_pages[new_order] + 2
+        &&& new.nr_pages@ =~= self.nr_pages@.update(new_order, new.nr_pages[new_order]).update(
+            order,
+            new.nr_pages[order],
+        )
+        &&& new.free_pages@ =~= self.free_pages@.update(new_order, new.free_pages[new_order])
+        &&& new.next_page@ =~= self.next_page@.update(order - 1, pfn)*/
+
     }
 }
 
@@ -444,68 +471,6 @@ impl MemoryRegion {
             &&& new.free_pages[order as int] > 0
             &&& self.only_update_order_higher(new, order)
         }
-    }
-
-    spec fn req_split_page(&self, pfn: usize, order: usize, perm: PgUnitPerm<DeallocUnit>) -> bool {
-        let new_size = (1usize << (order - 1) as usize);
-        &&& perm.wf_pfn_order(self@.mr_map, pfn, order)
-        &&& self.valid_pfn_order(pfn, order)
-        &&& order >= 1
-        &&& self.wf()
-        &&& self.free_pages[order - 1] + 2
-            <= usize::MAX
-        //&&& self@.pfn_range_is_allocated(pfn, order)
-        //&&& self@.marked_order(pfn, order)
-        //&&& self@.pfn_order_is_writable(pfn, order)
-
-    }
-
-    spec fn ens_split_page_ok(&self, new: &Self, pfn: usize, order: usize) -> bool {
-        let rhs_pfn = (pfn + (1usize << order) / 2) as usize;
-        let new_order = order - 1;
-        let order = order as int;
-        //let newp = self@.next[new_order].push(rhs_pfn).push(pfn);
-        //&&& new@.next =~= self@.next.update(new_order, newp)
-        &&& self.with_same_mapping(new)
-        &&& new.wf()/*&&& new.nr_pages@[new_order] == self.nr_pages[new_order] + 2
-        &&& new.nr_pages@[order] == self.nr_pages[order] - 1
-        &&& new.free_pages[new_order] == self.free_pages[new_order] + 2
-        &&& new.nr_pages@ =~= self.nr_pages@.update(new_order, new.nr_pages[new_order]).update(
-            order,
-            new.nr_pages[order],
-        )
-        &&& new.free_pages@ =~= self.free_pages@.update(new_order, new.free_pages[new_order])
-        &&& new.next_page@ =~= self.next_page@.update(order - 1, pfn)*/
-
-    }
-
-    /*spec fn ens_write_page_info(&self, new: Self, pfn: usize, pi: PageInfo, perm: FracTypedPerm<PageStorageType>) -> bool {
-        let new_order = pi.spec_order();
-        let old_order = self@.spec_page_info(pfn as int).unwrap().spec_order();
-        &&& self.only_update_reserved(new)
-        &&& new@.reserved =~~= self@.reserved.insert(pfn as int, new@.reserved[pfn as int])
-        &&& new@.reserved[pfn as int]@ === self@.reserved[pfn as int]@.update_value(
-            new@.reserved[pfn as int].opt_value(),
-        )
-        &&& new@.spec_page_info(pfn as int) === Some(pi)
-        &&& (new_order == old_order) ==> (forall|order|
-            0 <= order < MAX_ORDER ==> #[trigger] self@.reserved().pfn_dom(order)
-                =~= new@.reserved().pfn_dom(order))
-        &&& old_order != new_order ==> forall|order|
-            0 <= order < MAX_ORDER && order != old_order && order != new_order
-                ==> #[trigger] self@.reserved().pfn_dom(order) =~= new@.reserved().pfn_dom(order)
-        &&& old_order != new_order ==> {
-            &&& new@.reserved().pfn_dom(old_order) =~= self@.reserved().pfn_dom(old_order).remove(
-                pfn as int,
-            )
-            &&& new@.reserved().pfn_dom(new_order) =~= self@.reserved().pfn_dom(new_order).insert(
-                pfn as int,
-            )
-        }
-        &&& new@.wf_reserved()
-    }*/
-    spec fn only_update_reserved(&self, new: Self) -> bool {
-        true
     }
 
     spec fn only_update_reserved_and_tmp_nr(&self, new: &Self) -> bool {

@@ -339,12 +339,16 @@ impl PageInfoDb {
     }
 
     pub closed spec fn _info_dom(&self, order: usize) -> Set<usize> {
-        self@.dom().filter(|i| self@[i].order() == order)
+        self@.dom().filter(|i| self@[i].order() == order && self@[i].is_head())
     }
 
     #[verifier(opaque)]
     pub closed spec fn nr_page(&self, order: usize) -> nat {
         self._info_dom(order).len()
+    }
+
+    pub closed spec fn _info_head_dom(&self, order: usize) -> Set<usize> {
+        self@.dom().filter(|i| self@[i].order() == order && self@[i].is_head())
     }
 
     proof fn tracked_nr_page_pair(tracked &self, order: usize, order2: usize)
@@ -385,7 +389,7 @@ impl PageInfoDb {
 
     spec fn const_nr_page(npages: nat, order: usize) -> nat {
         if order < MAX_ORDER && (1usize << order) == npages {
-            npages
+            1
         } else {
             0
         }
@@ -450,7 +454,8 @@ impl PageInfoDb {
     {
         reveal(PageInfoDb::nr_page);
         if order == self@[self.unit_start()].order() {
-            assert(self._info_dom(order) =~= self@.dom());
+            assert(self._info_dom(order) =~= set![self.unit_start]);
+            //assert(self._info_dom(order) =~= self@.dom());
         } else {
             assert(self._info_dom(order).is_empty());
         }
@@ -508,6 +513,18 @@ impl PageInfoDb {
         &&& right.id() == self.id()
     }
 
+    pub open spec fn ens_add_nr_pages(&self, left: Self, right: Self) -> bool {
+        &&& self.npages() == left.npages() + right.npages()
+        &&& forall|o: usize| #[trigger] self.nr_page(o) == left.nr_page(o) + right.nr_page(o)
+    }
+
+    pub open spec fn ens_add_unit_nr_pages(&self, left: Self, unit: Self) -> bool {
+        let order = unit.order();
+        &&& self.npages() == left.npages() + (1usize << order)
+        &&& forall|o: usize| order != o ==> #[trigger] self.nr_page(o) == left.nr_page(o)
+        &&& self.nr_page(order) == left.nr_page(order) + 1
+    }
+
     /** Constructors **/
     proof fn tracked_empty(id: PageInfoUnique) -> (tracked ret: PageInfoDb)
         ensures
@@ -522,9 +539,9 @@ impl PageInfoDb {
             self.wf(),
             self.ens_split_inner(left, right),
         ensures
-            forall|order: usize| #[trigger]
-                self.nr_page(order) == left.nr_page(order) + right.nr_page(order),
+            self.ens_add_nr_pages(left, right),
     {
+        self.lemma_split_nr_page(left, right, 0);
         assert forall|order: usize| #[trigger]
             self.nr_page(order) == left.nr_page(order) + right.nr_page(order) by {
             self.lemma_split_nr_page(left, right, order);
@@ -537,11 +554,13 @@ impl PageInfoDb {
             self.ens_split_inner(left, right),
         ensures
             self.nr_page(order) == left.nr_page(order) + right.nr_page(order),
+            self.npages() == left.npages() + right.npages(),
     {
         reveal(PageInfoDb::nr_page);
         let s1 = left._info_dom(order);
         let s2 = right._info_dom(order);
         let s = self._info_dom(order);
+        vstd::set_lib::lemma_set_disjoint_lens(left.dom(), right.dom());
         vstd::set_lib::lemma_set_disjoint_lens(s1, s2);
         assert(s1 + s2 =~= s);
     }
@@ -744,8 +763,7 @@ impl PageInfoDb {
             self.npages() == old(self).npages() - old(self)@[idx].size(),
             unit.is_unit(),
             unit.unit_start() == idx,
-            forall|order: usize| #[trigger]
-                old(self).nr_page(order) == self.nr_page(order) + unit.nr_page(order),
+            old(self).ens_add_nr_pages(*self, unit),
     {
         use_type_invariant(&*self);
         reveal(PageInfoDb::restrict);
@@ -779,8 +797,7 @@ impl PageInfoDb {
             self@ == old(self)@.remove_keys(unit@.dom()),
             self.id() == old(self).id(),
             forall|order: usize| #[trigger] old(unit).nr_page(order) == unit.nr_page(order),
-            forall|order: usize| #[trigger]
-                old(self).nr_page(order) == self.nr_page(order) + unit.nr_page(order),
+            old(self).ens_add_unit_nr_pages(*self, *unit),
     {
         let idx = unit.unit_start();
         use_type_invariant(&*self);
@@ -821,12 +838,7 @@ impl PageInfoDb {
             self@.dom() == old(self)@.dom() + old(unit)@.dom(),
             self@ =~= old(self)@.union_prefer_right(self@.restrict(unit@.dom())),
             forall|order: usize| #[trigger] old(unit).nr_page(order) == unit.nr_page(order),
-            forall|order: usize| #[trigger]
-                self.nr_page(order) == old(self).nr_page(order) + unit.nr_page(
-                    order,
-                ),
-    //self.restrict(unit.unit_start()).unit_head()@ == old(unit).unit_head()@.update_shares(self.id().shares),
-
+            self.ens_add_unit_nr_pages(*old(self), *unit),
     {
         use_type_invariant(&*unit);
         unit.tracked_unit_nr_pages();
@@ -856,6 +868,7 @@ impl PageInfoDb {
             unit.id() == old(self).id().update_shares(shares),
             forall|order: usize| #[trigger]
                 old(self).nr_page(order) == self.nr_page(order) == unit.nr_page(order),
+            old(self).npages() == self.npages() == unit.npages(),
     {
         use_type_invariant(&*self);
         self.proof_unit_nr_page();
