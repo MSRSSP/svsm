@@ -427,13 +427,19 @@ impl MemoryRegion {
 
             0 <= order < MAX_ORDER ==> info.nr_page(order) == (
             #[trigger] self.nr_pages[order as int])
-        &&& self.view2().free.nr_free() =~= self.free_pages@
+        &&& self@.free.nr_free() =~= self.free_pages@
         &&& info.dom() =~= Set::new(|idx| 0 <= idx < self.page_count)
         &&& self.page_count == self@.npages()
     }
 
     pub closed spec fn wf_basic2(&self) -> bool {
         &&& self.page_count <= MAX_PAGE_COUNT
+    }
+
+    pub closed spec fn req_read_any_info(&self) -> bool {
+        &&& self.wf_basic2()
+        &&& self.page_count == self@.npages()
+        &&& self@.wf()
     }
 }
 

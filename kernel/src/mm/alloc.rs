@@ -529,7 +529,7 @@ impl MemoryRegion {
         requires
             pfn < self.page_count,
         ensures
-            ret == self.view2().page_info_ptr(pfn)
+            ret == self@.page_info_ptr(pfn)
     )]
     fn page_info_mut_ptr(&self, pfn: usize) -> *mut PageStorageType {
         let offset = pfn * size_of::<PageStorageType>();
@@ -542,7 +542,6 @@ impl MemoryRegion {
     #[verus_spec(ret =>
         requires
             pfn < self.page_count,
-            self.wf_params(),
         ensures
             ret == self@.page_info_ptr(pfn),
     )]
@@ -614,20 +613,26 @@ impl MemoryRegion {
     /// Reads page information for a given page frame number.
     #[verus_spec(ret =>
         requires
-            self.wf_reserved(),
-            pfn < self.page_count, // self.check_pfn(pfn) is not necessary.
+            self.req_read_any_info(),
+            pfn < self.page_count,
         ensures
             self.ens_read_page_info(pfn, ret),
     )]
     #[verus_verify(spinoff_prover)]
     fn read_page_info(&self, pfn: usize) -> PageInfo {
-        proof! {reveal(spec_page_info);}
         self.check_pfn(pfn);
-
+        proof_decl!{
+            reveal(spec_page_info);
+            use_type_invariant(&self.perms.borrow().info);
+            let tracked perm = self.perms.borrow().info.reserved.tracked_borrow(pfn);
+        }
         // SAFETY: we have checked that the pfn is valid via check_pfn() above.
-        // let info = unsafe { self.page_info_ptr(pfn).read() };
-        let info = *self.get_page_storage_type(pfn);
-        PageInfo::from_mem(info)
+        // Verification makes it safe enough. We can drop unsafe.
+        let info = unsafe {
+            verus_with!(Tracked(perm));
+            self.page_info_pptr(pfn).v_borrow()
+        };
+        PageInfo::from_mem(*info)
     }
 
     /// Gets the virtual offset of a virtual address within the memory region.
