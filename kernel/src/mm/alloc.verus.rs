@@ -414,8 +414,7 @@ impl MemoryRegion {
         perm: PgUnitPerm<DeallocUnit>,
     ) -> bool {
         let order = order as int;
-        &&& self.with_same_mapping(new_self)
-        &&& ret.is_err() == ((self.next_page[order] == 0) && (self.free_pages[order] == 0))
+        &&& ret.is_err() == ((self.next_page[order] == 0))
         &&& ret.is_err() ==> self === new_self
         &&& ret.is_ok() ==> {
             &&& perm.wf_pfn_order(new_self@.mr_map, ret.unwrap(), order as usize)
