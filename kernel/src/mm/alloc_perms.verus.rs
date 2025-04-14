@@ -61,6 +61,7 @@ impl MemRegionMapping {
     }
 
     #[verifier::spinoff_prover]
+    #[verifier::rlimit(2)]
     pub proof fn tracked_merge_pages(
         tracked &self,
         tracked p1: &mut RawPerm,
