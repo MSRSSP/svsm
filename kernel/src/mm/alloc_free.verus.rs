@@ -194,24 +194,22 @@ impl MRFreePerms {
     spec fn wf_next(&self, order: usize, i: int) -> bool {
         let list = self.next[order as int];
         let perm = self.avail[(order, i)];
-        let next_page =  if i > 0 {
+        let next_page = if i > 0 {
             list[i - 1]
         } else {
             0
         };
-        &&& perm.info.unit_head().page_info() == Some(
-            PageInfo::Free(
-                FreeInfo {
-                    order,
-                    next_page
-                },
-            ),
-        )
+        &&& perm.info.unit_head().page_info() == Some(PageInfo::Free(FreeInfo { order, next_page }))
     }
 
     spec fn wf_strict(&self) -> bool {
-        forall|order: usize, i: int|#![trigger self.next[order as int][i]] #![trigger self.next_lists()[order as int][i]]
-            0 <= order < MAX_ORDER && 0 <= i < self.next[order as int].len() ==> self.wf_next(order, i)
+        forall|order: usize, i: int|
+            #![trigger self.next[order as int][i]]
+            #![trigger self.next_lists()[order as int][i]]
+            0 <= order < MAX_ORDER && 0 <= i < self.next[order as int].len() ==> self.wf_next(
+                order,
+                i,
+            )
     }
 
     spec fn wf_at(&self, order: usize, i: int) -> bool {
@@ -405,11 +403,14 @@ impl MRFreePerms {
             0 <= idx <= old(self).next[order as int].len() as int,
             old(self).valid_pfn_order(pfn, order),
             perm.wf_pfn_order(old(self).mr_map, pfn, order),
+            perm.page_type() == PageType::Free,
         ensures
-            idx == old(self).next[order as int].len() as int ==> 
-                self.next_pages() == old(self).next_pages().update(order as int, pfn),
-            idx < old(self).next[order as int].len() as int ==>
-                self.next_pages() == old(self).next_pages(),
+            idx == old(self).next[order as int].len() as int ==> self.next_pages() == old(
+                self,
+            ).next_pages().update(order as int, pfn),
+            idx < old(self).next[order as int].len() as int ==> self.next_pages() == old(
+                self,
+            ).next_pages(),
             self.next_lists() == old(self).next_lists().update(
                 order as int,
                 old(self).next_lists()[order as int].insert(idx, pfn),
@@ -435,7 +436,16 @@ impl MRFreePerms {
             |k: (usize, int)| avail.dom().contains(k),
             |k: (usize, int)|
                 if k.0 == order {
-                    (k.0, if k.1 > idx {k.1 - 1} else if k.1 == idx {last} else {k.1})
+                    (
+                        k.0,
+                        if k.1 > idx {
+                            k.1 - 1
+                        } else if k.1 == idx {
+                            last
+                        } else {
+                            k.1
+                        },
+                    )
                 } else {
                     k
                 },
@@ -460,6 +470,8 @@ impl MRFreePerms {
             + 1) as usize);
         if idx == old(self).next[order as int].len() {
             assert(self.next_pages() =~= old(self).next_pages().update(order as int, pfn));
+        } else {
+            assert(self.next_pages() =~= old(self).next_pages());
         }
         assert forall|o: usize| 0 <= o < MAX_ORDER implies #[trigger] self.nr_free()[o as int]
             == if o != order {
@@ -485,6 +497,10 @@ impl MRFreePerms {
             old(self).valid_pfn_order(pfn, order),
             perm.wf_pfn_order(old(self).mr_map, pfn, order),
             perm.page_type() == PageType::Free,
+            old(self).wf_strict(),
+            perm.info.unit_head().page_info() == Some(
+                PageInfo::Free(FreeInfo { order, next_page: old(self).next_pages()[order as int] }),
+            ),
         ensures
             self.next_pages() == old(self).next_pages().update(order as int, pfn),
             self.next_lists() =~= old(self).next_lists().update(
@@ -501,12 +517,7 @@ impl MRFreePerms {
             old(self).nr_free()[order as int] * (1usize << order) <= old(
                 self,
             ).pg_params().page_count - 1,
-            (old(self).wf_strict() && perm.info.unit_head().page_info() == Some(PageInfo::Free(
-                FreeInfo {
-                    order,
-                    next_page: old(self).next_pages()[order as int],
-                },
-            )))  ==> self.wf_strict(),
+            self.wf_strict(),
     {
         use_type_invariant(&*self);
         let tracked mut tmp = MRFreePerms::tracked_empty(old(self).mr_map());
@@ -657,9 +668,9 @@ impl MRFreePerms {
     }
 
     proof fn tracked_valid_next_at(tracked &self, order: usize, i: int)
-    requires
-        order < MAX_ORDER,
-        0 <= i < self.next_lists()[order as int].len(),
+        requires
+            order < MAX_ORDER,
+            0 <= i < self.next_lists()[order as int].len(),
         ensures
             self.pg_params().valid_pfn_order(self.next_lists()[order as int][i], order as usize),
     {
@@ -667,10 +678,13 @@ impl MRFreePerms {
     }
 
     proof fn tracked_valid_next_page(tracked &self, order: usize)
-    requires
-        order < MAX_ORDER,
-    ensures
-        self.next_pages()[order as int] != 0 ==> self.pg_params().valid_pfn_order(self.next_pages()[order as int], order as usize),
+        requires
+            order < MAX_ORDER,
+        ensures
+            self.next_pages()[order as int] != 0 ==> self.pg_params().valid_pfn_order(
+                self.next_pages()[order as int],
+                order as usize,
+            ),
     {
         use_type_invariant(self);
         if self.next_pages()[order as int] != 0 {

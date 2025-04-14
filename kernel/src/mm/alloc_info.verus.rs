@@ -135,7 +135,7 @@ impl PageInfoDb {
 
     #[verifier(inline)]
     spec fn order(&self) -> usize {
-        self.unit_head().order()
+        self@[self.unit_start].order()
     }
 
     pub closed spec fn npages(&self) -> nat {

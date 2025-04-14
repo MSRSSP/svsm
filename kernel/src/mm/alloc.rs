@@ -551,28 +551,6 @@ impl MemoryRegion {
         self.start_virt.const_add(offset).as_ptr_with_provenance()
     }
 
-    /// Gets the page information for a given page frame number.
-    /// The permission-protected access replaces the unsafe page_info_ptr()
-    #[verus_spec(ret =>
-        requires
-            self.wf_reserved(),
-            self.wf_params(),
-            pfn < self.page_count,
-        ensures
-            Some(*ret) == self@.get_page_storage_type(pfn),
-    )]
-    #[verus_verify(spinoff_prover)]
-    fn get_page_storage_type(&self, pfn: usize) -> &PageStorageType {
-        proof_decl! {
-            reveal(spec_page_info);
-            let tracked perm = self.perms.borrow().info.reserved.tracked_borrow(pfn);
-        }
-        unsafe {
-            verus_with!(Tracked(perm));
-            self.page_info_pptr(pfn).v_borrow()
-        }
-    }
-
     /// Checks if a page frame number is valid.
     ///
     /// # Panics
@@ -814,14 +792,6 @@ impl MemoryRegion {
         self.init_compound_page(pfn1, new_order, pfn2);
         proof_decl!{
             let tracked mut info1 = PageInfoDb::tracked_new_unit(new_order, pfn1, id, reserved1);
-            assert(info1.unit_head().page_info() == Some(
-                PageInfo::Free(
-                    FreeInfo {
-                        order: new_order,
-                        next_page: pfn2,
-                    },
-                ),
-            ));
             self.perms.borrow_mut().info.tracked_insert_shares(&mut info1);
             let tracked p1 = PgUnitPerm {mem: mem1, info: info1, typ: arbitrary()};
         }
@@ -832,30 +802,9 @@ impl MemoryRegion {
             self.perms.borrow_mut().info.tracked_insert_shares(&mut info2);
             let tracked p2 = PgUnitPerm {mem: mem2, info: info2, typ: arbitrary()};
             use_type_invariant(&p2.info);
-            use_type_invariant(&p1.info);
-            use_type_invariant(&p2);
-            use_type_invariant(&p1);
-            assert(p1.info.unit_head().page_info() == Some(
-                PageInfo::Free(
-                    FreeInfo {
-                        order: new_order,
-                        next_page: pfn2,
-                    },
-                ),
-            ));
-            assert(p2.info.unit_head().page_info() == Some(
-                PageInfo::Free(
-                    FreeInfo {
-                        order: new_order,
-                        next_page: old(self)@.free.next_pages()[new_order as int],
-                    },
-                ),
-            ));
-            assert(self@.free.wf_strict());
             self.perms.borrow_mut().free.tracked_push(new_order, pfn2, p2);
-            assert(self@.free.wf_strict());
+            use_type_invariant(&p1.info);
             self.perms.borrow_mut().free.tracked_push(new_order, pfn1, p1);
-            assert(self@.free.wf_strict());
         }
 
         self.next_page[new_order] = pfn1;
