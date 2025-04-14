@@ -621,7 +621,7 @@ impl MemoryRegion {
     #[verus_verify(spinoff_prover)]
     fn read_page_info(&self, pfn: usize) -> PageInfo {
         self.check_pfn(pfn);
-        proof_decl!{
+        proof_decl! {
             reveal(spec_page_info);
             use_type_invariant(&self.perms.borrow().info);
             let tracked perm = self.perms.borrow().info.reserved.tracked_borrow(pfn);
@@ -688,6 +688,7 @@ impl MemoryRegion {
         requires
             order < MAX_ORDER,
             old(self).wf(),
+            old(self).wf_next_pages(),
         ensures
             self.wf(),
             old(self).ens_get_next_page(&*self, order, ret, *perm),
@@ -703,6 +704,11 @@ impl MemoryRegion {
             return Err(AllocError::OutOfMemory);
         }
 
+        proof! {
+            *perm = self.perms.borrow_mut().free.tracked_pop(order);
+            self.perms.borrow_mut().info.tracked_is_same_info(&*perm, pfn);
+        }
+
         let pg = self.read_page_info(pfn);
         let PageInfo::Free(fi) = pg else {
             proof! {assert(false); } // prove it is unreachable
@@ -714,10 +720,6 @@ impl MemoryRegion {
 
         self.next_page[order] = fi.next_page;
         self.free_pages[order] -= 1;
-
-        proof! {
-            *perm = self.perms.borrow_mut().free.tracked_pop(order);
-        }
 
         Ok(pfn)
     }
@@ -1271,12 +1273,9 @@ impl MemoryRegion {
         }
         verus_with!(Tracked(&mut p2));
         let _ = self.allocate_pfn(neighbor_pfn, order)?;
-
-        proof_decl! {
-            //self.perms.borrow().tracked_perm_disjoint(&mut p2, neighbor_pfn, order);
-            //let ghost i = old(self)@.next_lists()[order as int].index_of(neighbor_pfn);
-            //assert(old(self)@.wf_at(order as int, i));
-            assert(old(self).free_pages[order as int] > 0);
+        proof! {
+            assert(p2.wf_pfn_order(self@.mr_map, neighbor_pfn, order));
+            assert(perm.wf_pfn_order(self@.mr_map, pfn, order));
         }
 
         verus_with!(Tracked(perm), Tracked(p2));

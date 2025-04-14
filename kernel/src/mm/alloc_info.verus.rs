@@ -886,6 +886,24 @@ impl PageInfoDb {
         self.proof_unit_nr_page();
         PageInfoDb::tracked_new_unit(order, unit_start, ret_id, new_reserved)
     }
+
+    proof fn tracked_is_same_info<T: UnitType>(
+        tracked &self,
+        tracked other: &PgUnitPerm<T>,
+        pfn: usize,
+    )
+        requires
+            self.dom().contains(pfn),
+            other.info.unit_start() <= pfn < other.info.unit_start() + other.info.npages(),
+            self.base_ptr() == other.info.base_ptr(),
+        ensures
+            self@[pfn].points_to() == other.info@[pfn].points_to(),
+    {
+        use_type_invariant(self);
+        use_type_invariant(other);
+        use_type_invariant(&other.info);
+        self.reserved.tracked_borrow(pfn).is_same(other.info.reserved.tracked_borrow(pfn));
+    }
 }
 
 } // verus!

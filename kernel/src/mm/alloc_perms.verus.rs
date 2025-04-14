@@ -420,6 +420,10 @@ impl MemoryRegion {
         &&& self.wf_basic2()
     }
 
+    pub closed spec fn wf_next_pages(&self) -> bool {
+        self.next_page@ =~= self@.free.next_pages()
+    }
+
     pub closed spec fn wf_perms(&self) -> bool {
         let info = self@.info;
         &&& self@.wf()

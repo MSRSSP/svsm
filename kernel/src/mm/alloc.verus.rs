@@ -85,7 +85,7 @@ impl<const N: usize> PageCountParam<N> {
 
     pub open spec fn valid_pfn_order(&self, pfn: usize, order: usize) -> bool {
         let n = 1usize << order;
-        &&& self.reserved_pfn_count() <= pfn < self.page_count
+        &&& 0 <= pfn < self.page_count
         &&& pfn + n <= self.page_count
         &&& n > 0
         &&& pfn % n == 0
@@ -420,23 +420,10 @@ impl MemoryRegion {
         &&& ret.is_ok() ==> {
             &&& perm.wf_pfn_order(new_self@.mr_map, ret.unwrap(), order as usize)
             &&& ret.unwrap() == self.next_page[order]
-            &&& new_self.valid_pfn_order(
-                ret.unwrap(),
-                order as usize,
-            )/*&&& new_self.free_pages@ === self.free_pages@.update(
-                order,
-                (self.free_pages[order] - 1) as usize,
-            )
-            &&& new_self.next_page@ === self.next_page@.update(order, new_self.next_page[order])
-            &&& new_self@.next[order] === self@.next[order].remove(self@.next[order].len() - 1)
-            &&& new_self@.next === self@.next.update(order, new_self@.next[order])
-            &&& self@.inv_remove_pfn(new_self@)
-            &&& new_self.nr_pages === self.nr_pages
-            //&&& new_self@.pfn_range_is_allocated(ret.unwrap(), order as usize)
-            &&& new_self@.marked_order(ret.unwrap(), order as usize)
-            &&& new_self@.reserved === self@.reserved*/
-            //&&& new_self@.pfn_order_is_writable(ret.unwrap(), order as usize)
-
+            &&& new_self.valid_pfn_order(ret.unwrap(), order as usize)
+            &&& new_self.next_page@ =~= self.next_page@.update(order, new_self.next_page[order])
+            &&& new_self.free_pages@ =~= self.free_pages@.update(order, new_self.free_pages@[order])
+            &&& new_self.free_pages@[order] == self.free_pages[order] - 1
         }
     }
 
@@ -503,11 +490,8 @@ impl MemoryRegion {
     }
 
     spec fn req_allocate_pfn(&self, pfn: usize, order: usize) -> bool {
-        //let n = 1usize << order;
-        //&&& self@.reserved_pfn_count() <= pfn
-        //&&& pfn % n == 0
-        &&& self.valid_pfn_order(pfn, order)
-        //&&& order < MAX_ORDER
+        &&& order < MAX_ORDER
+        &&& pfn < self.page_count
         &&& self.wf()
     }
 
@@ -540,7 +524,6 @@ impl MemoryRegion {
         order: usize,
         perm: PgUnitPerm<DeallocUnit>,
     ) -> bool {
-        &&& self.wf_reserved()
         &&& self.wf()
         &&& perm.wf_pfn_order(self@.mr_map, pfn, order)
         &&& self.valid_pfn_order(
