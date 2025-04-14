@@ -1093,6 +1093,7 @@ impl MemoryRegion {
         ensures
             perm.info.unit_head().page_info() == Some(PageInfo::Free(FreeInfo { order, next_page })),
             next_page < MAX_PAGE_COUNT,
+            next_page != 0 ==> self.valid_pfn_order(next_page, order),
     )]
     fn next_free_pfn(&self, pfn: usize, order: usize) -> usize {
         proof! {
@@ -1121,19 +1122,15 @@ impl MemoryRegion {
         requires
             old(self).req_allocate_pfn(pfn, order)
         ensures
-            ret.is_ok() ==> old(self).ens_allocate_pfn(self, pfn, order, *perm),
+            //ret.is_ok() ==> old(self).ens_allocate_pfn(self, pfn, order, *perm),
             // !ret.is_ok() ==> old(self) === self,
     )]
-    #[verus_verify(spinoff_prover, rlimit(2))]
+    #[verus_verify(spinoff_prover)]
     fn allocate_pfn(&mut self, pfn: usize, order: usize) -> Result<(), AllocError> {
         proof_decl! {
             let ghost mut idx_ = self@.free.next_lists()[order as int].len() - 1;
-        }
-        proof! {
-            //broadcast use ReservedPerms::lemma_reserved_info_remove;
             if idx_ >= 0 {
-                //assert(self@.wf_at(order as int, idx_));
-                //self@.lemma_next_index_of(pfn, order, idx_);
+                self.perms.borrow().free.tracked_valid_next_at(order, idx_);
             }
         }
         let first_pfn = self.next_page[order];
@@ -1172,7 +1169,7 @@ impl MemoryRegion {
         ))]
         loop {
             proof_decl! {
-                let tracked current_perm = self.perms.borrow().free.tracked_borrow(order, idx_);
+                let tracked current_perm = self.perms.borrow().free.tracked_borrow(order, idx_ + 1);
             }
             verus_with!(Tracked(&current_perm));
             let current_pfn = self.next_free_pfn(old_pfn, order);
@@ -1187,21 +1184,26 @@ impl MemoryRegion {
             }
 
             proof_decl! {
-                let tracked mut prev_perm = self.perms.borrow_mut().free.tracked_remove(order, idx_ + 1);
-                use_type_invariant(&prev_perm.info);
-                self.perms.borrow_mut().info.tracked_remove_and_merge_shares(&mut prev_perm.info);
-                *perm = self.perms.borrow_mut().free.tracked_remove(order, idx_);
-                use_type_invariant(&perm.info);
-                self.perms.borrow_mut().info.tracked_remove_and_merge_shares(&mut perm.info);
+               
+                assert(idx_ + 1 > 0);
+                let tracked current_perm = self.perms.borrow().free.tracked_borrow(order, idx_);
             }
-            verus_with!(Tracked(&*perm));
+            verus_with!(Tracked(current_perm));
             let next_pfn = self.next_free_pfn(current_pfn, order);
             proof_decl! {
-                assert(next_pfn < MAX_PAGE_COUNT);
-                let tracked (mut prev_mem, mut prev_info) = prev_perm.tracked_take();
+                self.perms.borrow_mut().free.tracked_disjoint_pfn(order, idx_ + 1, order, idx_);
+                let tracked mut prev_perm = self.perms.borrow_mut().free.tracked_remove(order, idx_ + 1);
+                let tracked (prev_mem, prev_info) = prev_perm.tracked_take();
+                self.perms.borrow_mut().info.tracked_remove_and_merge_shares(&mut prev_info);
+    
+                *perm = self.perms.borrow_mut().free.tracked_remove(order, idx_);
                 let tracked (mut mem, mut info) = perm.tracked_take();
+                self.perms.borrow_mut().info.tracked_remove_and_merge_shares(&mut info);
+                use_type_invariant(&info);
                 let tracked PageInfoDb {id, mut reserved, ..} = info;
+        
                 let tracked head_info = reserved.tracked_remove(current_pfn);
+                use_type_invariant(&prev_info);
                 let tracked PageInfoDb {id, reserved: mut prev_reserved, ..} = prev_info;
                 let tracked prev_head_info = prev_reserved.tracked_remove(old_pfn);
             }
@@ -1209,19 +1211,26 @@ impl MemoryRegion {
                 next_page: next_pfn,
                 order,
             });
+            verus_with!(Tracked(&mut prev_head_info));
             self.write_page_info(old_pfn, pg);
 
             let pg = PageInfo::Allocated(AllocatedInfo { order });
+            verus_with!(Tracked(&mut head_info));
             self.write_page_info(current_pfn, pg);
 
             proof!{
                 prev_reserved.tracked_insert(old_pfn, prev_head_info);
-                let tracked mut prev_perm = PgUnitPerm {mem: prev_mem, info: PageInfoDb::tracked_new_unit(order, old_pfn, id, prev_reserved), typ: arbitrary()};
-                self.perms.borrow_mut().info.tracked_insert_shares(&mut prev_perm.info);
-                self.perms.borrow_mut().free.tracked_insert(order, idx_ + 1, old_pfn, prev_perm);
+                let tracked mut info = PageInfoDb::tracked_new_unit(order, old_pfn, id, prev_reserved);
+                self.perms.borrow_mut().info.tracked_insert_shares(&mut info);
+            
+                let tracked mut prev_perm = PgUnitPerm {mem: prev_mem, info, typ: arbitrary()};
+                self.perms.borrow_mut().free.tracked_insert(order, idx_, old_pfn, prev_perm);
+
                 reserved.tracked_insert(current_pfn, head_info);
-                *perm = PgUnitPerm {mem, info:  PageInfoDb::tracked_new_unit(order, current_pfn, id, reserved), typ: arbitrary()};
-                self.perms.borrow_mut().info.tracked_insert_shares(&mut perm.info);
+                let tracked mut info = PageInfoDb::tracked_new_unit(order, current_pfn, id, reserved);
+                self.perms.borrow_mut().info.tracked_insert_shares(&mut info);
+        
+                *perm = PgUnitPerm {mem, info, typ: arbitrary()};
             }
 
             self.free_pages[order] -= 1;

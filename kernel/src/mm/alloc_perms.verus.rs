@@ -254,8 +254,7 @@ impl AllocatedPagesPerm {
         let pfn = self.pfn();
         &&& self.map.shares() == self.size()
         &&& self.map.base_ptr() == self.perm.info.base_ptr()
-        &&& self.map.valid_perm_by_pfn(self.perm.mem, pfn, order)
-        &&& self.map.valid_perm_by_pfn(self.perm.mem, pfn, order)
+        &&& self.perm.mem.wf_pfn_order(self.map, pfn, order)
         &&& self.perm.page_type().spec_is_deallocatable()
     }
 }
