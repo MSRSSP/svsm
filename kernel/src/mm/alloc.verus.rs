@@ -183,7 +183,7 @@ impl MemoryRegion {
     ) -> bool {
         let size = (1usize << order);
         &&& self.writable_page_infos((pfn + 1) as usize, (size - 1) as usize, perms)
-        &&& self.valid_pfn_order(pfn, order)
+        &&& self.inbound_pfn_order(pfn, order)
         &&& self.wf_basic2()
     }
 
@@ -226,32 +226,10 @@ impl MemoryRegion {
         next_pfn: usize,
         perms: Map<usize, PInfoPerm>,
     ) -> bool {
-        &&& self.valid_pfn_order(pfn, order)
-        &&& (self.valid_pfn_order(next_pfn, order) || next_pfn == 0)
+        &&& next_pfn < MAX_PAGE_COUNT
+        &&& self.inbound_pfn_order(pfn, order)
         &&& self.writable_page_infos(pfn, 1usize << order, perms)
-    }
-
-    spec fn update_page_info_group(
-        pfn: usize,
-        order: usize,
-        pi: PageInfo,
-        perms: Map<usize, PInfoPerm>,
-        new_perms: Map<usize, PInfoPerm>,
-    ) -> bool {
-        let size = 1usize << order;
-        let cpi = PageInfo::Compound(CompoundInfo { order });
-        &&& new_perms.dom() =~= perms.dom()
-        &&& forall|i: usize|
-            #![trigger new_perms[i]]
-            pfn <= i < pfn + size ==> perms[i].ens_write_page_info(
-                &new_perms[i],
-                i,
-                if i == pfn {
-                    pi
-                } else {
-                    cpi
-                },
-            )
+        &&& self.wf_basic2()
     }
 
     spec fn ens_init_compound_page(
@@ -265,8 +243,19 @@ impl MemoryRegion {
     ) -> bool {
         let size = 1usize << order;
         let pi = PageInfo::Free(FreeInfo { next_page: next_pfn, order });
-        &&& Self::update_page_info_group(order, next_pfn, pi, perms, new_perms)
         &&& *self == new
+        &&& new_perms.dom() =~= perms.dom()
+        &&& forall|i: usize|
+            #![trigger new_perms[i]]
+            pfn <= i < pfn + size ==> perms[i].ens_write_page_info(
+                &new_perms[i],
+                i,
+                if i == pfn {
+                    pi
+                } else {
+                    PageInfo::Compound(CompoundInfo { order })
+                },
+            )
     }
 
     spec fn req_merge_pages(
@@ -321,6 +310,7 @@ impl MemoryRegion {
     spec fn req_split_page(&self, pfn: usize, order: usize, perm: PgUnitPerm<DeallocUnit>) -> bool {
         let new_size = (1usize << (order - 1) as usize);
         &&& perm.wf_pfn_order(self@.mr_map, pfn, order)
+        &&& perm.page_type() == PageType::Free
         &&& self.valid_pfn_order(pfn, order)
         &&& order >= 1
         &&& self.wf()
@@ -438,6 +428,12 @@ impl MemoryRegion {
 
     spec fn pg_params(&self) -> PageCountParam<MAX_ORDER> {
         PageCountParam { page_count: self.page_count }
+    }
+
+    spec fn inbound_pfn_order(&self, pfn: usize, order: usize) -> bool {
+        &&& pfn + (1usize << order) < self.pg_params().page_count
+        &&& order < MAX_ORDER
+        &&& pfn < MAX_PAGE_COUNT
     }
 
     spec fn valid_pfn_order(&self, pfn: usize, order: usize) -> bool {

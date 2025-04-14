@@ -816,12 +816,32 @@ impl MemoryRegion {
             // extract info perm from allocator
             // merge with shared info perm to be writable
             */
-
+            let tracked mut perm = perm;
+            let tracked (mut mem, mut info) = perm.tracked_take();
+            use_type_invariant(&info);
+            let tracked PageInfoDb {id, mut reserved, ..} = info;
+            let tracked mut reserved1 = reserved.tracked_remove_keys(Set::new(|i: usize| pfn1 <= i < pfn2));
         }
+        verus_with!(Tracked(&mut reserved1));
         self.init_compound_page(pfn1, new_order, pfn2);
+        verus_with!(Tracked(&mut reserved));
         self.init_compound_page(pfn2, new_order, next_pfn);
 
         self.next_page[new_order] = pfn1;
+
+        proof!{
+            let tracked info1 = PageInfoDb::tracked_new_unit(new_order, pfn1, id, reserved1);
+            let tracked info2 = PageInfoDb::tracked_new_unit(new_order, pfn2, id, reserved);
+            let vaddr1 = self.map().lemma_get_virt(pfn1);
+            let vaddr2 = self.map().lemma_get_virt(pfn2);
+            let new_size = (1usize << new_order) * PAGE_SIZE;
+            vaddr1.lemma_region_to_dom2(vaddr2, new_size as nat, new_size as nat);
+            let tracked (mem1, mem2) = mem.split(vaddr1.region_to_dom(new_order as nat));
+            let tracked p1 = PgUnitPerm {mem: mem1, info: info1, typ: arbitrary()};
+            let tracked p2 = PgUnitPerm {mem: mem2, info: info2, typ: arbitrary()};
+            self.perms.borrow_mut().free.tracked_push(new_order, pfn1, p1);
+            self.perms.borrow_mut().free.tracked_push(new_order, pfn2, p2);
+        }
 
         // Do the accounting
         self.nr_pages[order] -= 1;
