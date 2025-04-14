@@ -105,6 +105,39 @@ impl MemRegionMapping {
         };
         *p1 = p;
     }
+
+    #[verifier::spinoff_prover]
+    #[verifier::rlimit(2)]
+    pub proof fn tracked_split_pages(
+        tracked &self,
+        tracked p: RawPerm,
+        pfn: usize,
+        order: usize,
+    ) -> (tracked perms: (RawPerm, RawPerm))
+        requires
+            1 <= order < 64,
+            p.wf_pfn_order(*self, pfn, order),
+        ensures
+            perms.0.wf_pfn_order(*self, pfn, (order - 1) as usize),
+            perms.1.wf_pfn_order(
+                *self,
+                (pfn + (1usize << (order - 1))) as usize,
+                (order - 1) as usize,
+            ),
+    {
+        use_type_invariant(self);
+        broadcast use lemma_bit_usize_shl_values;
+
+        let map = self@.map;
+        reveal(<VirtAddr as SpecVAddrImpl>::region_to_dom);
+        let pfn1 = pfn;
+        let pfn2 = (pfn + (1usize << (order - 1))) as usize;
+        let vaddr1 = map.lemma_get_virt(pfn1);
+        assert(pfn2 + (1usize << (order - 1)) == pfn + (1usize << order));
+        let vaddr2 = map.lemma_get_virt(pfn2);
+        let size = (1usize << (order - 1)) * PAGE_SIZE;
+        p.split(vaddr1.region_to_dom(size as nat))
+    }
 }
 
 impl MemRegionMapping {
@@ -158,7 +191,7 @@ impl MemPermWithPfnOrder for RawPerm {
     open spec fn wf_pfn_order(&self, map: MemRegionMapping, pfn: usize, order: usize) -> bool {
         let vaddr = map@.map.try_get_virt(pfn);
         &&& vaddr.is_some()
-        &&& pfn < map@.map.size / PAGE_SIZE as nat
+        &&& pfn + (1usize << order) <= map@.map.size / PAGE_SIZE as nat
         &&& self.wf_vaddr_order(map, vaddr.unwrap(), order)
     }
 }

@@ -819,6 +819,8 @@ impl MemoryRegion {
             let tracked mut perm = perm;
             let tracked (mut mem, mut info) = perm.tracked_take();
             use_type_invariant(&info);
+            self.perms.borrow_mut().info.tracked_remove_and_merge_shares(&mut info);
+            use_type_invariant(&info);
             let tracked PageInfoDb {id, mut reserved, ..} = info;
             let tracked mut reserved1 = reserved.tracked_remove_keys(Set::new(|i: usize| pfn1 <= i < pfn2));
         }
@@ -830,13 +832,11 @@ impl MemoryRegion {
         self.next_page[new_order] = pfn1;
 
         proof!{
-            let tracked info1 = PageInfoDb::tracked_new_unit(new_order, pfn1, id, reserved1);
-            let tracked info2 = PageInfoDb::tracked_new_unit(new_order, pfn2, id, reserved);
-            let vaddr1 = self.map().lemma_get_virt(pfn1);
-            let vaddr2 = self.map().lemma_get_virt(pfn2);
-            let new_size = (1usize << new_order) * PAGE_SIZE;
-            vaddr1.lemma_region_to_dom2(vaddr2, new_size as nat, new_size as nat);
-            let tracked (mem1, mem2) = mem.split(vaddr1.region_to_dom(new_order as nat));
+            let tracked mut info1 = PageInfoDb::tracked_new_unit(new_order, pfn1, id, reserved1);
+            self.perms.borrow_mut().info.tracked_insert_shares(&mut info1);
+            let tracked mut info2 = PageInfoDb::tracked_new_unit(new_order, pfn2, id, reserved);
+            self.perms.borrow_mut().info.tracked_insert_shares(&mut info2);
+            let tracked (mem1, mem2) = self.perms.borrow().mr_map.tracked_split_pages(mem, pfn, order);
             let tracked p1 = PgUnitPerm {mem: mem1, info: info1, typ: arbitrary()};
             let tracked p2 = PgUnitPerm {mem: mem2, info: info2, typ: arbitrary()};
             self.perms.borrow_mut().free.tracked_push(new_order, pfn1, p1);
