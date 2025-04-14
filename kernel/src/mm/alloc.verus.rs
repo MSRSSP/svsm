@@ -85,7 +85,7 @@ impl<const N: usize> PageCountParam<N> {
 
     pub open spec fn valid_pfn_order(&self, pfn: usize, order: usize) -> bool {
         let n = 1usize << order;
-        &&& 0 <= pfn < self.page_count
+        &&& self.reserved_pfn_count() <= pfn < self.page_count
         &&& pfn + n <= self.page_count
         &&& n > 0
         &&& pfn % n == 0
@@ -107,6 +107,39 @@ impl<const N: usize> PageCountParam<N> {
         let count = spec_align_up(x, PAGE_SIZE as int);
         verify_proof::nonlinear::lemma_align_up_properties(x, PAGE_SIZE as int, count);
         assert(self.page_count * 8 / 0x1000 == self.page_count / 512);
+    }
+
+    #[verifier::spinoff_prover]
+    proof fn lemma_valid_pfn_order_split(&self, pfn: usize, order: usize)
+        requires
+            self.valid_pfn_order(pfn, order),
+            0 < order < N <= 64,
+        ensures
+            self.valid_pfn_order(pfn, (order - 1) as usize),
+            self.valid_pfn_order(
+                (pfn + (1usize << (order - 1) as usize)) as usize,
+                (order - 1) as usize,
+            ),
+    {
+        broadcast use lemma_bit_usize_shl_values;
+
+        let n = 1usize << order;
+        let lower_n = 1usize << (order - 1) as usize;
+        assert(1usize << order == 2 * (1usize << (order - 1) as usize)) by (bit_vector)
+            requires
+                0 < order < 64,
+        ;
+        if self.valid_pfn_order(pfn, order) && order > 0 {
+            verify_proof::nonlinear::lemma_modulus_product_divisibility(
+                pfn as int,
+                lower_n as int,
+                2,
+            );
+        }
+        lemma_add_mod_noop(pfn as int, lower_n as int, lower_n as int);
+        lemma_mod_self_0(lower_n as int);
+        lemma_small_mod(0, lower_n as nat);
+        assert((pfn + lower_n) % lower_n as int == 0);
     }
 }
 
@@ -314,6 +347,7 @@ impl MemoryRegion {
         &&& self.valid_pfn_order(pfn, order)
         &&& order >= 1
         &&& self.wf()
+        &&& self.wf_next_pages()
         &&& self.free_pages[order - 1] + 2
             <= usize::MAX
         //&&& self@.pfn_range_is_allocated(pfn, order)
@@ -329,6 +363,7 @@ impl MemoryRegion {
         //let newp = self@.next[new_order].push(rhs_pfn).push(pfn);
         //&&& new@.next =~= self@.next.update(new_order, newp)
         &&& self.with_same_mapping(new)
+        &&& self.wf_next_pages()
         &&& new.wf()/*&&& new.nr_pages@[new_order] == self.nr_pages[new_order] + 2
         &&& new.nr_pages@[order] == self.nr_pages[order] - 1
         &&& new.free_pages[new_order] == self.free_pages[new_order] + 2
@@ -431,14 +466,14 @@ impl MemoryRegion {
     }
 
     spec fn inbound_pfn_order(&self, pfn: usize, order: usize) -> bool {
-        &&& pfn + (1usize << order) < self.pg_params().page_count
+        &&& pfn + (1usize << order) <= self.pg_params().page_count
         &&& order < MAX_ORDER
         &&& pfn < MAX_PAGE_COUNT
     }
 
     spec fn valid_pfn_order(&self, pfn: usize, order: usize) -> bool {
         &&& self.pg_params().valid_pfn_order(pfn, order)
-        &&& pfn < MAX_PAGE_COUNT
+        &&& 0 < pfn < MAX_PAGE_COUNT
     }
 
     spec fn ens_refill_page_list(&self, new: Self, ret: bool, order: usize) -> bool {

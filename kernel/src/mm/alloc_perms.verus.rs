@@ -124,6 +124,13 @@ impl MemRegionMapping {
                 (pfn + (1usize << (order - 1))) as usize,
                 (order - 1) as usize,
             ),
+            self.pg_params().valid_pfn_order(pfn, order) ==> (self.pg_params().valid_pfn_order(
+                pfn,
+                (order - 1) as usize,
+            ) && self.pg_params().valid_pfn_order(
+                (pfn + (1usize << (order - 1))) as usize,
+                (order - 1) as usize,
+            )),
     {
         use_type_invariant(self);
         broadcast use lemma_bit_usize_shl_values;
@@ -136,6 +143,9 @@ impl MemRegionMapping {
         assert(pfn2 + (1usize << (order - 1)) == pfn + (1usize << order));
         let vaddr2 = map.lemma_get_virt(pfn2);
         let size = (1usize << (order - 1)) * PAGE_SIZE;
+        if self.pg_params().valid_pfn_order(pfn, order) {
+            self.pg_params().lemma_valid_pfn_order_split(pfn1, order);
+        }
         p.split(vaddr1.region_to_dom(size as nat))
     }
 }

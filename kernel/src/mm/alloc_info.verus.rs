@@ -133,7 +133,8 @@ impl PageInfoDb {
         self.unit_start
     }
 
-    pub closed spec fn order(&self) -> usize {
+    #[verifier(inline)]
+    spec fn order(&self) -> usize {
         self.unit_head().order()
     }
 
@@ -191,8 +192,8 @@ impl PageInfoDb {
         let npages = reserved.dom().len();
         let end = unit_start + (1usize << order);
         &&& end <= usize::MAX + 1
-        &&& npages > 0
-        &&& reserved.dom() =~= set_usize_range(unit_start, end)
+        &&& !reserved.dom().is_empty()
+        &&& reserved.dom() =~= Set::new(|k| unit_start <= k < end)
         &&& item.is_head()
     }
 
@@ -269,10 +270,10 @@ impl PageInfoDb {
         let item = reserved[unit_start];
         let info = item.page_info().unwrap();
         let end = (1usize << order) + unit_start;
-        &&& Self::_is_unit(reserved, unit_start)
         &&& item.order() == order
         &&& item.shares() == id.shares
         &&& item.total() == id.total
+        &&& Self::_is_unit(reserved, unit_start)
         &&& forall|idx: usize|
             #![trigger reserved[idx]]
             unit_start <= idx < end ==> Self::wf_basic_at(reserved[idx], idx, id)
@@ -353,9 +354,9 @@ impl PageInfoDb {
 
     proof fn tracked_nr_page_pair(tracked &self, order: usize, order2: usize)
         requires
-            order != order2,
+            order < order2 < 64,
         ensures
-            self.nr_page(order) + self.nr_page(order2) <= self.npages(),
+            self.nr_page(order) + self.nr_page(order2) * 2 <= self.npages(),
     {
         use_type_invariant(self);
         self.lemma_nr_page_pair(order, order2);
@@ -364,16 +365,40 @@ impl PageInfoDb {
     proof fn lemma_nr_page_pair(&self, order: usize, order2: usize)
         requires
             self.wf(),
-            order != order2,
+            order < order2 < 64,
         ensures
-            self.nr_page(order) + self.nr_page(order2) <= self.dom().len(),
+            self.nr_page(order) + self.nr_page(order2) * 2 <= self.dom().len(),
     {
         reveal(PageInfoDb::nr_page);
         let s1 = self._info_dom(order);
         let s2 = self._info_dom(order2);
+        assert(order2 >= 1);
+        assert((1usize << order2) > 1);
+        let r = |i: usize|
+            if i < usize::MAX {
+                (i + 1) as usize
+            } else {
+                0usize
+            };
+        let s3 = s2.map(r);
+        assert forall|x1: usize, x2: usize| #[trigger] r(x1) == #[trigger] r(x2) implies x1
+            == x2 by {}
+        vstd::set_lib::lemma_map_size(s2, s3, r);
+        assert forall|i| #[trigger] s3.contains(i) implies !s1.contains(i) && !s2.contains(i)
+            && self.dom().contains(i) by {
+            let head_i = (i - 1) as usize;
+            assert(s2.contains(head_i));
+            self.lemma_restrict(head_i);
+            reveal(PageInfoDb::restrict);
+            let e2 = self@[head_i];
+            let e3 = self@[i];
+            assert(self.is_head(head_i));
+            assert(!self.is_head(i));
+        }
         assert(s1.disjoint(s2));
         vstd::set_lib::lemma_set_disjoint_lens(s1, s2);
-        let s = s1 + s2;
+        vstd::set_lib::lemma_set_disjoint_lens(s1 + s2, s3);
+        let s = s1 + s2 + s3;
         assert(s.subset_of(self@.dom()));
     }
 
@@ -513,12 +538,12 @@ impl PageInfoDb {
         &&& right.id() == self.id()
     }
 
-    pub open spec fn ens_add_nr_pages(&self, left: Self, right: Self) -> bool {
+    spec fn ens_add_nr_pages(&self, left: Self, right: Self) -> bool {
         &&& self.npages() == left.npages() + right.npages()
         &&& forall|o: usize| #[trigger] self.nr_page(o) == left.nr_page(o) + right.nr_page(o)
     }
 
-    pub open spec fn ens_add_unit_nr_pages(&self, left: Self, unit: Self) -> bool {
+    spec fn ens_add_unit_nr_pages(&self, left: Self, unit: Self) -> bool {
         let order = unit.order();
         &&& self.npages() == left.npages() + (1usize << order)
         &&& forall|o: usize| order != o ==> #[trigger] self.nr_page(o) == left.nr_page(o)
@@ -894,7 +919,7 @@ impl PageInfoDb {
     )
         requires
             self.dom().contains(pfn),
-            other.info.unit_start() <= pfn < other.info.unit_start() + other.info.npages(),
+            other.info.dom().contains(pfn),
             self.base_ptr() == other.info.base_ptr(),
         ensures
             self@[pfn].points_to() == other.info@[pfn].points_to(),

@@ -528,6 +528,20 @@ impl MRFreePerms {
         ));
         perm
     }
+
+    proof fn tracked_valid_next_at(tracked &self, order: usize, i: int)
+        ensures
+            self.pg_params().valid_pfn_order(self.next_lists()[order as int][i], order as usize),
+    {
+        use_type_invariant(self);
+    }
+
+    proof fn tracked_valid_next_page(tracked &self, order: usize)
+        ensures
+            self.pg_params().valid_pfn_order(self.next_pages()[order as int], order as usize),
+    {
+        self.tracked_valid_next_at(order, self.next[order as int].len() - 1);
+    }
 }
 
 } // verus!
