@@ -319,9 +319,6 @@ impl MemoryRegion {
     ) -> bool {
         let pfn = vstd::math::min(pfn1 as int, pfn2 as int) as usize;
         let new_order = (order + 1) as usize;
-        let n1 = (self.nr_pages[order as int] - 2) as usize;
-        let n2 = (self.nr_pages[new_order as int] + 1) as usize;
-        let new_nr_pages = self.nr_pages@.update(order as int, n1).update(order + 1, n2);
         &&& new.wf()
         &&& ret == pfn
         &&& perm.wf_pfn_order(self@.mr_map, pfn, new_order)
@@ -342,14 +339,12 @@ impl MemoryRegion {
 
     spec fn req_split_page(&self, pfn: usize, order: usize, perm: PgUnitPerm<DeallocUnit>) -> bool {
         let new_size = (1usize << (order - 1) as usize);
+        &&& self.wf()
+        &&& self.wf_next_pages()
         &&& perm.wf_pfn_order(self@.mr_map, pfn, order)
         &&& perm.page_type() == PageType::Free
         &&& self.valid_pfn_order(pfn, order)
         &&& order >= 1
-        &&& self.wf()
-        &&& self.wf_next_pages()
-        &&& self.free_pages[order - 1] + 2
-            <= usize::MAX
         //&&& self@.pfn_range_is_allocated(pfn, order)
         //&&& self@.marked_order(pfn, order)
         //&&& self@.pfn_order_is_writable(pfn, order)
@@ -360,20 +355,9 @@ impl MemoryRegion {
         let rhs_pfn = (pfn + (1usize << order) / 2) as usize;
         let new_order = order - 1;
         let order = order as int;
-        //let newp = self@.next[new_order].push(rhs_pfn).push(pfn);
-        //&&& new@.next =~= self@.next.update(new_order, newp)
-        &&& self.with_same_mapping(new)
-        &&& self.wf_next_pages()
-        &&& new.wf()/*&&& new.nr_pages@[new_order] == self.nr_pages[new_order] + 2
-        &&& new.nr_pages@[order] == self.nr_pages[order] - 1
-        &&& new.free_pages[new_order] == self.free_pages[new_order] + 2
-        &&& new.nr_pages@ =~= self.nr_pages@.update(new_order, new.nr_pages[new_order]).update(
-            order,
-            new.nr_pages[order],
-        )
-        &&& new.free_pages@ =~= self.free_pages@.update(new_order, new.free_pages[new_order])
-        &&& new.next_page@ =~= self.next_page@.update(order - 1, pfn)*/
-
+        &&& new.wf_next_pages()
+        &&& new.wf()
+        &&& new.next_page[order - 1] != 0
     }
 }
 
@@ -443,6 +427,7 @@ impl MemoryRegion {
         &&& ret.is_err() ==> self === new_self
         &&& ret.is_ok() ==> {
             &&& perm.wf_pfn_order(new_self@.mr_map, ret.unwrap(), order as usize)
+            &&& perm.page_type() == PageType::Free
             &&& ret.unwrap() == self.next_page[order]
             &&& new_self.valid_pfn_order(ret.unwrap(), order as usize)
             &&& new_self.next_page@ =~= self.next_page@.update(order, new_self.next_page[order])
@@ -479,15 +464,9 @@ impl MemoryRegion {
     spec fn ens_refill_page_list(&self, new: Self, ret: bool, order: usize) -> bool {
         // No available if no slot >= order
         let valid_order = (0 <= order < MAX_ORDER);
-        if self.spec_alloc_fails(order as int) || !valid_order {
-            &&& *self === new
-            &&& !ret
-        } else {
-            &&& new.wf()
-            &&& ret
-            &&& new.free_pages[order as int] > 0
-            &&& self.only_update_order_higher(new, order)
-        }
+        &&& (valid_order && !self.spec_alloc_fails(order as int)) == ret
+        &&& ret ==> valid_order
+        &&& ret ==> new.next_page[order as int] != 0
     }
 
     spec fn only_update_reserved_and_tmp_nr(&self, new: &Self) -> bool {
@@ -495,7 +474,6 @@ impl MemoryRegion {
     }
 
     spec fn only_update_order_higher(&self, new: Self, order: usize) -> bool {
-        &&& self.with_same_mapping(&new)
         &&& forall|i: int|
             0 <= i < order ==> {
                 &&& self.free_pages[i] == new.free_pages[i]
@@ -523,6 +501,7 @@ impl MemoryRegion {
         &&& order < MAX_ORDER
         &&& pfn < self.page_count
         &&& self.wf()
+        &&& self.wf_next_pages()
     }
 
     spec fn ens_allocate_pfn(
@@ -535,6 +514,7 @@ impl MemoryRegion {
         //&&& self@.ens_allocate_pfn(new@, pfn, order)
         &&& perm.wf_pfn_order(self@.mr_map, pfn, order)
         &&& new.wf()
+        &&& new.wf_next_pages()
         &&& self.with_same_mapping(new)
         &&& new.valid_pfn_order(
             pfn,

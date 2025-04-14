@@ -141,7 +141,8 @@ impl MRFreePerms {
         Seq::new(MAX_ORDER as nat, |order| self.next[order].len() as usize)
     }
 
-    pub closed spec fn next_lists(&self) -> Seq<Seq<usize>> {
+    #[verifier(inline)]
+    spec fn next_lists(&self) -> Seq<Seq<usize>> {
         self.next
     }
 
@@ -171,7 +172,7 @@ impl MRFreePerms {
         &&& pfn > 0
     }
 
-    pub proof fn tracked_empty(mr_map: MemRegionMapping) -> (tracked ret: Self)
+    proof fn tracked_empty(mr_map: MemRegionMapping) -> (tracked ret: Self)
         requires
             mr_map.wf(),
         ensures
@@ -188,6 +189,29 @@ impl MRFreePerms {
         assert(ret.next_pages() =~= Seq::new(MAX_ORDER as nat, |order| 0usize));
         assert(ret.nr_free() =~= Seq::new(MAX_ORDER as nat, |order| 0usize));
         ret
+    }
+
+    spec fn wf_next(&self, order: usize, i: int) -> bool {
+        let list = self.next[order as int];
+        let perm = self.avail[(order, i)];
+        let next_page =  if i > 0 {
+            list[i - 1]
+        } else {
+            0
+        };
+        &&& perm.info.unit_head().page_info() == Some(
+            PageInfo::Free(
+                FreeInfo {
+                    order,
+                    next_page
+                },
+            ),
+        )
+    }
+
+    spec fn wf_strict(&self) -> bool {
+        forall|order: usize, i: int|#![trigger self.next[order as int][i]] #![trigger self.next_lists()[order as int][i]]
+            0 <= order < MAX_ORDER && 0 <= i < self.next[order as int].len() ==> self.wf_next(order, i)
     }
 
     spec fn wf_at(&self, order: usize, i: int) -> bool {
@@ -369,6 +393,87 @@ impl MRFreePerms {
     }
 
     #[verifier::spinoff_prover]
+    proof fn tracked_insert(
+        tracked &mut self,
+        order: usize,
+        idx: int,
+        pfn: usize,
+        tracked perm: PgUnitPerm<DeallocUnit>,
+    )
+        requires
+            0 <= order < MAX_ORDER,
+            0 <= idx <= old(self).next[order as int].len() as int,
+            old(self).valid_pfn_order(pfn, order),
+            perm.wf_pfn_order(old(self).mr_map, pfn, order),
+        ensures
+            idx == old(self).next[order as int].len() as int ==> 
+                self.next_pages() == old(self).next_pages().update(order as int, pfn),
+            idx < old(self).next[order as int].len() as int ==>
+                self.next_pages() == old(self).next_pages(),
+            self.next_lists() == old(self).next_lists().update(
+                order as int,
+                old(self).next_lists()[order as int].insert(idx, pfn),
+            ),
+            self.mr_map() == old(self).mr_map(),
+            self.pg_params() == old(self).pg_params(),
+            self.nr_free() == old(self).nr_free().update(
+                order as int,
+                (old(self).nr_free()[order as int] + 1) as usize,
+            ),
+            old(self).nr_free()[order as int] <= old(self).pg_params().page_count - 1,
+            old(self).nr_free()[order as int] * (1usize << order) <= old(
+                self,
+            ).pg_params().page_count - 1,
+    {
+        use_type_invariant(&*self);
+        let tracked mut tmp = MRFreePerms::tracked_empty(old(self).mr_map());
+        tracked_swap(&mut tmp, self);
+        let tracked MRFreePerms { mut avail, next, mr_map } = tmp;
+        let last = next[order as int].len() as int;
+        avail.tracked_insert((order, last), perm);
+        let m = Map::new(
+            |k: (usize, int)| avail.dom().contains(k),
+            |k: (usize, int)|
+                if k.0 == order {
+                    (k.0, if k.1 > idx {k.1 - 1} else if k.1 == idx {last} else {k.1})
+                } else {
+                    k
+                },
+        );
+        avail.tracked_map_keys_in_place(m);
+        *self =
+        MRFreePerms {
+            avail,
+            next: next.update(order as int, next[order as int].insert(idx, pfn)),
+            mr_map: mr_map,
+        };
+        assert(old(self).nr_free()[order as int] == old(self).next[order as int].len() as usize);
+        self.tracked_next_no_dup_len(order);
+        let gap = 1usize << order;
+        lemma_mul_is_distributive_add_other_way(
+            gap as int,
+            old(self).nr_free()[order as int] as int,
+            1,
+        );
+
+        assert(self.next[order as int].len() as usize == (old(self).nr_free()[order as int]
+            + 1) as usize);
+        if idx == old(self).next[order as int].len() {
+            assert(self.next_pages() =~= old(self).next_pages().update(order as int, pfn));
+        }
+        assert forall|o: usize| 0 <= o < MAX_ORDER implies #[trigger] self.nr_free()[o as int]
+            == if o != order {
+            old(self).nr_free()[o as int]
+        } else {
+            (old(self).nr_free()[order as int] + 1) as usize
+        } by {}
+        assert(self.nr_free() =~= old(self).nr_free().update(
+            order as int,
+            (old(self).nr_free()[order as int] + 1) as usize,
+        ));
+    }
+
+    #[verifier::spinoff_prover]
     proof fn tracked_push(
         tracked &mut self,
         order: usize,
@@ -382,7 +487,7 @@ impl MRFreePerms {
             perm.page_type() == PageType::Free,
         ensures
             self.next_pages() == old(self).next_pages().update(order as int, pfn),
-            self.next_lists() == old(self).next_lists().update(
+            self.next_lists() =~= old(self).next_lists().update(
                 order as int,
                 old(self).next_lists()[order as int].push(pfn),
             ),
@@ -392,10 +497,16 @@ impl MRFreePerms {
                 order as int,
                 (old(self).nr_free()[order as int] + 1) as usize,
             ),
-            old(self).nr_free()[order as int] <= old(self).pg_params().page_count,
+            old(self).nr_free()[order as int] <= old(self).pg_params().page_count - 1,
             old(self).nr_free()[order as int] * (1usize << order) <= old(
                 self,
             ).pg_params().page_count - 1,
+            (old(self).wf_strict() && perm.info.unit_head().page_info() == Some(PageInfo::Free(
+                FreeInfo {
+                    order,
+                    next_page: old(self).next_pages()[order as int],
+                },
+            )))  ==> self.wf_strict(),
     {
         use_type_invariant(&*self);
         let tracked mut tmp = MRFreePerms::tracked_empty(old(self).mr_map());
@@ -464,6 +575,22 @@ impl MRFreePerms {
     }
 
     #[verifier::spinoff_prover]
+    proof fn tracked_borrow(tracked &self, order: usize, i: int) -> (tracked perm: &PgUnitPerm<
+        DeallocUnit,
+    >)
+        requires
+            0 <= order < MAX_ORDER,
+            0 <= i < self.next_lists()[order as int].len(),
+        ensures
+            perm.page_type() == PageType::Free,
+            perm.wf_pfn_order(self.mr_map, self.next[order as int][i], order),
+    {
+        use_type_invariant(self);
+        self.avail.tracked_borrow((order, i))
+    }
+
+    #[verifier::spinoff_prover]
+    #[verifier::rlimit(2)]
     proof fn tracked_remove(tracked &mut self, order: usize, i: int) -> (tracked perm: PgUnitPerm<
         DeallocUnit,
     >)
@@ -530,6 +657,9 @@ impl MRFreePerms {
     }
 
     proof fn tracked_valid_next_at(tracked &self, order: usize, i: int)
+    requires
+        order < MAX_ORDER,
+        0 <= i < self.next_lists()[order as int].len(),
         ensures
             self.pg_params().valid_pfn_order(self.next_lists()[order as int][i], order as usize),
     {
@@ -537,10 +667,15 @@ impl MRFreePerms {
     }
 
     proof fn tracked_valid_next_page(tracked &self, order: usize)
-        ensures
-            self.pg_params().valid_pfn_order(self.next_pages()[order as int], order as usize),
+    requires
+        order < MAX_ORDER,
+    ensures
+        self.next_pages()[order as int] != 0 ==> self.pg_params().valid_pfn_order(self.next_pages()[order as int], order as usize),
     {
-        self.tracked_valid_next_at(order, self.next[order as int].len() - 1);
+        use_type_invariant(self);
+        if self.next_pages()[order as int] != 0 {
+            self.tracked_valid_next_at(order, self.next[order as int].len() - 1);
+        }
     }
 }
 

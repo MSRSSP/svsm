@@ -465,7 +465,8 @@ impl MemoryRegion {
     }
 
     pub closed spec fn wf_next_pages(&self) -> bool {
-        self.next_page@ =~= self@.free.next_pages()
+        &&& self.next_page@ =~= self@.free.next_pages()
+        &&& self@.free.wf_strict()
     }
 
     pub closed spec fn wf_perms(&self) -> bool {
