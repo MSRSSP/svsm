@@ -512,19 +512,13 @@ impl MemoryRegion {
         perm: PgUnitPerm<DeallocUnit>,
     ) -> bool {
         //&&& self@.ens_allocate_pfn(new@, pfn, order)
-        &&& perm.wf_pfn_order(self@.mr_map, pfn, order)
+        &&& perm.wf_pfn_order(new@.mr_map, pfn, order)
         &&& new.wf()
         &&& new.wf_next_pages()
-        &&& self.with_same_mapping(new)
         &&& new.valid_pfn_order(
             pfn,
             order,
-        )/*&&& new.nr_pages === self.nr_pages
-        &&& new.free_pages@ === self.free_pages@.update(
-            order as int,
-            (self.free_pages[order as int] - 1) as usize,
-        )*/
-        //&&& new@.pfn_order_is_writable(pfn, order)
+        )
 
     }
 
@@ -535,6 +529,7 @@ impl MemoryRegion {
         perm: PgUnitPerm<DeallocUnit>,
     ) -> bool {
         &&& self.wf()
+        &&& self.wf_next_pages()
         &&& perm.wf_pfn_order(self@.mr_map, pfn, order)
         &&& self.valid_pfn_order(
             pfn,
@@ -563,15 +558,9 @@ impl MemoryRegion {
         let new_order = (order + 1) as usize;
         &&& new_pfn == pfn || new_pfn == pfn - (1usize << order)
         &&& new.wf()
-        &&& self.with_same_mapping(new)
+        &&& new.wf_next_pages()
         &&& perm.wf_pfn_order(new@.mr_map, new_pfn, new_order)
-        &&& self.valid_pfn_order(new_pfn, new_order)
-        &&& new.nr_pages@ =~= new_nr_pages
-        &&& new.free_pages@
-            === new_free_pages/*&&& new@.marked_not_free(new_pfn, new_order)
-        &&& new@.pfn_range_is_allocated(new_pfn, new_order)
-        &&& new@.pfn_order_is_writable(new_pfn, new_order)*/
-
+        &&& new.valid_pfn_order(new_pfn, new_order)
     }
 
     spec fn ens_try_to_merge_page(

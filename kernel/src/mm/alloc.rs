@@ -1122,10 +1122,10 @@ impl MemoryRegion {
         requires
             old(self).req_allocate_pfn(pfn, order)
         ensures
-            //ret.is_ok() ==> old(self).ens_allocate_pfn(self, pfn, order, *perm),
-            // !ret.is_ok() ==> old(self) === self,
+            ret.is_ok() ==> old(self).ens_allocate_pfn(self, pfn, order, *perm),
+            !ret.is_ok() ==> old(self) === self,
     )]
-    #[verus_verify(spinoff_prover)]
+    #[verus_verify(spinoff_prover, rlimit(16))]
     fn allocate_pfn(&mut self, pfn: usize, order: usize) -> Result<(), AllocError> {
         proof_decl! {
             let ghost mut idx_ = self@.free.next_lists()[order as int].len() - 1;
@@ -1169,6 +1169,7 @@ impl MemoryRegion {
         ))]
         loop {
             proof_decl! {
+                use_type_invariant(&self.perms.borrow().free);
                 let tracked current_perm = self.perms.borrow().free.tracked_borrow(order, idx_ + 1);
             }
             verus_with!(Tracked(&current_perm));
@@ -1197,6 +1198,9 @@ impl MemoryRegion {
                 self.perms.borrow_mut().info.tracked_remove_and_merge_shares(&mut prev_info);
     
                 *perm = self.perms.borrow_mut().free.tracked_remove(order, idx_);
+                if idx_ == 0 {
+                    assert(next_pfn == 0);
+                }
                 let tracked (mut mem, mut info) = perm.tracked_take();
                 self.perms.borrow_mut().info.tracked_remove_and_merge_shares(&mut info);
                 use_type_invariant(&info);
@@ -1229,8 +1233,9 @@ impl MemoryRegion {
                 reserved.tracked_insert(current_pfn, head_info);
                 let tracked mut info = PageInfoDb::tracked_new_unit(order, current_pfn, id, reserved);
                 self.perms.borrow_mut().info.tracked_insert_shares(&mut info);
-        
                 *perm = PgUnitPerm {mem, info, typ: arbitrary()};
+                //use_type_invariant(&self.perms.borrow().free);
+                //old(self)@.free.lemma_remove_strict(self@.free, order, idx_);
             }
 
             self.free_pages[order] -= 1;

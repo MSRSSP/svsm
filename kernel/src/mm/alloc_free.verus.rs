@@ -391,6 +391,33 @@ impl MRFreePerms {
         }
     }
 
+    proof fn lemma_remove_strict(&self, new: Self, order: usize, idx: int)
+    requires
+        self.wf(),
+        self.wf_strict(),
+        new.wf(),
+        forall |o, i| 
+            #![trigger new.avail[(o, i)]]
+            0 <= o < MAX_ORDER && 0 <= i < new.next[o as int].len() ==> 
+                new.avail[(o, i)] == if o == order {
+                    if i > idx {
+                        self.avail[(o, i + 1)]
+                    } else if i == idx {
+                        new.avail[(o, i)]
+                    } else {
+                        self.avail[(o, i)]
+                    }
+                } else {
+                    self.avail[(o, i)]
+                },
+        new.avail[(order, idx)].info.unit_head().page_info() == Some(
+            PageInfo::Free(FreeInfo { order, next_page: if idx > 0 {self.next[order as int][idx-1]} else {0} }),
+        ),
+    ensures
+        new.wf(),
+        new.wf_strict(),
+    {}
+
     #[verifier::spinoff_prover]
     proof fn tracked_insert(
         tracked &mut self,
@@ -426,6 +453,21 @@ impl MRFreePerms {
             old(self).nr_free()[order as int] * (1usize << order) <= old(
                 self,
             ).pg_params().page_count - 1,
+            self.avail.dom() =~= old(self).avail.dom().insert((order, old(self).next[order as int].len() as int)),
+            forall |o, i| 
+            #![trigger self.avail[(o, i)]]
+            0 <= o < MAX_ORDER && 0 <= i < self.next[o as int].len() ==> 
+            self.avail[(o, i)] == if o == order {
+                    if i > idx {
+                        old(self).avail[(o, i + 1)]
+                    } else if i == idx {
+                        perm
+                    } else {
+                        old(self).avail[(o, i)]
+                    }
+                } else {
+                    old(self).avail[(o, i)]
+                },
     {
         use_type_invariant(&*self);
         let tracked mut tmp = MRFreePerms::tracked_empty(old(self).mr_map());
@@ -611,12 +653,12 @@ impl MRFreePerms {
 
     #[verifier::spinoff_prover]
     #[verifier::rlimit(2)]
-    proof fn tracked_remove(tracked &mut self, order: usize, i: int) -> (tracked perm: PgUnitPerm<
+    proof fn tracked_remove(tracked &mut self, order: usize, idx: int) -> (tracked perm: PgUnitPerm<
         DeallocUnit,
     >)
         requires
             0 <= order < MAX_ORDER,
-            0 <= i < old(self).next_lists()[order as int].len(),
+            0 <= idx < old(self).next_lists()[order as int].len(),
         ensures
             self.next_pages() == old(self).next_pages().update(
                 order as int,
@@ -626,9 +668,9 @@ impl MRFreePerms {
                 order as int,
                 self.next_lists()[order as int],
             ),
-            self.next_lists()[order as int] =~= old(self).next_lists()[order as int].remove(i),
-            perm.wf_pfn_order(self.mr_map, old(self).next_lists()[order as int][i], order),
-            perm == old(self).avail[(order, i)],
+            self.next_lists()[order as int] =~= old(self).next_lists()[order as int].remove(idx),
+            perm.wf_pfn_order(self.mr_map, old(self).next_lists()[order as int][idx], order),
+            perm == old(self).avail[(order, idx)],
             self.mr_map() == old(self).mr_map(),
             self.pg_params() == old(self).pg_params(),
             self.nr_free() == old(self).nr_free().update(
@@ -636,14 +678,22 @@ impl MRFreePerms {
                 (old(self).nr_free()[order as int] - 1) as usize,
             ),
             old(self).nr_free()[order as int] > 0,
-            old(self).next_lists()[order as int][i] > 0 ==> old(self).valid_pfn_order(
-                old(self).next_lists()[order as int][i],
+            old(self).next_lists()[order as int][idx] > 0 ==> old(self).valid_pfn_order(
+                old(self).next_lists()[order as int][idx],
                 order,
             ),
             perm.page_type() == PageType::Free,
-            i == 0 <==> perm.info.unit_head().page_info() == Some(
+            idx == 0 <==> perm.info.unit_head().page_info() == Some(
                 PageInfo::Free(FreeInfo { order, next_page: 0 }),
             ),
+            self.avail.dom() =~= old(self).avail.dom().remove((order, old(self).next[order as int].len() - 1)),
+            forall |o, i|  #![trigger self.avail[(o, i)]]
+            0 <= o < MAX_ORDER && 0 <= i < self.next[o as int].len() ==> 
+            self.avail[(o, i)] == if o == order && i >= idx {
+                old(self).avail[(o, i + 1)]
+            } else {
+                old(self).avail[(o, i)]
+            },
     {
         use_type_invariant(&*self);
         let tracked mut tmp = MRFreePerms::tracked_empty(old(self).mr_map());
@@ -656,18 +706,18 @@ impl MRFreePerms {
         let m = Map::new(
             |k: (usize, int)| avail.dom().contains(k) && k != (order, len - 1),
             |k: (usize, int)|
-                if k.0 == order && k.1 >= i {
+                if k.0 == order && k.1 >= idx {
                     (k.0, k.1 + 1)
                 } else {
                     k
                 },
         );
-        let tracked perm = avail.tracked_remove((order, i));
+        let tracked perm = avail.tracked_remove((order, idx));
         avail.tracked_map_keys_in_place(m);
         *self =
         MRFreePerms {
             avail,
-            next: next.update(order as int, next[order as int].remove(i)),
+            next: next.update(order as int, next[order as int].remove(idx)),
             mr_map: mr_map,
         };
         assert(self.nr_free() =~= old(self).nr_free().update(
