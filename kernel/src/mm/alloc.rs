@@ -691,6 +691,7 @@ impl MemoryRegion {
             old(self).wf_next_pages(),
         ensures
             self.wf(),
+            old(self).wf_next_pages(),
             old(self).ens_get_next_page(&*self, order, ret, *perm),
     )]
     #[verus_verify(spinoff_prover)]

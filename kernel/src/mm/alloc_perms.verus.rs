@@ -340,7 +340,7 @@ impl<T: UnitType> PgUnitPerm<T> {
         &&& self.info.unit_start() == pfn
         &&& self.info.order() == order
         &&& self.info.base_ptr() == map.base_ptr()
-        &&& self.info.npages() > 0
+        &&& !self.info@.is_empty()
     }
 
     pub proof fn empty(id: PageInfoUnique) -> (tracked ret: Self) {
