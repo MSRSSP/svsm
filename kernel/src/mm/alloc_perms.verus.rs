@@ -374,6 +374,35 @@ impl<T: UnitType> PgUnitPerm<T> {
 
 impl MemoryRegionPerms {
     /** Attributes from free && info_ptr_exposed **/
+    proof fn tracked_empty(
+        tracked mr_map: MemRegionMapping,
+        tracked info_ptr_exposed: IsExposed,
+    ) -> (tracked ret: Self)
+        requires
+            mr_map.wf(),
+            info_ptr_exposed@ == mr_map@.provenance,
+        ensures
+            ret.mr_map == mr_map,
+            ret.free.avail.len() == 0,
+    {
+        MemoryRegionPerms {
+            free: MRFreePerms::tracked_empty(mr_map),
+            info: PageInfoDb::tracked_empty(
+                PageInfoUnique {
+                    ptr_data: PtrData {
+                        addr: 0,
+                        provenance: info_ptr_exposed@,
+                        metadata: vstd::raw_ptr::Metadata::Thin,
+                    },
+                    shares: (MAX_PGINFO_SHARES - DEALLOC_PGINFO_SHARES) as nat,
+                    total: MAX_PGINFO_SHARES,
+                },
+            ),
+            info_ptr_exposed,
+            mr_map,
+        }
+    }
+
     spec fn npages(&self) -> usize {
         self.mr_map.pg_params().page_count
     }

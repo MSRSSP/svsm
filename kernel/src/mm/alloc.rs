@@ -665,10 +665,8 @@ impl MemoryRegion {
         with Tracked(perm): Tracked<&mut PgUnitPerm<DeallocUnit>>
         requires
             order < MAX_ORDER,
-            old(self).wf(),
             old(self).wf_next_pages(),
         ensures
-            self.wf(),
             self.wf_next_pages(),
             old(self).ens_get_next_page(&*self, order, ret, *perm),
     )]
@@ -820,11 +818,9 @@ impl MemoryRegion {
     #[verus_verify(spinoff_prover)]
     #[verus_spec(ret =>
         requires
-            old(self).wf(),
             old(self).wf_next_pages(),
             0 <= order <= MAX_ORDER,
         ensures
-            self.wf(),
             self.wf_next_pages(),
             old(self).ens_refill_page_list(*self, ret.is_ok(), order),
     )]
@@ -1158,7 +1154,6 @@ impl MemoryRegion {
         #[cfg_attr(verus_keep_ghost, verus_spec(
             invariant
                 self === old(self),
-                self.wf(),
                 self.wf_next_pages(),
                 self.req_allocate_pfn(pfn, order),
                 self.req_allocate_pfn(old_pfn, order),
@@ -1189,23 +1184,18 @@ impl MemoryRegion {
             }
 
             proof_decl! {
-               
-                assert(idx_ + 1 > 0);
                 let tracked current_perm = self.perms.borrow().free.tracked_borrow(order, idx_);
             }
             verus_with!(Tracked(current_perm));
             let next_pfn = self.next_free_pfn(current_pfn, order);
             proof_decl! {
                 self.perms.borrow_mut().free.tracked_disjoint_pfn(order, idx_ + 1, order, idx_);
-                let tracked mut prev_perm = self.perms.borrow_mut().free.tracked_remove(order, idx_ + 1);
-                let tracked (prev_mem, prev_info) = prev_perm.tracked_take();
+                let tracked mut current_perm = self.perms.borrow_mut().free.tracked_remove(order, idx_ + 1);
+                let tracked (prev_mem, prev_info) = current_perm.tracked_take();
                 self.perms.borrow_mut().info.tracked_remove_and_merge_shares(&mut prev_info);
     
-                *perm = self.perms.borrow_mut().free.tracked_remove(order, idx_);
-                if idx_ == 0 {
-                    assert(next_pfn == 0);
-                }
-                let tracked (mut mem, mut info) = perm.tracked_take();
+                let tracked mut prev_perm = self.perms.borrow_mut().free.tracked_remove(order, idx_);
+                let tracked (mut mem, mut info) =  prev_perm.tracked_take();
                 self.perms.borrow_mut().info.tracked_remove_and_merge_shares(&mut info);
                 use_type_invariant(&info);
                 let tracked PageInfoDb {id, mut reserved, ..} = info;
@@ -1241,8 +1231,6 @@ impl MemoryRegion {
                 self.perms.borrow_mut().info.tracked_insert_shares(&mut info);
                 *perm = PgUnitPerm {mem, info, typ: arbitrary()};
                 old(self)@.free.lemma_wf_restrict_remove(&self.perms.borrow().free, order, idx_);
-                assert(self.wf());
-                assert(self.wf_next_pages());
             }
 
 
