@@ -1164,8 +1164,8 @@ impl MemoryRegion {
                 self.req_allocate_pfn(old_pfn, order),
                 old_pfn != pfn,
                 old_pfn != 0,
-                old_pfn == self@.free.next_lists()[order as int][idx_ + 1],
-                -1 <= idx_ < self@.free.next_lists()[order as int].len() - 1,
+                old_pfn == self@.free.avail[order as int][idx_ + 1].pfn(),
+                -1 <= idx_ < self@.free.avail[order as int].len() - 1,
         ))]
         loop {
             proof_decl! {
@@ -1234,8 +1234,6 @@ impl MemoryRegion {
                 let tracked mut info = PageInfoDb::tracked_new_unit(order, current_pfn, id, reserved);
                 self.perms.borrow_mut().info.tracked_insert_shares(&mut info);
                 *perm = PgUnitPerm {mem, info, typ: arbitrary()};
-                //use_type_invariant(&self.perms.borrow().free);
-                //old(self)@.free.lemma_remove_strict(self@.free, order, idx_);
             }
 
             self.free_pages[order] -= 1;

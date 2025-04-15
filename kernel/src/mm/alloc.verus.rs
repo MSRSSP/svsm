@@ -515,11 +515,7 @@ impl MemoryRegion {
         &&& perm.wf_pfn_order(new@.mr_map, pfn, order)
         &&& new.wf()
         &&& new.wf_next_pages()
-        &&& new.valid_pfn_order(
-            pfn,
-            order,
-        )
-
+        &&& new.valid_pfn_order(pfn, order)
     }
 
     spec fn req_try_to_merge_page(

@@ -320,6 +320,14 @@ impl<T: UnitType> PgUnitPerm<T> {
         )
     }
 
+    pub closed spec fn pfn(&self) -> usize {
+        self.info.unit_start()
+    }
+
+    pub closed spec fn page_info(&self) -> PageInfo {
+        self.info.unit_head().page_info().unwrap()
+    }
+
     spec fn page_type(&self) -> PageType {
         let pageinfo = self.info.unit_head().page_info().unwrap();
         pageinfo.spec_type()
@@ -403,34 +411,6 @@ impl MemoryRegionPerms {
 
     spec fn get_page_storage_type(&self, pfn: usize) -> Option<PageStorageType> {
         self.info@[pfn].page_storage()
-    }
-
-    spec fn wf_next(&self, order: usize, i: int) -> bool {
-        let list = self.free.next_lists()[order as int];
-        let pfn = list[i];
-        self.info@[pfn].page_info() == Some(
-            PageInfo::Free(
-                FreeInfo {
-                    order: order,
-                    next_page: if i > 0 {
-                        list[i - 1]
-                    } else {
-                        0
-                    },
-                },
-            ),
-        )
-    }
-
-    spec fn strict_wf_info_free(&self) -> bool {
-        let info = self.info;
-        &&& forall|order|   //#![trigger self.free.nr_free()[order as int]]
-
-            0 <= order < MAX_ORDER ==> #[trigger] info.nr_page(order)
-                >= self.free.nr_free()[order as int]
-        &&& forall|pfn: usize|
-            0 <= pfn < self.npages() && (#[trigger] info@[pfn]).is_free()
-                ==> self.free.next_lists()[info@[pfn].order() as int].contains(pfn)
     }
 
     /** Invariants for page info **/
