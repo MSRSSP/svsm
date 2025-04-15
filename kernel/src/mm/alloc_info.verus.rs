@@ -930,6 +930,18 @@ impl PageInfoDb {
         use_type_invariant(&other.info);
         self.reserved.tracked_borrow(pfn).is_same(other.info.reserved.tracked_borrow(pfn));
     }
+
+    proof fn tracked_borrow(tracked &self, idx: usize) -> (tracked item: &FracTypedPerm<
+        PageStorageType,
+    >)
+        requires
+            self.dom().contains(idx),
+        ensures
+            item == self@[idx],
+    {
+        use_type_invariant(self);
+        self.reserved.tracked_borrow(idx)
+    }
 }
 
 } // verus!

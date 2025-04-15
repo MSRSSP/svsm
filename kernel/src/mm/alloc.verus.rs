@@ -300,7 +300,7 @@ impl MemoryRegion {
         p2: PgUnitPerm<DeallocUnit>,
     ) -> bool {
         let pfn = vstd::math::min(pfn1 as int, pfn2 as int);
-        &&& self.wf()
+        &&& self.wf_next_pages()
         &&& self.valid_pfn_order(pfn as usize, (order + 1) as usize)
         &&& 0 <= order < MAX_ORDER - 1
         &&& p1.wf_pfn_order(self@.mr_map, pfn1, order)
@@ -319,7 +319,7 @@ impl MemoryRegion {
     ) -> bool {
         let pfn = vstd::math::min(pfn1 as int, pfn2 as int) as usize;
         let new_order = (order + 1) as usize;
-        &&& new.wf()
+        &&& new.wf_next_pages()
         &&& ret == pfn
         &&& self.with_same_mapping(new)
         &&& perm.wf_pfn_order(self@.mr_map, pfn, new_order)

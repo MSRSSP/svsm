@@ -474,6 +474,7 @@ impl MemoryRegion {
     }
 
     pub closed spec fn wf_next_pages(&self) -> bool {
+        &&& self.wf()
         &&& self.next_page@ =~= self@.free.next_pages()
         &&& self@.free.wf_strict()
     }
@@ -495,7 +496,6 @@ impl MemoryRegion {
     }
 
     pub closed spec fn req_read_any_info(&self) -> bool {
-        &&& self.wf_basic2()
         &&& self.page_count == self@.npages()
         &&& self@.wf()
     }
