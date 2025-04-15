@@ -543,11 +543,13 @@ impl MRFreePerms {
         requires
             0 <= order < MAX_ORDER,
             old(self).next_page(order) > 0,
+            old(self).wf_strict(),
         ensures
             self.avail == old(self).avail.update(order as int, self.avail[order as int]),
             self.avail[order as int] == old(self).avail[order as int].take(
                 old(self).avail[order as int].len() - 1,
             ),
+            perm == old(self).avail[order as int].last(),
             perm.wf_pfn_order(self.mr_map, old(self).avail[order as int].last().pfn(), order),
             self.mr_map() == old(self).mr_map(),
             self.pg_params() == old(self).pg_params(),
@@ -561,6 +563,7 @@ impl MRFreePerms {
                 order,
             ),
             perm.page_type() == PageType::Free,
+            self.wf_strict(),
     {
         self.tracked_remove(order, self.avail[order as int].len() - 1)
     }
@@ -577,6 +580,10 @@ impl MRFreePerms {
             perm.page_type() == PageType::Free,
             perm.wf_pfn_order(self.mr_map, self.avail[order as int][i].pfn(), order),
             self.pg_params().valid_pfn_order(self.avail[order as int][i].pfn(), order),
+            i > 0 ==> self.pg_params().valid_pfn_order(
+                self.avail[order as int][i - 1].pfn(),
+                order,
+            ),
             perm.page_info() == Some(
                 PageInfo::Free(
                     FreeInfo {
@@ -625,6 +632,7 @@ impl MRFreePerms {
                 order,
             ),
             perm.page_type() == PageType::Free,
+            idx == self.avail[order as int].len() ==> old(self).wf_strict() ==> self.wf_strict(),
             old(self).wf_strict() ==> perm.page_info() == Some(
                 PageInfo::Free(
                     FreeInfo {
@@ -662,6 +670,17 @@ impl MRFreePerms {
             order as int,
             (old(self).nr_free()[order as int] - 1) as usize,
         ));
+        use_type_invariant(&*self);
+        /*if idx == assert forall|o: usize, i: int|
+            #![trigger self.avail[o as int][i]]
+            0 <= o < MAX_ORDER && 0 <= i < self.avail[o as int].len()
+        implies self.wf_next(o, i) by {
+                let a = self.avail[o as int][i];
+                let prev_a = self.avail[o as int][i - 1];
+                let old_a = old(self).avail[o as int][i];
+                let old_prev_a = old(self).avail[o as int][i - 1];
+                let old_prev_a = old(self).avail[o as int][i + 1];
+        }*/
         perm
     }
 

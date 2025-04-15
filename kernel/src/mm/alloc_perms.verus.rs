@@ -215,14 +215,14 @@ tracked struct MemoryRegionPerms {
 
 // Increment a thin pointer.
 // It does not make sense to increment a fat pointer.
-pub closed spec fn spec_ptr_add<T>(base_ptr: *const T, idx: usize) -> *const T
+spec fn spec_ptr_add<T>(base_ptr: *const T, idx: usize) -> *const T
     recommends
         base_ptr@.metadata == vstd::raw_ptr::Metadata::Thin,
 {
     let vstd::raw_ptr::PtrData { addr, provenance, metadata } = base_ptr@;
     vstd::raw_ptr::ptr_from_data(
         vstd::raw_ptr::PtrData {
-            addr: (addr + idx * size_of::<T>()) as usize,
+            addr: VirtAddr::from_spec((addr + idx * size_of::<T>()) as usize)@,
             provenance,
             metadata,
         },
@@ -232,7 +232,7 @@ pub closed spec fn spec_ptr_add<T>(base_ptr: *const T, idx: usize) -> *const T
 #[allow(missing_debug_implementations)]
 pub struct AllocatedPagesPerm {
     perm: PgUnitPerm<DeallocUnit>,
-    map: MemRegionMapping,
+    mr_map: MemRegionMapping,
 }
 
 impl AllocatedPagesPerm {
@@ -241,7 +241,7 @@ impl AllocatedPagesPerm {
     }
 
     spec fn vaddr(&self) -> VirtAddr {
-        self.map@.map.try_get_virt(self.pfn()).unwrap()
+        self.mr_map@.map.try_get_virt(self.pfn()).unwrap()
     }
 
     spec fn size(&self) -> nat {
@@ -252,9 +252,9 @@ impl AllocatedPagesPerm {
     spec fn wf(&self) -> bool {
         let order = self.perm.info.order();
         let pfn = self.pfn();
-        &&& self.map.shares() == self.size()
-        &&& self.map.base_ptr() == self.perm.info.base_ptr()
-        &&& self.perm.mem.wf_pfn_order(self.map, pfn, order)
+        &&& self.mr_map.shares() == self.size()
+        &&& self.mr_map.base_ptr() == self.perm.info.base_ptr()
+        &&& self.perm.mem.wf_pfn_order(self.mr_map, pfn, order)
         &&& self.perm.page_type().spec_is_deallocatable()
     }
 }
@@ -476,6 +476,9 @@ impl MemoryRegion {
     pub closed spec fn wf_next_pages(&self) -> bool {
         &&& self.wf()
         &&& self.next_page@ =~= self@.free.next_pages()
+        &&& forall|o|   //#![trigger self@.free.next_pages()[o]]
+
+            0 <= o < MAX_ORDER ==> self.next_page[o] < MAX_PAGE_COUNT
         &&& self@.free.wf_strict()
     }
 
@@ -493,10 +496,15 @@ impl MemoryRegion {
 
     pub closed spec fn wf_basic2(&self) -> bool {
         &&& self.page_count <= MAX_PAGE_COUNT
+        &&& self@.mr_map.wf()
+        &&& self@.info_ptr_exposed@ == self@.mr_map@.provenance
+        &&& self.map() == self@.mr_map@.map
+        &&& self.map().wf()
     }
 
     pub closed spec fn req_read_any_info(&self) -> bool {
         &&& self.page_count == self@.npages()
+        &&& self.wf_basic2()
         &&& self@.wf()
     }
 }

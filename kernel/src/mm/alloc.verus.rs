@@ -173,6 +173,7 @@ impl MemoryRegion {
         &&& perm.valid()
         &&& perm.writable()
         &&& perm.ptr() == self.view2().page_info_ptr(pfn)
+        &&& self.wf_basic2()
     }
 
     spec fn writable_page_infos(
@@ -193,7 +194,8 @@ impl MemoryRegion {
         pi: PageInfo,
         perm: FracTypedPerm<PageStorageType>,
     ) -> bool {
-        self.writable_page_info(pfn, perm)
+        &&& pi.spec_order() < MAX_ORDER
+        &&& self.writable_page_info(pfn, perm)
     }
 
     spec fn ens_write_page_info(
@@ -525,8 +527,8 @@ impl MemoryRegion {
         perm: PgUnitPerm<DeallocUnit>,
     ) -> bool {
         &&& self.wf_next_pages()
-        &&& perm.wf_pfn_order(self@.mr_map, pfn, order)
         &&& self.valid_pfn_order(pfn, order)
+        &&& perm.wf_pfn_order(self@.mr_map, pfn, order)
     }
 
     spec fn ens_try_to_merge_page_ok(
@@ -562,7 +564,7 @@ impl MemoryRegion {
     }
 
     spec fn ens_free_page_order(&self, new: &Self, pfn: usize, order: usize) -> bool {
-        &&& new.wf()
+        &&& new.wf_next_pages()
         &&& self.with_same_mapping(
             new,
         )
@@ -570,8 +572,8 @@ impl MemoryRegion {
 
     }
 
-    spec fn req_free_page(&self, vaddr: VirtAddr, perm: UnitDeallocPerm) -> bool {
-        true
+    spec fn req_free_page(&self, vaddr: VirtAddr, perm: AllocatedPagesPerm) -> bool {
+        &&& self.wf_next_pages()
     }
 
     spec fn ens_free_page(&self, new: &Self, vaddr: VirtAddr) -> bool {
@@ -584,15 +586,15 @@ impl MemoryRegion {
         order: usize,
         perm: PgUnitPerm<DeallocUnit>,
     ) -> bool {
-        &&& self.wf()
+        &&& self.wf_next_pages()
         &&& self.valid_pfn_order(pfn, order)
         &&& perm.wf_pfn_order(self@.mr_map, pfn, order)
     }
 
     spec fn ens_free_page_raw(&self, new: &Self, pfn: usize, order: usize) -> bool {
         let end = pfn + (1usize << order);
-        let new_count = self.free_pages[order as int] + 1;
-        &&& new.wf()
+        &&& new.wf_next_pages()
+        &&& self.with_same_mapping(new)
     }
 
     spec fn req_allocate_pages_info(&self, order: usize, pg: PageInfo) -> bool {

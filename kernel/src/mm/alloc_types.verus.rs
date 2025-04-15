@@ -8,6 +8,8 @@
 use vstd::simple_pptr::MemContents;
 verus! {
 
+global size_of PageStorageType == 8;
+
 spec fn spec_page_storage_type(mem: MemContents<PageStorageType>) -> Option<PageStorageType> {
     if mem.is_init() {
         Some(mem.value())
