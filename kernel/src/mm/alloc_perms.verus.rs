@@ -324,8 +324,9 @@ impl<T: UnitType> PgUnitPerm<T> {
         self.info.unit_start()
     }
 
-    pub closed spec fn page_info(&self) -> PageInfo {
-        self.info.unit_head().page_info().unwrap()
+    #[verifier(inline)]
+    spec fn page_info(&self) -> Option<PageInfo> {
+        self.info.unit_head().page_info()
     }
 
     spec fn page_type(&self) -> PageType {

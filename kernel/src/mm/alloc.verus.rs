@@ -511,7 +511,6 @@ impl MemoryRegion {
         order: usize,
         perm: PgUnitPerm<DeallocUnit>,
     ) -> bool {
-        //&&& self@.ens_allocate_pfn(new@, pfn, order)
         &&& perm.wf_pfn_order(new@.mr_map, pfn, order)
         &&& new.wf()
         &&& new.wf_next_pages()

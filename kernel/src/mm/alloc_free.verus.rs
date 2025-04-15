@@ -212,7 +212,7 @@ impl MRFreePerms {
     spec fn wf_next(&self, order: usize, i: int) -> bool {
         let perm = self.avail[order as int][i];
         let next_perm = self.avail[order as int][i - 1];
-        match perm.info.unit_head().page_info() {
+        match perm.page_info() {
             Some(PageInfo::Free(FreeInfo { order, next_page })) => {
                 &&& (next_page == 0 <==> i == 0)
                 &&& next_page > 0 ==> next_page == next_perm.pfn()
@@ -506,7 +506,7 @@ impl MRFreePerms {
             perm.wf_pfn_order(old(self).mr_map, pfn, order),
             perm.page_type() == PageType::Free,
             old(self).wf_strict(),
-            perm.info.unit_head().page_info() == Some(
+            perm.page_info() == Some(
                 PageInfo::Free(FreeInfo { order, next_page: old(self).next_page(order) }),
             ),
         ensures
@@ -577,8 +577,8 @@ impl MRFreePerms {
             perm.page_type() == PageType::Free,
             perm.wf_pfn_order(self.mr_map, self.avail[order as int][i].pfn(), order),
             self.pg_params().valid_pfn_order(self.avail[order as int][i].pfn(), order),
-            i == 0 <==> perm.info.unit_head().page_info() == Some(
-                PageInfo::Free(FreeInfo { order, next_page: 0 }),
+            perm.page_info() == Some(
+                PageInfo::Free(FreeInfo { order, next_page: if i > 0 {self.avail[order as int][i - 1].pfn()} else {0} }),
             ),
             perm == self.avail[order as int][i],
     {
@@ -616,9 +616,11 @@ impl MRFreePerms {
                 order,
             ),
             perm.page_type() == PageType::Free,
-            old(self).wf_strict() ==> ((idx == 0) <==> perm.info.unit_head().page_info() == Some(
-                PageInfo::Free(FreeInfo { order, next_page: 0 }),
-            )),
+            old(self).wf_strict() ==> perm.page_info() == Some(
+                PageInfo::Free(FreeInfo { order, next_page: if idx == 0 {0} else {
+                    self.avail[order as int][idx - 1].pfn()
+                }  }),
+            ),
     {
         reveal(MRFreePerms::wf_at);
         reveal(MRFreePerms::wf_strict);
@@ -671,6 +673,48 @@ impl MRFreePerms {
         use_type_invariant(self);
         if self.next_page(order) != 0 {
             self.tracked_valid_next_at(order, self.avail[order as int].len() - 1);
+        }
+    }
+
+
+    #[verifier::spinoff_prover]
+    #[verifier::rlimit(2)]
+    proof fn lemma_wf_restrict_remove(&self, tracked new: &Self, order: usize, idx: int)
+        requires
+            self.wf_strict(),
+            self.wf(),
+            new.avail =~= self.avail.update(
+                order as int,
+                new.avail[order as int],
+            ),
+            order < MAX_ORDER,
+            0 <= idx < self.avail[order as int].len(),
+            idx < self.avail[order as int].len() ==> new.avail[order as int] =~= self.avail[order as int].remove(idx + 1).update(idx, new.avail[order as int][idx]),
+            idx == self.avail[order as int].len() - 1 ==> new.avail[order as int] =~= self.avail[order as int].remove(idx),
+            new.avail[order as int][idx].pfn() == self.avail[order as int][idx + 1].pfn(),
+            new.avail[order as int][idx].page_info() == Some(
+                PageInfo::Free(FreeInfo { order, next_page: if idx > 0 {self.avail[order as int][idx - 1].pfn()} else {0} }),
+            ),
+        ensures
+            new.wf_strict(),
+    {
+        use_type_invariant(new);
+        reveal(MRFreePerms::wf_strict);
+        reveal(MRFreePerms::wf_at);
+        
+        assert(idx > 0 ==> self.avail[order as int][idx - 1].pfn() == new.avail[order as int][idx - 1].pfn());
+        assert forall |o: usize, i: int|
+        #![trigger new.avail[o as int][i]]
+        0 <= o < MAX_ORDER && 0 <= i < new.avail[o as int].len()
+    implies new.wf_next(
+            o,
+            i,
+        ) by {
+            let a = new.avail[o as int][i];
+            let prev_a = new.avail[o as int][i - 1];
+            let old_a = self.avail[o as int][i];
+            let old_prev_a = self.avail[o as int][i - 1];
+            let old_prev_a = self.avail[o as int][i + 1];
         }
     }
 }

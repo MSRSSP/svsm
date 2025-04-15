@@ -1091,7 +1091,7 @@ impl MemoryRegion {
             order < MAX_ORDER,
             pfn < self.page_count, // self.check_pfn(pfn) is not necessary.
         ensures
-            perm.info.unit_head().page_info() == Some(PageInfo::Free(FreeInfo { order, next_page })),
+            perm.page_info() == Some(PageInfo::Free(FreeInfo { order, next_page })),
             next_page < MAX_PAGE_COUNT,
             next_page != 0 ==> self.valid_pfn_order(next_page, order),
     )]
@@ -1174,10 +1174,14 @@ impl MemoryRegion {
             }
             verus_with!(Tracked(&current_perm));
             let current_pfn = self.next_free_pfn(old_pfn, order);
+           
             if current_pfn == 0 {
                 return Err(AllocError::OutOfMemory);
             }
 
+            proof!{
+                assert(current_pfn == self@.free.avail[order as int][idx_].pfn());
+            }
             if current_pfn != pfn {
                 old_pfn = current_pfn;
                 proof! { idx_ = idx_ - 1; }
@@ -1222,6 +1226,8 @@ impl MemoryRegion {
             verus_with!(Tracked(&mut head_info));
             self.write_page_info(current_pfn, pg);
 
+            self.free_pages[order] -= 1;
+
             proof!{
                 prev_reserved.tracked_insert(old_pfn, prev_head_info);
                 let tracked mut info = PageInfoDb::tracked_new_unit(order, old_pfn, id, prev_reserved);
@@ -1234,9 +1240,11 @@ impl MemoryRegion {
                 let tracked mut info = PageInfoDb::tracked_new_unit(order, current_pfn, id, reserved);
                 self.perms.borrow_mut().info.tracked_insert_shares(&mut info);
                 *perm = PgUnitPerm {mem, info, typ: arbitrary()};
+                old(self)@.free.lemma_wf_restrict_remove(&self.perms.borrow().free, order, idx_);
+                assert(self.wf());
+                assert(self.wf_next_pages());
             }
 
-            self.free_pages[order] -= 1;
 
             return Ok(());
         }
