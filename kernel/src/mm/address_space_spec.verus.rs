@@ -32,7 +32,13 @@ impl LinearMap {
         }
     }
 
+    pub closed spec fn wf_virt_phy_page(&self) -> bool {
+        self.start_virt@ % crate::types::PAGE_SIZE == self.start_phys
+            % crate::types::PAGE_SIZE as int
+    }
+
     pub open spec fn wf(&self) -> bool {
+        &&& self.wf_virt_phy_page()
         &&& self.start_virt.is_canonical()
         &&& self.start_virt.offset() + self.size <= crate::address::VADDR_RANGE_SIZE
         &&& self.start_phys + self.size <= usize::MAX + 1
@@ -89,8 +95,9 @@ impl LinearMap {
             vaddr.is_canonical(),
             self.start_virt.offset() <= vaddr.offset() < self.start_virt.offset() + self.size,
         ensures
-            vaddr@ % 0x1000 == 0 ==> (#[trigger] self.get_pfn(vaddr)).is_some()
-                ==> self.try_get_virt(self.get_pfn(vaddr).unwrap()) == Some(vaddr),
+            (self.start_virt@ % 0x1000 == 0) && (vaddr@ % 0x1000 == 0) ==> (#[trigger] self.get_pfn(
+                vaddr,
+            )).is_some() ==> self.try_get_virt(self.get_pfn(vaddr).unwrap()) == Some(vaddr),
             (#[trigger] self.get_pfn(vaddr)).is_some() ==> self.try_get_virt(
                 self.get_pfn(vaddr).unwrap(),
             ).is_some(),
@@ -99,8 +106,7 @@ impl LinearMap {
 
         reveal(<LinearMap as SpecMemMapTr>::to_paddr);
         reveal(<LinearMap as SpecMemMapTr>::to_vaddr);
-        assert(self.start_virt@ % 0x1000 == 0);
-        if vaddr@ % 0x1000 == 0 {
+        if vaddr@ % 0x1000 == 0 && self.start_virt@ % 0x1000 == 0 {
             assert(vaddr.offset() - self.start_virt.offset() == (vaddr.offset()
                 - self.start_virt.offset()) / 0x1000 * 0x1000) by {
                 vaddr.property_canonical();

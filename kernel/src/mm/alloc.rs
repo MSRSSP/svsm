@@ -889,10 +889,11 @@ impl MemoryRegion {
         with Tracked(perm_with_dealloc): Tracked<&mut Option<UnitDeallocPerm>>
         requires
             old(self).req_allocate_pages_info(order, pg),
+            !matches!(pg, PageInfo::Compound(_)),
+            pg.spec_order() == order,
         ensures
             old(self).ens_allocate_pages_info(self, order, ret, *perm_with_dealloc),
     )]
-    #[verus_verify(external_body)]
     fn allocate_pages_info(&mut self, order: usize, pg: PageInfo) -> Result<VirtAddr, AllocError> {
         proof_decl! {
             //broadcast use lemma_wf_next_page_info;
@@ -901,13 +902,21 @@ impl MemoryRegion {
         self.refill_page_list(order)?;
         verus_with!(Tracked(&mut perm));
         let pfn = self.get_next_page(order)?;
-        proof! {
-            assert(self@.wf());
-            self@.map().lemma_get_virt(pfn);
+        proof_decl! {
+            let tracked (mem, mut info) = perm.tracked_take();
+            self.perms.borrow_mut().info.tracked_remove_and_merge_shares(&mut info);
+            use_type_invariant(&info);
+            let tracked PageInfoDb {id, mut reserved, ..} = info;
+            let tracked mut info_head = reserved.tracked_remove(pfn);
         }
+        verus_with!(Tracked(&mut info_head));
         self.write_page_info(pfn, pg);
         let vaddr = self.start_virt + (pfn * PAGE_SIZE);
         proof! {
+            reserved.tracked_insert(pfn, info_head);
+            let tracked mut info = PageInfoDb::tracked_new_unit(order, pfn, id, reserved);
+            self.perms.borrow_mut().info.tracked_insert_shares(&mut info);
+            let tracked perm = PgUnitPerm {mem, info, typ: arbitrary()};
             *perm_with_dealloc = Some(UnitDeallocPerm(perm));
         }
         Ok(vaddr)
@@ -917,7 +926,7 @@ impl MemoryRegion {
     #[verus_spec(ret =>
         with Tracked(perm): Tracked<&mut Option<UnitDeallocPerm>>
         requires
-            old(self).wf(),
+            old(self).wf_next_pages(),
             order < MAX_ORDER,
         ensures
             old(self).ens_allocate_pages_info(self, order, ret, *perm),
@@ -932,7 +941,7 @@ impl MemoryRegion {
     #[verus_spec(ret =>
         with Tracked(perm): Tracked<&mut Option<UnitDeallocPerm>>
         requires
-            old(self).wf(),
+            old(self).wf_next_pages(),
         ensures
             old(self).ens_allocate_pages_info(self, 0, ret, *perm),
     )]

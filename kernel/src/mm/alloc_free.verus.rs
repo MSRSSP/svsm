@@ -5,49 +5,23 @@ tracked struct MRFreePerms {
     ghost mr_map: MemRegionMapping,
 }
 
-pub proof fn tracked_nested_empty<T>(n: nat) -> (tracked ret: Seq<Seq<T>>)
+proof fn tracked_nested_empty<T>(n: nat) -> (tracked ret: Seq<Seq<T>>)
     requires
-        n > 0,
+        n >= 0,
     ensures
         ret.len() == n,
         ret == Seq::new(n, |i| Seq::<T>::empty()),
     decreases n,
 {
     if n == 0 {
+        assert(Seq::empty() =~= Seq::new(n, |i| Seq::<T>::empty()));
         Seq::tracked_empty()
     } else {
         let tracked mut ret = tracked_nested_empty((n - 1) as nat);
         ret.tracked_push(Seq::tracked_empty());
+        assert(ret =~= Seq::new(n, |i| Seq::<T>::empty()));
         ret
     }
-}
-
-proof fn raw_perm_order_disjoint(
-    mr_map: MemRegionMapping,
-    pfn1: usize,
-    o1: usize,
-    pfn2: usize,
-    o2: usize,
-    tracked p1: &mut RawPerm,
-    tracked p2: &RawPerm,
-)
-    requires
-        old(p1).wf_pfn_order(mr_map, pfn1, o1),
-        p2.wf_pfn_order(mr_map, pfn2, o2),
-    ensures
-        order_disjoint(pfn1, o1, pfn2, o2),
-        *old(p1) == *p1,
-{
-    let vaddr1 = mr_map@.map.lemma_get_virt(pfn1);
-    let vaddr2 = mr_map@.map.lemma_get_virt(pfn2);
-    let size1 = ((1usize << o1) * PAGE_SIZE) as nat;
-    let size2 = ((1usize << o2) * PAGE_SIZE) as nat;
-    vaddr1.lemma_vaddr_region_len(size1);
-    vaddr2.lemma_vaddr_region_len(size2);
-    raw_perm_is_disjoint(p1, p2);
-    reveal(<VirtAddr as SpecVAddrImpl>::region_to_dom);
-    assert(p1.dom().contains(vaddr1@ as int));
-    assert(p2.dom().contains(vaddr2@ as int));
 }
 
 proof fn lemma_order_disjoint_len(s: Seq<usize>, o: usize, max_count: usize)
@@ -265,6 +239,7 @@ impl MRFreePerms {
             old(perm).wf_pfn_order(self.mr_map, pfn, order),
             0 <= len <= self.avail[o as int].len(),
             0 <= o < MAX_ORDER,
+            0 <= order < MAX_ORDER,
         ensures
             *perm == *old(perm),
             forall|i: int|
@@ -278,7 +253,7 @@ impl MRFreePerms {
             use_type_invariant(&*self);
             let pfn2 = self.avail[o as int][len - 1].pfn();
             let tracked perm2 = self.avail.tracked_borrow(o as int).tracked_borrow(len - 1);
-            raw_perm_order_disjoint(self.mr_map, pfn, order, pfn2, o, perm, &perm2.mem);
+            self.mr_map.raw_perm_order_disjoint(pfn, order, pfn2, o, perm, &perm2.mem);
         }
     }
 
@@ -291,6 +266,7 @@ impl MRFreePerms {
     )
         requires
             old(perm).wf_pfn_order(self.mr_map(), pfn, order),
+            0 <= order < MAX_ORDER,
             0 <= max_order <= MAX_ORDER,
         ensures
             *perm == *old(perm),
@@ -319,6 +295,7 @@ impl MRFreePerms {
     )
         requires
             old(perm).wf_pfn_order(self.mr_map(), pfn, order),
+            0 <= order < MAX_ORDER,
         ensures
             *perm == *old(perm),
             forall|o: usize, i: int|
@@ -367,7 +344,7 @@ impl MRFreePerms {
             }
         };
         use_type_invariant(&p1);
-        raw_perm_order_disjoint(self.mr_map, pfn1, o1, pfn2, o2, &mut p1.mem, &p2.mem);
+        self.mr_map.raw_perm_order_disjoint(pfn1, o1, pfn2, o2, &mut p1.mem, &p2.mem);
         a.tracked_insert(i, p1);
         avail.tracked_insert(o1 as int, a);
         assert(a =~= olda);

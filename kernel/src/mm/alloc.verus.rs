@@ -598,7 +598,7 @@ impl MemoryRegion {
     }
 
     spec fn req_allocate_pages_info(&self, order: usize, pg: PageInfo) -> bool {
-        &&& self.wf()
+        &&& self.wf_next_pages()
         &&& order < MAX_ORDER
         &&& pg.spec_order() == order
         &&& pg.spec_type().spec_is_deallocatable()
@@ -614,11 +614,7 @@ impl MemoryRegion {
         let pfn = self.spec_get_pfn(ret.unwrap()).unwrap();
         let UnitDeallocPerm(perm) = perm_with_dealloc.unwrap();
         &&& self.with_same_mapping(new)
-        &&& new.wf()/*&&& ret.is_ok() ==> {
-            &&& perm.wf_pfn_order(new.view2().map(), pfn, order)
-            &&& perm_with_dealloc.is_some()
-        }*/
-
+        &&& new.wf()
     }
 }
 

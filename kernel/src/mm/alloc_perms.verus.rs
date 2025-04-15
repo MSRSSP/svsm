@@ -148,6 +148,37 @@ impl MemRegionMapping {
         }
         p.split(vaddr1.region_to_dom(size as nat))
     }
+
+    proof fn raw_perm_order_disjoint(
+        &self,
+        pfn1: usize,
+        o1: usize,
+        pfn2: usize,
+        o2: usize,
+        tracked p1: &mut RawPerm,
+        tracked p2: &RawPerm,
+    )
+        requires
+            self.wf(),
+            0 <= o1 < 64,
+            0 <= o2 < 64,
+            old(p1).wf_pfn_order(*self, pfn1, o1),
+            p2.wf_pfn_order(*self, pfn2, o2),
+        ensures
+            order_disjoint(pfn1, o1, pfn2, o2),
+            *old(p1) == *p1,
+    {
+        let vaddr1 = self@.map.lemma_get_virt(pfn1);
+        let vaddr2 = self@.map.lemma_get_virt(pfn2);
+        let size1 = ((1usize << o1) * PAGE_SIZE) as nat;
+        let size2 = ((1usize << o2) * PAGE_SIZE) as nat;
+        vaddr1.lemma_vaddr_region_len(size1);
+        vaddr2.lemma_vaddr_region_len(size2);
+        raw_perm_is_disjoint(p1, p2);
+        reveal(<VirtAddr as SpecVAddrImpl>::region_to_dom);
+        assert(p1.dom().contains(vaddr1@ as int));
+        assert(p2.dom().contains(vaddr2@ as int));
+    }
 }
 
 impl MemRegionMapping {
@@ -369,7 +400,7 @@ impl<T: UnitType> PgUnitPerm<T> {
         ensures
             ret == (old(self).mem, old(self).info),
             ret.1.npages() > 0 ==> ret.1.is_unit(),
-            T::wf_share_total(ret.1.id().shares, ret.1.id().total),
+            ret.1.npages() > 0 ==> T::wf_share_total(ret.1.id().shares, ret.1.id().total),
     {
         use_type_invariant(&*self);
         let tracked mut tmp = PgUnitPerm::empty(self.info.id);
@@ -389,7 +420,7 @@ impl MemoryRegionPerms {
             info_ptr_exposed@ == mr_map@.provenance,
         ensures
             ret.mr_map == mr_map,
-            ret.free.avail.len() == 0,
+            ret.free.avail === Seq::new(MAX_ORDER as nat, |order| Seq::empty()),
     {
         MemoryRegionPerms {
             free: MRFreePerms::tracked_empty(mr_map),
@@ -502,6 +533,7 @@ impl MemoryRegion {
 
     pub closed spec fn wf_basic2(&self) -> bool {
         &&& self.page_count <= MAX_PAGE_COUNT
+        &&& self.start_virt@ % PAGE_SIZE == 0
         &&& self@.mr_map.wf()
         &&& self@.info_ptr_exposed@ == self@.mr_map@.provenance
         &&& self.map() == self@.mr_map@.map
