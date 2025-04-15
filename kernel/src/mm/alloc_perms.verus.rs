@@ -240,6 +240,10 @@ impl AllocatedPagesPerm {
         self.perm.info.unit_start()
     }
 
+    spec fn with_vaddr(&self, vaddr: VirtAddr) -> bool {
+        self.mr_map@.map.get_pfn(vaddr) == Some(self.pfn())
+    }
+
     spec fn vaddr(&self) -> VirtAddr {
         self.mr_map@.map.try_get_virt(self.pfn()).unwrap()
     }
@@ -252,9 +256,11 @@ impl AllocatedPagesPerm {
     spec fn wf(&self) -> bool {
         let order = self.perm.info.order();
         let pfn = self.pfn();
+        &&& order < MAX_ORDER
+        &&& self.mr_map.pg_params().valid_pfn_order(pfn, order)
         &&& self.mr_map.shares() == self.size()
         &&& self.mr_map.base_ptr() == self.perm.info.base_ptr()
-        &&& self.perm.mem.wf_pfn_order(self.mr_map, pfn, order)
+        &&& self.perm.wf_pfn_order(self.mr_map, pfn, order)
         &&& self.perm.page_type().spec_is_deallocatable()
     }
 }
@@ -420,7 +426,7 @@ impl MemoryRegionPerms {
     }
 
     spec fn wf_base_ptr(&self) -> bool {
-        &&& self.mr_map == self.free.mr_map()
+        &&& self.mr_map@ == self.free.mr_map()@
         &&& self.info_ptr_exposed@ == self.mr_map@.provenance
         &&& self.info.base_ptr() == self.base_ptr()
     }

@@ -938,8 +938,10 @@ impl PageInfoDb {
             self.dom().contains(idx),
         ensures
             item == self@[idx],
+            item.is_valid_pginfo(),
     {
         use_type_invariant(self);
+        reveal(PageInfoDb::wf_basic_at);
         self.reserved.tracked_borrow(idx)
     }
 }

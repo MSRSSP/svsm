@@ -576,8 +576,8 @@ impl MemoryRegion {
         &&& self.wf_next_pages()
     }
 
-    spec fn ens_free_page(&self, new: &Self, vaddr: VirtAddr) -> bool {
-        &&& self.with_same_mapping(new)
+    spec fn ens_free_page(&self, new: &Self, vaddr: VirtAddr, perm: AllocatedPagesPerm) -> bool {
+        self@.mr_map@ == new@.mr_map@
     }
 
     spec fn req_free_page_raw(

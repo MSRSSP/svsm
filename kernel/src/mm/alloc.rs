@@ -892,7 +892,7 @@ impl MemoryRegion {
         ensures
             old(self).ens_allocate_pages_info(self, order, ret, *perm_with_dealloc),
     )]
-    #[verus_verify(spinoff_prover)]
+    #[verus_verify(external_body)]
     fn allocate_pages_info(&mut self, order: usize, pg: PageInfo) -> Result<VirtAddr, AllocError> {
         proof_decl! {
             //broadcast use lemma_wf_next_page_info;
@@ -1050,7 +1050,7 @@ impl MemoryRegion {
         ensures
             old(self).ens_merge_pages(self, pfn1, pfn2, order, ret, *perm),
     )]
-    #[verus_verify(spinoff_prover, rlimit(4))]
+    #[verus_verify(spinoff_prover, rlimit(6))]
     fn merge_pages(&mut self, pfn1: usize, pfn2: usize, order: usize) -> Result<usize, AllocError> {
         if order >= MAX_ORDER - 1 {
             return Err(AllocError::InvalidPageOrder(order));
@@ -1395,9 +1395,10 @@ impl MemoryRegion {
     #[verus_spec(
         with Tracked(perm): Tracked<AllocatedPagesPerm>
         requires
-            old(self).wf_next_pages()
+            old(self).wf_next_pages(),
+            perm.with_vaddr(vaddr),
         ensures
-            old(self).ens_free_page(self, vaddr),
+            old(self).ens_free_page(self, vaddr, perm),
     )]
     fn free_page(&mut self, vaddr: VirtAddr) {
         let Ok(pfn) = self.get_pfn(vaddr) else {
@@ -1407,12 +1408,18 @@ impl MemoryRegion {
         let res = self.read_page_info(pfn);
 
         proof_decl! {
+            use_type_invariant(&perm);
             let tracked AllocatedPagesPerm{mut perm, mr_map} = perm;
             self.perms.borrow().mr_map.is_same(&mr_map);
-            if matches!(res, PageInfo::Allocated(_) | PageInfo::Slab(_) | PageInfo::File(_)) {
-                self.perms.borrow().free.tracked_perm_disjoint(&mut perm.mem, pfn, res.spec_order());
+            assert(pfn == perm.pfn());
+            self.perms.borrow().info.tracked_is_same_info(&perm, pfn);
+            assert(self.valid_pfn_order(pfn, res.spec_order())) by {
+                assert(mr_map.pg_params().valid_pfn_order(pfn, res.spec_order()));
+                mr_map.pg_params().lemma_reserved_pfn_count();
             }
-            self.perms.borrow_mut().info.tracked_remove_and_merge_shares(&mut perm.info);
+            use_type_invariant(&mr_map);
+            self.perms.borrow_mut().mr_map.0.merge(mr_map.0);
+            assert(self@.mr_map.shares() == mr_map.shares() + old(self)@.mr_map.shares());
         }
 
         match res {
