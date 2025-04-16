@@ -15,6 +15,7 @@
 // Note:
 // - No additional specification needs to be trusted here; all assumptions are established
 //   within the trusted context of the kernel entry.
+use crate::mm::address_space::LinearMap;
 use crate::types::lemma_page_size;
 use crate::utils::util::spec_align_up;
 use verify_external::convert::FromSpec;
@@ -33,7 +34,9 @@ use vstd::set_lib::set_int_range;
 
 verus! {
 
-use crate::mm::address_space::LinearMap;
+mod alloc_spec { include!("alloc_inner.verus.rs");  }
+
+use alloc_spec::*;
 
 broadcast group set_len_group {
     verify_proof::set::lemma_set_filter_disjoint_len,
@@ -48,6 +51,7 @@ broadcast group alloc_broadcast_group {
     lemma_bit_usize_shl_values,
     lemma_page_size,
     set_len_group,
+    alloc_spec::lemma_compound_neighbor,
 }
 
 broadcast use alloc_broadcast_group;
@@ -59,8 +63,6 @@ include!("alloc_free.verus.rs");
 include!("alloc_perms.verus.rs");
 
 //include!("alloc_mr.verus.rs");
-include!("alloc_p.verus.rs");
-
 include!("alloc_types.verus.rs");
 
 pub type RawPerm = PointsToRaw;
@@ -482,19 +484,9 @@ impl MemoryRegion {
             }
     }
 
-    spec fn ens_find_neighbor(pfn: usize, order: usize, ret_pfn: usize) -> bool {
-        &&& ret_pfn == pfn - (1usize << order) || ret_pfn == pfn + (1usize << order)
-        &&& ret_pfn == pfn - (1usize << order) ==> ret_pfn % (1usize << (order + 1) as usize) == 0
-        &&& ret_pfn == pfn + (1usize << order) ==> pfn % (1usize << (order + 1) as usize) == 0
-        &&& ret_pfn % (1usize << order) == 0
-    }
-
     spec fn ens_compound_neighbor_ok(&self, pfn: usize, order: usize, ret_pfn: usize) -> bool {
-        let new_order = (order + 1) as usize;
-        let n = 1usize << order;
-        let m = 1usize << new_order;
         &&& ret_pfn < self.page_count
-        &&& Self::ens_find_neighbor(pfn, order, ret_pfn)
+        &&& ens_find_neighbor(pfn, order, ret_pfn)
     }
 
     spec fn req_allocate_pfn(&self, pfn: usize, order: usize) -> bool {

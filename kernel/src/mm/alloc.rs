@@ -699,20 +699,7 @@ impl MemoryRegion {
 
         proof! {
             let idx = self@.free.avail[order as int].len() - 1;
-            assert(self@.free.wf_strict());
             let p = self.perms.borrow().free.tracked_borrow(order, idx);
-            assert(p.page_info() == Some(
-                PageInfo::Free(
-                    FreeInfo {
-                        order,
-                        next_page: if idx > 0 {
-                            self@.free.avail[order as int][idx - 1].pfn()
-                        } else {
-                            0
-                        },
-                    },
-                ),
-            ));
             *perm = self.perms.borrow_mut().free.tracked_pop(order);
             assert(self@.free.next_pages()[order as int] == if idx > 0 { self@.free.avail[order as int].last().pfn()} else {0});
             self.perms.borrow().info.tracked_is_same_info(&*perm, pfn);
@@ -1032,8 +1019,7 @@ impl MemoryRegion {
     #[verus_verify(spinoff_prover)]
     fn compound_neighbor(&self, pfn: usize, order: usize) -> Result<usize, AllocError> {
         proof! {
-            broadcast use lemma_compound_neighbor, lemma_bit_usize_and_mask_is_mod;
-            //assert(pfn % (1usize << order) as usize ==  0);
+            broadcast use lemma_bit_usize_and_mask_is_mod;
             assert(pfn & ((1usize << order) - 1) as usize == 0);
         }
         if order >= MAX_ORDER - 1 {

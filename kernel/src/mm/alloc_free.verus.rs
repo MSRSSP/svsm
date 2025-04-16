@@ -184,9 +184,31 @@ impl MRFreePerms {
     }
 
     spec fn wf_next(&self, order: usize, i: int) -> bool {
-        let perm = self.avail[order as int][i];
+        &&& self.ens_perm_next(order, i, self.avail[order as int][i])
+    }
+
+    #[verifier(opaque)]
+    spec fn wf_strict(&self) -> bool {
+        let avail = self.avail;
+        forall|o: int, i: int|
+            #![trigger avail[o][i]]
+            0 <= o < MAX_ORDER && 0 <= i < avail[o].len() ==> self.wf_next(o as usize, i)
+    }
+
+    #[verifier(inline)]
+    spec fn ens_perm_valid(&self, order: usize, i: int, perm: PgUnitPerm<DeallocUnit>) -> bool {
+        let pfn = perm.info.unit_start();
+        &&& perm == self.avail[order as int][i]
+        &&& self.pg_params().valid_pfn_order(pfn, order)
+        &&& perm.wf_pfn_order(self.mr_map, pfn, order)
+        &&& perm.page_type() == PageType::Free
+        &&& pfn > 0
+    }
+
+    #[verifier(inline)]
+    spec fn ens_perm_next(&self, order: usize, i: int, perm: PgUnitPerm<DeallocUnit>) -> bool {
         let next_perm = self.avail[order as int][i - 1];
-        match perm.page_info() {
+        &&& match perm.page_info() {
             Some(PageInfo::Free(FreeInfo { order, next_page })) => {
                 &&& (next_page == 0 <==> i == 0)
                 &&& next_page > 0 ==> next_page == next_perm.pfn()
@@ -195,36 +217,25 @@ impl MRFreePerms {
         }
     }
 
-    #[verifier(opaque)]
-    spec fn wf_strict(&self) -> bool {
-        forall|order: usize, i: int|
-            #![trigger self.avail[order as int][i]]
-            0 <= order < MAX_ORDER && 0 <= i < self.avail[order as int].len() ==> self.wf_next(
-                order,
-                i,
-            )
+    #[verifier(inline)]
+    spec fn ens_perm_strict(&self, order: usize, i: int, perm: PgUnitPerm<DeallocUnit>) -> bool {
+        &&& self.ens_perm_valid(order, i, perm)
+        &&& self.ens_perm_next(order, i, perm)
     }
 
     #[verifier(opaque)]
     spec fn wf_at(&self, order: usize, i: int) -> bool {
         let perm = self.avail[order as int][i];
-        let pfn = perm.info.unit_start();
-        &&& self.pg_params().valid_pfn_order(pfn, order)
-        &&& perm.wf_pfn_order(self.mr_map, pfn, order)
-        &&& perm.page_type() == PageType::Free
-        &&& pfn > 0
+        self.ens_perm_valid(order, i, perm)
     }
 
     #[verifier::type_invariant]
     spec fn wf(&self) -> bool {
         &&& self.mr_map.wf()
         &&& self.avail.len() == MAX_ORDER
-        &&& forall|order: int, i: int|
-            #![trigger self.avail[order][i]]
-            0 <= order < MAX_ORDER && 0 <= i < self.avail[order as int].len() ==> self.wf_at(
-                order as usize,
-                i,
-            )
+        &&& forall|o: int, i: int|
+            #![trigger self.avail[o][i]]
+            0 <= o < MAX_ORDER && 0 <= i < self.avail[o].len() ==> self.wf_at(o as usize, i)
     }
 
     proof fn tracked_perm_disjoint_rec1(
@@ -522,25 +533,18 @@ impl MRFreePerms {
             old(self).next_page(order) > 0,
             old(self).wf_strict(),
         ensures
+            self.wf_strict(),
             self.avail == old(self).avail.update(order as int, self.avail[order as int]),
             self.avail[order as int] == old(self).avail[order as int].take(
                 old(self).avail[order as int].len() - 1,
             ),
-            perm == old(self).avail[order as int].last(),
-            perm.wf_pfn_order(self.mr_map, old(self).avail[order as int].last().pfn(), order),
+            old(self).ens_perm_strict(order, old(self).avail[order as int].len() - 1, perm),
             self.mr_map() == old(self).mr_map(),
-            self.pg_params() == old(self).pg_params(),
             self.nr_free() == old(self).nr_free().update(
                 order as int,
                 (old(self).nr_free()[order as int] - 1) as usize,
             ),
             old(self).nr_free()[order as int] > 0,
-            old(self).next_page(order) > 0 ==> old(self).valid_pfn_order(
-                old(self).next_page(order),
-                order,
-            ),
-            perm.page_type() == PageType::Free,
-            self.wf_strict(),
     {
         self.tracked_remove(order, self.avail[order as int].len() - 1)
     }
@@ -554,26 +558,12 @@ impl MRFreePerms {
             0 <= i < self.avail[order as int].len(),
             self.wf_strict(),
         ensures
-            perm.page_type() == PageType::Free,
-            perm.wf_pfn_order(self.mr_map, self.avail[order as int][i].pfn(), order),
-            self.pg_params().valid_pfn_order(self.avail[order as int][i].pfn(), order),
+            self.ens_perm_strict(order, i, *perm),
+            self.pg_params().valid_pfn_order(perm.pfn(), order),
             i > 0 ==> self.pg_params().valid_pfn_order(
                 self.avail[order as int][i - 1].pfn(),
                 order,
             ),
-            perm.page_info() == Some(
-                PageInfo::Free(
-                    FreeInfo {
-                        order,
-                        next_page: if i > 0 {
-                            self.avail[order as int][i - 1].pfn()
-                        } else {
-                            0
-                        },
-                    },
-                ),
-            ),
-            perm == self.avail[order as int][i],
     {
         reveal(MRFreePerms::wf_at);
         use_type_invariant(self);
@@ -593,35 +583,16 @@ impl MRFreePerms {
             0 <= idx < old(self).avail[order as int].len(),
         ensures
             self.avail == old(self).avail.update(order as int, self.avail[order as int]),
-            self.avail == old(self).avail.update(order as int, self.avail[order as int]),
             self.avail[order as int] == old(self).avail[order as int].remove(idx),
-            perm.wf_pfn_order(self.mr_map, old(self).avail[order as int][idx].pfn(), order),
-            perm == old(self).avail[order as int][idx],
+            old(self).ens_perm_valid(order, idx, perm),
             self.mr_map() == old(self).mr_map(),
-            self.pg_params() == old(self).pg_params(),
             self.nr_free() == old(self).nr_free().update(
                 order as int,
                 (old(self).nr_free()[order as int] - 1) as usize,
             ),
             old(self).nr_free()[order as int] > 0,
-            old(self).avail[order as int][idx].pfn() > 0 ==> old(self).valid_pfn_order(
-                old(self).avail[order as int][idx].pfn(),
-                order,
-            ),
-            perm.page_type() == PageType::Free,
-            idx == self.avail[order as int].len() ==> old(self).wf_strict() ==> self.wf_strict(),
-            old(self).wf_strict() ==> perm.page_info() == Some(
-                PageInfo::Free(
-                    FreeInfo {
-                        order,
-                        next_page: if idx == 0 {
-                            0
-                        } else {
-                            self.avail[order as int][idx - 1].pfn()
-                        },
-                    },
-                ),
-            ),
+            old(self).wf_strict() ==> old(self).ens_perm_strict(order, idx, perm),
+            old(self).wf_strict() ==> (idx == self.avail[order as int].len() ==> self.wf_strict()),
     {
         reveal(MRFreePerms::wf_at);
         reveal(MRFreePerms::wf_strict);
@@ -648,16 +619,6 @@ impl MRFreePerms {
             (old(self).nr_free()[order as int] - 1) as usize,
         ));
         use_type_invariant(&*self);
-        /*if idx == assert forall|o: usize, i: int|
-            #![trigger self.avail[o as int][i]]
-            0 <= o < MAX_ORDER && 0 <= i < self.avail[o as int].len()
-        implies self.wf_next(o, i) by {
-                let a = self.avail[o as int][i];
-                let prev_a = self.avail[o as int][i - 1];
-                let old_a = old(self).avail[o as int][i];
-                let old_prev_a = old(self).avail[o as int][i - 1];
-                let old_prev_a = old(self).avail[o as int][i + 1];
-        }*/
         perm
     }
 
