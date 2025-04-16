@@ -73,7 +73,7 @@ impl MemoryRegion {
         &&& perm.valid()
         &&& perm.writable()
         &&& perm.ptr() == self@.page_info_ptr(pfn)
-        &&& self.wf_basic2()
+        &&& self.wf_params()
     }
 
     spec fn writable_page_infos(
@@ -122,7 +122,7 @@ impl MemoryRegion {
         let size = (1usize << order);
         &&& self.writable_page_infos((pfn + 1) as usize, (size - 1) as usize, perms)
         &&& self.inbound_pfn_order(pfn, order)
-        &&& self.wf_basic2()
+        &&& self.wf_params()
     }
 
     spec fn ens_mark_compound_page(
@@ -167,7 +167,7 @@ impl MemoryRegion {
         &&& next_pfn < MAX_PAGE_COUNT
         &&& self.inbound_pfn_order(pfn, order)
         &&& self.writable_page_infos(pfn, 1usize << order, perms)
-        &&& self.wf_basic2()
+        &&& self.wf_params()
     }
 
     spec fn ens_init_compound_page(
@@ -266,15 +266,14 @@ impl MemoryRegion {
     }
 }
 
+impl View for MemoryRegion {
+    type V = MemoryRegionPerms;
+    closed spec fn view(&self) -> MemoryRegionPerms {
+        self.perms@
+    }
+}
+
 impl MemoryRegion {
-    pub closed spec fn view2(&self) -> MemoryRegionPerms {
-        self.perms@
-    }
-
-    pub closed spec fn view(&self) -> MemoryRegionPerms {
-        self.perms@
-    }
-
     spec fn map(&self) -> LinearMap {
         LinearMap {
             start_virt: self.start_virt,
@@ -287,14 +286,6 @@ impl MemoryRegion {
         self@.mr_map === new@.mr_map
     }
 
-    // Basic invariant that should hold except in initialization stage
-    spec fn wf_params(&self) -> bool {
-        true
-    }
-
-    spec fn wf_reserved(&self) -> bool {
-        true
-    }
 
     spec fn spec_get_pfn(&self, vaddr: VirtAddr) -> Option<usize> {
         self.map().get_pfn(vaddr)
@@ -304,19 +295,13 @@ impl MemoryRegion {
         self.map().try_get_virt(pfn as usize)
     }
 
-    #[verifier(inline)]
-    spec fn spec_get_virt(&self, pfn: int) -> VirtAddr {
-        self.spec_try_get_virt(pfn).unwrap()
-    }
-
     /// virt_offset == physical_offset
     spec fn ens_get_pfn(&self, vaddr: VirtAddr, ret: Result<usize, AllocError>) -> bool {
         &&& ret.is_ok() == self.spec_get_pfn(vaddr).is_some()
         &&& ret.is_ok() ==> {
             &&& ret.unwrap() == self.spec_get_pfn(vaddr).unwrap()
-            &&& self.spec_try_get_virt(ret.unwrap() as int).is_some()
             &&& ret.unwrap() < self.page_count
-            &&& vaddr@ % 0x1000 == 0 ==> self.spec_get_virt(ret.unwrap() as int) == vaddr
+            &&& vaddr@ % 0x1000 == 0 ==> self.spec_try_get_virt(ret.unwrap() as int) == Some(vaddr)
         }
     }
 
@@ -507,7 +492,7 @@ impl MemoryRegion {
         let pfn = self.spec_get_pfn(ret.unwrap()).unwrap();
         let UnitDeallocPerm(perm) = perm_with_dealloc.unwrap();
         &&& self.with_same_mapping(new)
-        &&& new.wf()
+        &&& new.wf_next_pages()
     }
 }
 

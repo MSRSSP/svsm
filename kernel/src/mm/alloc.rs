@@ -480,7 +480,7 @@ impl MemoryRegion {
     /// Creates a new [`MemoryRegion`] with default values.
     #[verus_spec(ret =>
         ensures
-            ret.wf()
+            ret.wf_next_pages()
     )]
     #[verus_verify(external_body)]
     const fn new() -> Self {
@@ -500,7 +500,7 @@ impl MemoryRegion {
     #[expect(dead_code)]
     #[verus_spec(ret =>
         requires
-            self.wf_basic2(),
+            self.wf_params(),
         ensures
             ret.is_some() == self.map().to_paddr(vaddr).is_some(),
             ret.is_some() ==> ret.unwrap()@ == self.map().to_paddr(vaddr).unwrap(),
@@ -527,7 +527,7 @@ impl MemoryRegion {
 
     #[verus_spec(ret =>
         requires
-            self.wf_basic2(),
+            self.wf_params(),
             pfn < self.page_count,
         ensures
             ret == self@.page_info_ptr(pfn)
@@ -555,7 +555,7 @@ impl MemoryRegion {
     #[verus_spec(ret =>
         requires
             pfn < self.page_count,
-            self.wf_basic2(),
+            self.wf_params(),
         ensures
             ret == self@.page_info_ptr(pfn),
     )]
@@ -630,7 +630,7 @@ impl MemoryRegion {
     /// Gets the virtual offset of a virtual address within the memory region.
     #[verus_spec(ret=>
         requires
-            self.wf_basic2(),
+            self.wf_params(),
         ensures
             ret.is_some() ==> ret.unwrap() == vaddr.offset() - self.start_virt.offset(),
             ret.is_some() == self.map().to_paddr(vaddr).is_some(),
@@ -653,7 +653,7 @@ impl MemoryRegion {
     /// Gets the page frame number for a given virtual address.
     #[verus_spec(ret =>
         requires
-            self.wf(),
+            self.wf_params(),
         ensures
             ret.is_ok() == self.map().get_pfn(vaddr).is_some(),
             self.ens_get_pfn(vaddr, ret),
@@ -1107,7 +1107,7 @@ impl MemoryRegion {
     #[verus_spec(next_page =>
         with Tracked(perm): Tracked<&PgUnitPerm<DeallocUnit>>
         requires
-            self.wf(),
+            self.req_read_any_info(),
             perm.page_type() == PageType::Free,
             perm.wf_pfn_order(self@.mr_map, pfn, order),
             order < MAX_ORDER,

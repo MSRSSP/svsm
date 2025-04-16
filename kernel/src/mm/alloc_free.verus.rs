@@ -541,8 +541,7 @@ impl MRFreePerms {
     {
         use_type_invariant(new);
         reveal(MRFreePerms::wf_strict);
-        //reveal(MRFreePerms::wf_at);
-
+        reveal(MRFreePerms::wf_at);
         assert(idx > 0 ==> self.avail[order as int][idx - 1].pfn() == new.avail[order as int][idx
             - 1].pfn());
         assert forall|o: usize, i: int|

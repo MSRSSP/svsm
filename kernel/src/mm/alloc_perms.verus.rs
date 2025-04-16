@@ -252,31 +252,20 @@ impl MemoryRegionPerms {
         &&& self.npages() == info.npages()
         &&& info@.dom() =~= Set::new(
             |idx| 0 <= idx < self.npages(),
-        )/*&&& forall|order: usize, i: int|
-            //#![trigger self.free.next_lists()[order as int][i]]
-            0 <= order < MAX_ORDER && 0 <= i < self.free.next_lists()[order as int].len() as int
-                ==> self.wf_next(order, i)*/
-        /*&&& forall|pfn: usize|
-            self.reserved_count() <= pfn < info.npages() ==> #[trigger] info@[pfn].page_info()
-                == Some(PageInfo::Reserved(ReservedInfo))*/
-
+        )
+        &&& self.wf_base_ptr()
     }
 
     spec fn wf(&self) -> bool {
         &&& self.wf_info()
-        &&& self.wf_base_ptr()
+        //&&& self.wf_base_ptr()
     }
 }
 
 impl MemoryRegion {
-    pub closed spec fn wf(&self) -> bool {
-        let info = self.view2().info;
-        &&& self.wf_perms()
-        &&& self.wf_basic2()
-    }
-
     pub closed spec fn wf_next_pages(&self) -> bool {
-        &&& self.wf()
+        &&& self.wf_perms()
+        &&& self.wf_params()
         &&& self.next_page@ =~= self@.free.next_pages()
         &&& forall|o|   //#![trigger self@.free.next_pages()[o]]
 
@@ -288,7 +277,6 @@ impl MemoryRegion {
         let info = self@.info;
         &&& self@.wf()
         &&& forall|order|   //#![trigger info.nr_page(order)]
-
             0 <= order < MAX_ORDER ==> info.nr_page(order) == (
             #[trigger] self.nr_pages[order as int])
         &&& self@.free.nr_free() =~= self.free_pages@
@@ -296,7 +284,7 @@ impl MemoryRegion {
         &&& self.page_count == self@.npages()
     }
 
-    pub closed spec fn wf_basic2(&self) -> bool {
+    pub closed spec fn wf_params(&self) -> bool {
         &&& self.page_count <= MAX_PAGE_COUNT
         &&& self.start_virt@ % PAGE_SIZE == 0
         &&& self@.mr_map.wf()
@@ -307,7 +295,7 @@ impl MemoryRegion {
 
     pub closed spec fn req_read_any_info(&self) -> bool {
         &&& self.page_count == self@.npages()
-        &&& self.wf_basic2()
+        &&& self.wf_params()
         &&& self@.wf()
     }
 }
