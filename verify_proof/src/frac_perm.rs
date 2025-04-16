@@ -1,6 +1,12 @@
-/// A fully verified frac-based ownership to share tracked ghost permissions.
-/// This is motivated by PCM from vstd and https://github.com/zeldovich/verus-experiments/blob/main/disk/frac.rs
-/// The state-machine proofs are motivated from the proof for Rc in vstd.
+// SPDX-License-Identifier: MIT OR Apache-2.0
+//
+// Copyright (c) Microsoft Corporation
+//
+// Author: Ziqiao Zhou <ziqiaozhou@microsoft.com>
+//
+// A fully verified frac-based ownership to share tracked ghost permissions.
+// This is motivated by PCM lib from vstd.
+// The state-machine proofs are motivated from the proof for Rc in vstd.
 use state_machines_macros::*;
 use vstd::modes::tracked_swap;
 use vstd::multiset::*;

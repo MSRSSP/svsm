@@ -1,4 +1,10 @@
-/// A fully verified frac-based pointer permission to share tracked memory permissions.
+// SPDX-License-Identifier: MIT OR Apache-2.0
+//
+// Copyright (c) Microsoft Corporation
+//
+// Author: Ziqiao Zhou <ziqiaozhou@microsoft.com>
+//
+// A fully verified frac-based pointer permission to share tracked memory permissions.
 use state_machines_macros::*;
 
 use vstd::prelude::*;
@@ -312,7 +318,6 @@ impl<T> FracTypedPerm<T> {
     {
         use_type_invariant(&*self);
         use_type_invariant(&*other);
-        assert(self.ptr() == other.ptr());
         self.has_same_id(&other);
         self.p.is_same(&other.p);
     }

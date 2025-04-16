@@ -24,9 +24,8 @@ use verify_proof::bits::{
 };
 use verify_proof::frac_ptr::raw_perm_is_disjoint;
 use verify_proof::frac_ptr::FracTypedPerm;
-use verify_proof::nonlinear::lemma_align_down_properties;
-use verify_proof::nonlinear::lemma_modulus_add_sub_m;
-use verify_proof::set::{lemma_int_range_disjoint, spec_int_range_disjoint};
+use verify_proof::nonlinear::*;
+use verify_proof::set::*;
 use vstd::arithmetic::div_mod::{lemma_add_mod_noop, lemma_mod_self_0, lemma_small_mod};
 use vstd::arithmetic::mul::group_mul_properties;
 use vstd::arithmetic::mul::{lemma_mul_inequality, lemma_mul_ordering};

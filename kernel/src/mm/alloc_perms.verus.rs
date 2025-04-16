@@ -16,15 +16,15 @@ pub struct MemRegionMappingView {
     pub provenance: Provenance,
 }
 
-pub uninterp spec fn alloc_inv_ptr() -> *const Tracked<MemRegionMappingView>;
-
 #[allow(missing_debug_implementations)]
 pub struct MemRegionMapping(FracTypedPerm<Tracked<MemRegionMappingView>>);
 
 impl MemRegionMapping {
+    pub uninterp spec fn const_ptr() -> *const Tracked<MemRegionMappingView>;
+
     #[verifier::type_invariant]
     pub closed spec fn wf(&self) -> bool {
-        &&& self.0.ptr() == alloc_inv_ptr()
+        &&& self.0.ptr() == Self::const_ptr()
         &&& self.0.valid()
         &&& self@.map.wf()
     }
@@ -51,7 +51,7 @@ impl MemRegionMapping {
         )
     }
 
-    pub proof fn is_same(tracked &self, tracked other: &MemRegionMapping)
+    pub proof fn is_same(tracked &self, tracked other: &Self)
         ensures
             self@ == other@,
     {
@@ -181,20 +181,6 @@ impl MemRegionMapping {
     }
 }
 
-impl MemRegionMapping {
-    spec fn valid_perm_by_vaddr(&self, perm: RawPerm, vaddr: VirtAddr, order: usize) -> bool {
-        let size = ((1usize << order) * PAGE_SIZE) as nat;
-        &&& perm.dom() =~= vaddr.region_to_dom(size)
-        &&& perm.provenance() === self@.provenance
-    }
-
-    closed spec fn valid_perm_by_pfn(&self, perm: RawPerm, pfn: usize, order: usize) -> bool {
-        let vaddr = self@.map.try_get_virt(pfn);
-        &&& vaddr.is_some()
-        &&& self.valid_perm_by_vaddr(perm, vaddr.unwrap(), order)
-    }
-}
-
 spec fn spec_map_page_info_addr(map: LinearMap, pfn: usize) -> VirtAddr {
     let reserved_unit_size = size_of::<PageStorageType>();
     let start = map.start_virt;
@@ -242,22 +228,6 @@ tracked struct MemoryRegionPerms {
     info: PageInfoDb,  // readonly share of pginfo for all pfns.
     info_ptr_exposed: IsExposed,
     mr_map: MemRegionMapping,
-}
-
-// Increment a thin pointer.
-// It does not make sense to increment a fat pointer.
-spec fn spec_ptr_add<T>(base_ptr: *const T, idx: usize) -> *const T
-    recommends
-        base_ptr@.metadata == vstd::raw_ptr::Metadata::Thin,
-{
-    let vstd::raw_ptr::PtrData { addr, provenance, metadata } = base_ptr@;
-    vstd::raw_ptr::ptr_from_data(
-        vstd::raw_ptr::PtrData {
-            addr: VirtAddr::from_spec((addr + idx * size_of::<T>()) as usize)@,
-            provenance,
-            metadata,
-        },
-    )
 }
 
 #[allow(missing_debug_implementations)]

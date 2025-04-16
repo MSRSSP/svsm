@@ -1,3 +1,4 @@
+use crate::address::spec_ptr_add;
 use verify_proof::frac_ptr::tracked_map_merge_right_shares;
 use verify_proof::frac_ptr::tracked_map_shares;
 use verify_proof::set::{lemma_set_usize_range, set_usize_range};
