@@ -467,7 +467,6 @@ impl MRFreePerms {
     }
 
     #[verifier::spinoff_prover]
-    #[verifier::rlimit(2)]
     proof fn tracked_remove(tracked &mut self, order: usize, idx: int) -> (tracked perm: PgUnitPerm<
         DeallocUnit,
     >)
@@ -488,7 +487,6 @@ impl MRFreePerms {
             old(self).wf_strict() ==> (idx == self.avail[order as int].len() ==> self.wf_strict()),
     {
         reveal(MRFreePerms::wf_at);
-        reveal(MRFreePerms::wf_strict);
         use_type_invariant(&*self);
         let p = self.avail[order as int][idx];
         let tracked mut tmp = MRFreePerms::tracked_empty(old(self).mr_map());
@@ -512,6 +510,14 @@ impl MRFreePerms {
             (old(self).nr_free()[order as int] - 1) as usize,
         ));
         use_type_invariant(&*self);
+        if old(self).wf_strict() {
+            assert(old(self).ens_perm_strict(order, idx, perm)) by {
+                reveal(MRFreePerms::wf_strict);
+            }
+            assert((idx == self.avail[order as int].len() ==> self.wf_strict())) by {
+                reveal(MRFreePerms::wf_strict);
+            }
+        }
         perm
     }
 
@@ -525,10 +531,7 @@ impl MRFreePerms {
             order < MAX_ORDER,
             0 <= idx < self.avail[order as int].len(),
             idx < self.avail[order as int].len() ==> new.avail[order as int]
-                =~= self.avail[order as int].remove(idx + 1).update(
-                idx,
-                new.avail[order as int][idx],
-            ),
+                =~= self.avail[order as int].remove(idx).update(idx, new.avail[order as int][idx]),
             idx == self.avail[order as int].len() - 1 ==> new.avail[order as int]
                 =~= self.avail[order as int].remove(idx),
             new.avail[order as int][idx].pfn() == self.avail[order as int][idx + 1].pfn(),
@@ -538,15 +541,13 @@ impl MRFreePerms {
     {
         use_type_invariant(new);
         reveal(MRFreePerms::wf_strict);
-        reveal(MRFreePerms::wf_at);
+        //reveal(MRFreePerms::wf_at);
 
         assert(idx > 0 ==> self.avail[order as int][idx - 1].pfn() == new.avail[order as int][idx
             - 1].pfn());
         assert forall|o: usize, i: int|
             #![trigger new.avail[o as int][i]]
             0 <= o < MAX_ORDER && 0 <= i < new.avail[o as int].len() implies new.wf_next(o, i) by {
-            let a = new.avail[o as int][i];
-            let prev_a = new.avail[o as int][i - 1];
             let old_a = self.avail[o as int][i];
             let old_prev_a = self.avail[o as int][i - 1];
             let old_prev_a = self.avail[o as int][i + 1];
