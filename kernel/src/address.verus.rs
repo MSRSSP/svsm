@@ -296,7 +296,7 @@ impl SpecVAddrImpl for VirtAddr {
 }
 
 impl VirtAddr {
-    pub proof fn lemma_region_to_dom2(self, vaddr2: VirtAddr, size1: nat, size2: nat)
+    pub proof fn lemma_region_to_dom_merge(self, size1: nat, vaddr2: VirtAddr, size2: nat)
         requires
             self.is_canonical() && vaddr2.is_canonical(),
             vaddr2.offset() == self.offset() + size1,

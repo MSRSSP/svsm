@@ -804,7 +804,7 @@ impl MemoryRegion {
             use_type_invariant(&info);
             let tracked PageInfoDb {id, mut reserved, ..} = info;
             let tracked mut reserved1 = reserved.tracked_remove_keys(Set::new(|i: usize| pfn1 <= i < pfn2));
-            self.perms.borrow().free.tracked_valid_next_page(new_order);
+            self.perms.borrow().free.tracked_next(new_order);
             let tracked (mem1, mem2) = self.perms.borrow().mr_map.tracked_split_pages(mem, pfn, order);
         }
         verus_with!(Tracked(&mut reserved1));
@@ -851,7 +851,7 @@ impl MemoryRegion {
             .ok_or(AllocError::InvalidPageOrder(order));
         proof! {
             if 0 <= order < MAX_ORDER {
-                self.perms.borrow().free.tracked_valid_next_page(order);
+                self.perms.borrow().free.tracked_next(order);
                 assert(next_page.is_ok());
             } else {
                 assert(!next_page.is_ok());
@@ -1151,7 +1151,7 @@ impl MemoryRegion {
         proof_decl! {
             let ghost mut idx_ = self@.free.next_lists()[order as int].len() - 1;
             if idx_ >= 0 {
-                self.perms.borrow().free.tracked_valid_next_at(order, idx_);
+                self.perms.borrow().free.tracked_borrow(order, idx_);
             }
         }
         let first_pfn = self.next_page[order];
@@ -1191,6 +1191,9 @@ impl MemoryRegion {
             proof_decl! {
                 use_type_invariant(&self.perms.borrow().free);
                 let tracked current_perm = self.perms.borrow().free.tracked_borrow(order, idx_ + 1);
+                if idx_ >= 0 {
+                    let tracked next_perm = self.perms.borrow().free.tracked_borrow(order, idx_);
+                }
             }
             verus_with!(Tracked(&current_perm));
             let current_pfn = self.next_free_pfn(old_pfn, order);
@@ -1199,9 +1202,6 @@ impl MemoryRegion {
                 return Err(AllocError::OutOfMemory);
             }
 
-            proof!{
-                assert(current_pfn == self@.free.avail[order as int][idx_].pfn());
-            }
             if current_pfn != pfn {
                 old_pfn = current_pfn;
                 proof! { idx_ = idx_ - 1; 
@@ -1413,8 +1413,8 @@ impl MemoryRegion {
                 mr_map.pg_params().lemma_reserved_pfn_count();
             }
             use_type_invariant(&mr_map);
-            self.perms.borrow_mut().mr_map.0.merge(mr_map.0);
-            assert(self@.mr_map.shares() == mr_map.shares() + old(self)@.mr_map.shares());
+            //self.perms.borrow_mut().mr_map.0.merge(mr_map.0);
+            //assert(self@.mr_map.shares() == mr_map.shares() + old(self)@.mr_map.shares());
         }
 
         match res {

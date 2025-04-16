@@ -17,7 +17,6 @@
 //   within the trusted context of the kernel entry.
 use crate::mm::address_space::LinearMap;
 use crate::types::lemma_page_size;
-use crate::utils::util::spec_align_up;
 use verify_external::convert::FromSpec;
 use verify_external::hw_spec::{SpecMemMapTr, SpecVAddrImpl};
 use verify_proof::bits::{
@@ -64,100 +63,6 @@ include!("alloc_perms.verus.rs");
 
 //include!("alloc_mr.verus.rs");
 include!("alloc_types.verus.rs");
-
-pub type RawPerm = PointsToRaw;
-
-#[allow(missing_debug_implementations)]
-pub struct PageCountParam<const N: usize> {
-    pub page_count: usize,
-}
-
-impl<const N: usize> PageCountParam<N> {
-    #[verifier(opaque)]
-    pub open spec fn reserved_pfn_count(&self) -> nat {
-        (spec_align_up(self.page_count * 8 as int, PAGE_SIZE as int) / PAGE_SIZE as int) as nat
-    }
-
-    pub open spec fn valid_pfn_order(&self, pfn: usize, order: usize) -> bool {
-        let n = 1usize << order;
-        &&& self.reserved_pfn_count() <= pfn < self.page_count
-        &&& pfn + n <= self.page_count
-        &&& n > 0
-        &&& pfn % n == 0
-        &&& order < N
-    }
-
-    proof fn lemma_reserved_pfn_count(&self)
-        ensures
-            self.reserved_pfn_count() == self.page_count / 512 || self.reserved_pfn_count() == 1 + (
-            self.page_count / 512),
-            self.page_count > 0 ==> self.reserved_pfn_count() > 0,
-    {
-        broadcast use lemma_page_size;
-
-        reveal(PageCountParam::reserved_pfn_count);
-
-        let x = self.page_count * 8 as int;
-        assert(PAGE_SIZE == 0x1000);
-        let count = spec_align_up(x, PAGE_SIZE as int);
-        verify_proof::nonlinear::lemma_align_up_properties(x, PAGE_SIZE as int, count);
-        assert(self.page_count * 8 / 0x1000 == self.page_count / 512);
-    }
-
-    #[verifier::spinoff_prover]
-    proof fn lemma_valid_pfn_order_split(&self, pfn: usize, order: usize)
-        requires
-            self.valid_pfn_order(pfn, order),
-            0 < order < N <= 64,
-        ensures
-            self.valid_pfn_order(pfn, (order - 1) as usize),
-            self.valid_pfn_order(
-                (pfn + (1usize << (order - 1) as usize)) as usize,
-                (order - 1) as usize,
-            ),
-    {
-        broadcast use lemma_bit_usize_shl_values;
-
-        let n = 1usize << order;
-        let lower_n = 1usize << (order - 1) as usize;
-        assert(1usize << order == 2 * (1usize << (order - 1) as usize)) by (bit_vector)
-            requires
-                0 < order < 64,
-        ;
-        if self.valid_pfn_order(pfn, order) && order > 0 {
-            verify_proof::nonlinear::lemma_modulus_product_divisibility(
-                pfn as int,
-                lower_n as int,
-                2,
-            );
-        }
-        lemma_add_mod_noop(pfn as int, lower_n as int, lower_n as int);
-        lemma_mod_self_0(lower_n as int);
-        lemma_small_mod(0, lower_n as nat);
-        assert((pfn + lower_n) % lower_n as int == 0);
-    }
-}
-
-pub const MAX_PAGE_COUNT: usize = usize::MAX >> 12;
-
-pub spec const MAX_PGINFO_SHARES: nat = 2;
-
-pub spec const ALLOCATOR_PGINFO_SHARES: nat = 1;
-
-pub spec const DEALLOC_PGINFO_SHARES: nat = 1;
-
-pub uninterp spec fn allocator_provenance() -> Provenance;
-
-#[verifier(inline)]
-spec fn order_set(start: usize, order: usize) -> Set<int> {
-    set_int_range(start as int, start as int + (1usize << order))
-}
-
-spec fn order_disjoint(start1: usize, order1: usize, start2: usize, order2: usize) -> bool {
-    let end1 = start1 + (1usize << order1);
-    let end2 = start2 + (1usize << order2);
-    spec_int_range_disjoint(start1 as int, end1, start2 as int, end2)
-}
 
 impl MemoryRegion {
     spec fn remove_tracked(&self) -> Self {

@@ -1,185 +1,5 @@
+use vstd::math::min;
 verus! {
-
-// A ghost global layout for global allocator
-// Add more global variables here as needed
-// It could be a real global variable or a global invariant.
-// We put FracPerm to ensure that the content will not be modified by accident.
-// For example, allocator must update this ghost variable if it needs to
-// change the base_ptr of the allocator.
-//
-// Since the allocated memory will have GlobalInv and so the allocator cannot
-// obtain full ownership if the allocator does not free all memory before updating
-// the base_ptr.
-#[allow(missing_debug_implementations)]
-pub struct MemRegionMappingView {
-    pub map: LinearMap,
-    pub provenance: Provenance,
-}
-
-#[allow(missing_debug_implementations)]
-pub struct MemRegionMapping(FracTypedPerm<Tracked<MemRegionMappingView>>);
-
-impl MemRegionMapping {
-    pub uninterp spec fn const_ptr() -> *const Tracked<MemRegionMappingView>;
-
-    #[verifier::type_invariant]
-    pub closed spec fn wf(&self) -> bool {
-        &&& self.0.ptr() == Self::const_ptr()
-        &&& self.0.valid()
-        &&& self@.map.wf()
-    }
-
-    pub closed spec fn view(&self) -> MemRegionMappingView {
-        self.0.value()@
-    }
-
-    pub closed spec fn shares(&self) -> nat {
-        self.0.shares()
-    }
-
-    pub closed spec fn pg_params(&self) -> PageCountParam<MAX_ORDER> {
-        PageCountParam { page_count: (self@.map.size / PAGE_SIZE as nat) as usize }
-    }
-
-    spec fn base_ptr(&self) -> *const PageStorageType {
-        vstd::raw_ptr::ptr_from_data(
-            vstd::raw_ptr::PtrData {
-                addr: self@.map.start_virt@,
-                provenance: self@.provenance,
-                metadata: vstd::raw_ptr::Metadata::Thin,
-            },
-        )
-    }
-
-    pub proof fn is_same(tracked &self, tracked other: &Self)
-        ensures
-            self@ == other@,
-    {
-        use_type_invariant(&*self);
-        use_type_invariant(other);
-        self.0.is_same(&other.0);
-    }
-
-    #[verifier::spinoff_prover]
-    #[verifier::rlimit(2)]
-    pub proof fn tracked_merge_pages(
-        tracked &self,
-        tracked p1: &mut RawPerm,
-        tracked p2: RawPerm,
-        pfn1: usize,
-        pfn2: usize,
-        order: usize,
-    )
-        requires
-            0 <= order < 64,
-            pfn1 == pfn2 + (1usize << order) || pfn2 == pfn1 + (1usize << order),
-            p2.wf_pfn_order(*self, pfn2, order),
-            old(p1).wf_pfn_order(*self, pfn1, order),
-        ensures
-            p1.wf_pfn_order(
-                *self,
-                if pfn1 < pfn2 {
-                    pfn1
-                } else {
-                    pfn2
-                },
-                (order + 1) as usize,
-            ),
-    {
-        use_type_invariant(self);
-        broadcast use lemma_bit_usize_shl_values;
-
-        let map = self@.map;
-        reveal(<VirtAddr as SpecVAddrImpl>::region_to_dom);
-        map.lemma_get_virt(pfn1);
-        map.lemma_get_virt(pfn2);
-        let size = 1usize << order;
-        let tracked mut owned_p1 = RawPerm::empty(p1.provenance());
-        tracked_swap(&mut owned_p1, p1);
-        let tracked p = if pfn1 < pfn2 {
-            assert(pfn2 == pfn1 + size);
-            owned_p1.join(p2)
-        } else {
-            assert(pfn1 == pfn2 + size);
-            p2.join(owned_p1)
-        };
-        *p1 = p;
-    }
-
-    #[verifier::spinoff_prover]
-    #[verifier::rlimit(2)]
-    pub proof fn tracked_split_pages(
-        tracked &self,
-        tracked p: RawPerm,
-        pfn: usize,
-        order: usize,
-    ) -> (tracked perms: (RawPerm, RawPerm))
-        requires
-            1 <= order < 64,
-            p.wf_pfn_order(*self, pfn, order),
-        ensures
-            perms.0.wf_pfn_order(*self, pfn, (order - 1) as usize),
-            perms.1.wf_pfn_order(
-                *self,
-                (pfn + (1usize << (order - 1))) as usize,
-                (order - 1) as usize,
-            ),
-            self.pg_params().valid_pfn_order(pfn, order) ==> (self.pg_params().valid_pfn_order(
-                pfn,
-                (order - 1) as usize,
-            ) && self.pg_params().valid_pfn_order(
-                (pfn + (1usize << (order - 1))) as usize,
-                (order - 1) as usize,
-            )),
-    {
-        use_type_invariant(self);
-        broadcast use lemma_bit_usize_shl_values;
-
-        let map = self@.map;
-        reveal(<VirtAddr as SpecVAddrImpl>::region_to_dom);
-        let pfn1 = pfn;
-        let pfn2 = (pfn + (1usize << (order - 1))) as usize;
-        let vaddr1 = map.lemma_get_virt(pfn1);
-        assert(pfn2 + (1usize << (order - 1)) == pfn + (1usize << order));
-        let vaddr2 = map.lemma_get_virt(pfn2);
-        let size = (1usize << (order - 1)) * PAGE_SIZE;
-        if self.pg_params().valid_pfn_order(pfn, order) {
-            self.pg_params().lemma_valid_pfn_order_split(pfn1, order);
-        }
-        p.split(vaddr1.region_to_dom(size as nat))
-    }
-
-    proof fn raw_perm_order_disjoint(
-        &self,
-        pfn1: usize,
-        o1: usize,
-        pfn2: usize,
-        o2: usize,
-        tracked p1: &mut RawPerm,
-        tracked p2: &RawPerm,
-    )
-        requires
-            self.wf(),
-            0 <= o1 < 64,
-            0 <= o2 < 64,
-            old(p1).wf_pfn_order(*self, pfn1, o1),
-            p2.wf_pfn_order(*self, pfn2, o2),
-        ensures
-            order_disjoint(pfn1, o1, pfn2, o2),
-            *old(p1) == *p1,
-    {
-        let vaddr1 = self@.map.lemma_get_virt(pfn1);
-        let vaddr2 = self@.map.lemma_get_virt(pfn2);
-        let size1 = ((1usize << o1) * PAGE_SIZE) as nat;
-        let size2 = ((1usize << o2) * PAGE_SIZE) as nat;
-        vaddr1.lemma_vaddr_region_len(size1);
-        vaddr2.lemma_vaddr_region_len(size2);
-        raw_perm_is_disjoint(p1, p2);
-        reveal(<VirtAddr as SpecVAddrImpl>::region_to_dom);
-        assert(p1.dom().contains(vaddr1@ as int));
-        assert(p2.dom().contains(vaddr2@ as int));
-    }
-}
 
 spec fn spec_map_page_info_addr(map: LinearMap, pfn: usize) -> VirtAddr {
     let reserved_unit_size = size_of::<PageStorageType>();
@@ -196,31 +16,6 @@ spec fn spec_map_page_info_ptr(map: LinearMap, pfn: usize) -> *const PageStorage
             metadata: vstd::raw_ptr::Metadata::Thin,
         },
     )
-}
-
-pub trait MemPermWithVAddrOrder<VAddr: SpecVAddrImpl> {
-    spec fn wf_vaddr_order(&self, map: MemRegionMapping, vaddr: VAddr, order: usize) -> bool;
-}
-
-pub trait MemPermWithPfnOrder {
-    spec fn wf_pfn_order(&self, map: MemRegionMapping, pfn: usize, order: usize) -> bool;
-}
-
-impl<VAddr: SpecVAddrImpl> MemPermWithVAddrOrder<VAddr> for RawPerm {
-    open spec fn wf_vaddr_order(&self, map: MemRegionMapping, vaddr: VAddr, order: usize) -> bool {
-        let size = ((1usize << order) * PAGE_SIZE) as nat;
-        &&& self.dom() =~= vaddr.region_to_dom(size)
-        &&& self.provenance() === map@.provenance
-    }
-}
-
-impl MemPermWithPfnOrder for RawPerm {
-    open spec fn wf_pfn_order(&self, map: MemRegionMapping, pfn: usize, order: usize) -> bool {
-        let vaddr = map@.map.try_get_virt(pfn);
-        &&& vaddr.is_some()
-        &&& pfn + (1usize << order) <= map@.map.size / PAGE_SIZE as nat
-        &&& self.wf_vaddr_order(map, vaddr.unwrap(), order)
-    }
 }
 
 tracked struct MemoryRegionPerms {
@@ -260,7 +55,7 @@ impl AllocatedPagesPerm {
         &&& order < MAX_ORDER
         &&& self.mr_map.pg_params().valid_pfn_order(pfn, order)
         &&& self.mr_map.shares() == self.size()
-        &&& self.mr_map.base_ptr() == self.perm.info.base_ptr()
+        &&& self.mr_map.base_ptr() === self.perm.info.base_ptr()
         &&& self.perm.wf_pfn_order(self.mr_map, pfn, order)
         &&& self.perm.page_type().spec_is_deallocatable()
     }
@@ -354,7 +149,7 @@ impl<T: UnitType> PgUnitPerm<T> {
         &&& self.mem.wf_pfn_order(map, pfn, order)
         &&& self.info.unit_start() == pfn
         &&& self.info.order() == order
-        &&& self.info.base_ptr() == map.base_ptr()
+        &&& self.info.base_ptr() === map.base_ptr()
         &&& !self.info@.is_empty()
     }
 
