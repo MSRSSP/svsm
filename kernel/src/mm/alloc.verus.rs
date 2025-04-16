@@ -22,19 +22,13 @@ use verify_external::hw_spec::{SpecMemMapTr, SpecVAddrImpl};
 use verify_proof::bits::{
     lemma_bit_usize_and_mask_is_mod, lemma_bit_usize_shl_values, lemma_bit_usize_xor_neighbor,
 };
-use verify_proof::frac_ptr::raw_perm_is_disjoint;
-use verify_proof::frac_ptr::FracTypedPerm;
+use verify_proof::frac_ptr::{raw_perm_is_disjoint, FracTypedPerm};
 use verify_proof::nonlinear::*;
 use verify_proof::set::*;
 use vstd::arithmetic::div_mod::{lemma_add_mod_noop, lemma_mod_self_0, lemma_small_mod};
-use vstd::arithmetic::mul::group_mul_properties;
-use vstd::arithmetic::mul::{lemma_mul_inequality, lemma_mul_ordering};
-use vstd::arithmetic::mul::{
-    lemma_mul_is_distributive_add_other_way, lemma_mul_is_distributive_sub_other_way,
-};
+use vstd::arithmetic::mul::*;
 use vstd::modes::tracked_swap;
-use vstd::raw_ptr::PointsToRaw;
-use vstd::raw_ptr::{IsExposed, Provenance};
+use vstd::raw_ptr::{IsExposed, PointsToRaw, Provenance};
 use vstd::set_lib::set_int_range;
 
 verus! {
@@ -171,19 +165,22 @@ impl MemoryRegion {
     spec fn writable_page_info(&self, pfn: usize, perm: FracTypedPerm<PageStorageType>) -> bool {
         &&& perm.valid()
         &&& perm.writable()
-        &&& perm.ptr() == self.view2().page_info_ptr(pfn)
+        &&& perm.ptr() == self@.page_info_ptr(pfn)
         &&& self.wf_basic2()
     }
 
     spec fn writable_page_infos(
         &self,
         pfn: usize,
-        size: usize,
+        npage: usize,
         perms: Map<usize, PInfoPerm>,
     ) -> bool {
-        &&& perms.contains_range(self.perms@.base_ptr(), pfn, size)
-        &&& forall|i: usize|
-            pfn <= i < pfn + size ==> self.writable_page_info(i, (#[trigger] perms[i]))
+        &&& forall|i| pfn <= i < pfn + npage ==> #[trigger] perms.contains_key(i)
+        &&& forall|i|
+            #![trigger perms[i]]
+            pfn <= i < pfn + npage ==> {
+                &&& self.writable_page_info(i, (#[trigger] perms[i]))
+            }
     }
 
     #[verifier(inline)]

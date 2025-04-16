@@ -358,7 +358,7 @@ impl<T: UnitType> PgUnitPerm<T> {
         &&& !self.info@.is_empty()
     }
 
-    pub proof fn empty(id: PageInfoUnique) -> (tracked ret: Self) {
+    pub proof fn empty(id: PInfoGroupId) -> (tracked ret: Self) {
         PgUnitPerm {
             mem: RawPerm::empty(id.ptr_data.provenance),
             info: PageInfoDb::tracked_empty(id),
@@ -395,7 +395,7 @@ impl MemoryRegionPerms {
         MemoryRegionPerms {
             free: MRFreePerms::tracked_empty(mr_map),
             info: PageInfoDb::tracked_empty(
-                PageInfoUnique {
+                PInfoGroupId {
                     ptr_data: PtrData {
                         addr: 0,
                         provenance: info_ptr_exposed@,

@@ -9,15 +9,15 @@ verus! {
 type PInfoPerm = FracTypedPerm<PageStorageType>;
 
 #[allow(missing_debug_implementations)]
-pub struct PageInfoUnique {
+pub struct PInfoGroupId {
     pub ptr_data: PtrData,
     pub shares: nat,
     pub total: nat,
 }
 
-impl PageInfoUnique {
-    spec fn update_shares(&self, shares: nat) -> PageInfoUnique {
-        PageInfoUnique { ptr_data: self.ptr_data, shares, total: self.total }
+impl PInfoGroupId {
+    spec fn update_shares(&self, shares: nat) -> PInfoGroupId {
+        PInfoGroupId { ptr_data: self.ptr_data, shares, total: self.total }
     }
 
     spec fn base_ptr(&self) -> *const PageStorageType {
@@ -27,37 +27,6 @@ impl PageInfoUnique {
     #[verifier(inline)]
     spec fn ptr(&self, idx: usize) -> *const PageStorageType {
         spec_ptr_add(self.base_ptr(), idx)
-    }
-}
-
-uninterp spec fn dummy_ptr() -> PtrData;
-
-trait ValidRange {
-    spec fn contains_range(
-        &self,
-        base_ptr: *const PageStorageType,
-        pfn: usize,
-        npage: usize,
-    ) -> bool;
-}
-
-impl ValidRange for Map<usize, FracTypedPerm<PageStorageType>> {
-    spec fn contains_range(
-        &self,
-        base_ptr: *const PageStorageType,
-        pfn: usize,
-        npage: usize,
-    ) -> bool {
-        &&& forall|idx|
-            pfn <= idx < pfn + npage ==> {
-                #[trigger] self.contains_key(idx)
-            }
-        &&& forall|idx|
-            #![trigger self[idx]]
-            pfn <= idx < pfn + npage ==> {
-                &&& self[idx].is_valid_pginfo()
-                &&& self[idx].ptr() == spec_ptr_add(base_ptr, idx)
-            }
     }
 }
 
@@ -121,12 +90,12 @@ impl ValidPageInfo for FracTypedPerm<PageStorageType> {
 
 struct PageInfoDb {
     ghost unit_start: usize,  // only for unit
-    ghost id: PageInfoUnique,
+    ghost id: PInfoGroupId,
     reserved: Map<usize, FracTypedPerm<PageStorageType>>,
 }
 
 impl PageInfoDb {
-    pub closed spec fn id(&self) -> PageInfoUnique {
+    pub closed spec fn id(&self) -> PInfoGroupId {
         self.id
     }
 
@@ -241,7 +210,7 @@ impl PageInfoDb {
     spec fn wf_basic_at(
         item: FracTypedPerm<PageStorageType>,
         idx: usize,
-        id: PageInfoUnique,
+        id: PInfoGroupId,
     ) -> bool {
         &&& item.is_valid_pginfo()
         &&& item.shares() == id.shares
@@ -264,7 +233,7 @@ impl PageInfoDb {
 
     spec fn new_unit_requires(
         reserved: Map<usize, FracTypedPerm<PageStorageType>>,
-        id: PageInfoUnique,
+        id: PInfoGroupId,
         unit_start: usize,
         order: usize,
     ) -> bool {
@@ -288,14 +257,7 @@ impl PageInfoDb {
     }
 
     pub closed spec fn wf_unit(&self) -> bool {
-        &&& Self::new_unit_requires(
-            self@,
-            self.id(),
-            self.unit_start,
-            self.order(),
-        )
-        //&&& self.npages() == 1usize << self.order()
-
+        &&& Self::new_unit_requires(self@, self.id(), self.unit_start, self.order())
     }
 
     pub closed spec fn remove(&self, idx: usize) -> PageInfoDb {
@@ -336,7 +298,7 @@ impl PageInfoDb {
         &&& self.is_unit() ==> self.wf_unit()
     }
 
-    pub closed spec fn empty(id: PageInfoUnique) -> PageInfoDb {
+    pub closed spec fn empty(id: PInfoGroupId) -> PageInfoDb {
         PageInfoDb { unit_start: 0, id, reserved: Map::empty() }
     }
 
@@ -515,7 +477,7 @@ impl PageInfoDb {
 
     spec fn new(
         unit_start: usize,
-        id: PageInfoUnique,
+        id: PInfoGroupId,
         reserved: Map<usize, FracTypedPerm<PageStorageType>>,
     ) -> Self {
         PageInfoDb { unit_start, id, reserved }
@@ -552,7 +514,7 @@ impl PageInfoDb {
     }
 
     /** Constructors **/
-    proof fn tracked_empty(id: PageInfoUnique) -> (tracked ret: PageInfoDb)
+    proof fn tracked_empty(id: PInfoGroupId) -> (tracked ret: PageInfoDb)
         ensures
             ret == PageInfoDb::empty(id),
     {
@@ -754,7 +716,7 @@ impl PageInfoDb {
     proof fn tracked_new_unit(
         order: usize,
         unit_start: usize,
-        id: PageInfoUnique,
+        id: PInfoGroupId,
         tracked reserved: Map<usize, FracTypedPerm<PageStorageType>>,
     ) -> (tracked ret: Self)
         requires
