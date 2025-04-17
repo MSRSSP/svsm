@@ -10,6 +10,8 @@ verus! {
 
 global size_of PageStorageType == 8;
 
+global size_of SlabPage<32> == 40;
+
 spec fn spec_page_storage_type(mem: MemContents<PageStorageType>) -> Option<PageStorageType> {
     if mem.is_init() {
         Some(mem.value())

@@ -268,6 +268,7 @@ impl MemoryRegion {
 
 impl View for MemoryRegion {
     type V = MemoryRegionPerms;
+
     closed spec fn view(&self) -> MemoryRegionPerms {
         self.perms@
     }
@@ -285,7 +286,6 @@ impl MemoryRegion {
     spec fn with_same_mapping(&self, new: &Self) -> bool {
         self@.mr_map === new@.mr_map
     }
-
 
     spec fn spec_get_pfn(&self, vaddr: VirtAddr) -> Option<usize> {
         self.map().get_pfn(vaddr)
@@ -480,6 +480,7 @@ impl MemoryRegion {
         &&& order < MAX_ORDER
         &&& pg.spec_order() == order
         &&& pg.spec_type().spec_is_deallocatable()
+        &&& !matches!(pg, PageInfo::Compound(_))
     }
 
     spec fn ens_allocate_pages_info(

@@ -213,10 +213,6 @@ impl MemoryRegionPerms {
         self.mr_map@.map
     }
 
-    spec fn reserved_count(&self) -> nat {
-        self.mr_map.pg_params().reserved_pfn_count()
-    }
-
     spec fn base_ptr(&self) -> *const PageStorageType {
         self.mr_map.base_ptr()
     }
@@ -250,15 +246,14 @@ impl MemoryRegionPerms {
         let info = self.info;
         &&& info.is_readonly_allocator_shares()
         &&& self.npages() == info.npages()
-        &&& info@.dom() =~= Set::new(
-            |idx| 0 <= idx < self.npages(),
-        )
+        &&& info@.dom() =~= Set::new(|idx| 0 <= idx < self.npages())
         &&& self.wf_base_ptr()
     }
 
     spec fn wf(&self) -> bool {
         &&& self.wf_info()
         //&&& self.wf_base_ptr()
+
     }
 }
 
@@ -277,6 +272,7 @@ impl MemoryRegion {
         let info = self@.info;
         &&& self@.wf()
         &&& forall|order|   //#![trigger info.nr_page(order)]
+
             0 <= order < MAX_ORDER ==> info.nr_page(order) == (
             #[trigger] self.nr_pages[order as int])
         &&& self@.free.nr_free() =~= self.free_pages@

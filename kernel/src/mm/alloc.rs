@@ -519,12 +519,6 @@ impl MemoryRegion {
     /// The caller must provide a valid pfn, otherwise the returned pointer is
     /// undefined, as the compiler is allowed to optimize assuming there will
     /// be no arithmetic overflows.
-    /*
-    unsafe fn page_info_mut_ptr(&mut self, pfn: usize) -> *mut PageStorageType {
-        unsafe { self.start_virt.as_mut_ptr::<PageStorageType>().add(pfn) }
-    }
-    */
-
     #[verus_spec(ret =>
         requires
             self.wf_params(),
@@ -533,22 +527,11 @@ impl MemoryRegion {
             ret == self@.page_info_ptr(pfn)
     )]
     fn page_info_mut_ptr(&self, pfn: usize) -> *mut PageStorageType {
-        proof!{
-            let offset = pfn * 8;
-            assert(offset == pfn * size_of::<PageStorageType>());
-            assert(self.start_virt.offset() + offset <= crate::address::VADDR_RANGE_SIZE);
-        }
         let offset = pfn * size_of::<PageStorageType>();
         verus_with!(Tracked(self.perms.borrow().info_ptr_exposed));
         let ret: *mut PageStorageType = self.start_virt
             .const_add(offset)
             .as_mut_ptr_with_provenance();
-        
-        proof!{
-            assert(ret@.addr == VirtAddr::from_spec((self.start_virt@ + offset) as usize)@);
-            assert(self@.info_ptr_exposed@ == self@.mr_map@.provenance);
-            assert(ret == self@.page_info_ptr(pfn));
-        }
         ret
     }
 

@@ -851,12 +851,12 @@ impl PageInfoDb {
             self.unit_head()@ == old(self).unit_head()@.update_shares(self.id().shares),
             unit.unit_head()@ == old(self).unit_head()@.update_shares(shares),
             self.unit_start() == old(self).unit_start() == unit.unit_start(),
+            old(self).npages() == self.npages() == unit.npages(),
             self.id() == old(self).id().update_shares((old(self).id().shares - shares) as nat),
             unit.is_unit(),
             unit.id() == old(self).id().update_shares(shares),
             forall|order: usize| #[trigger]
                 old(self).nr_page(order) == self.nr_page(order) == unit.nr_page(order),
-            old(self).npages() == self.npages() == unit.npages(),
     {
         use_type_invariant(&*self);
         self.proof_unit_nr_page();
