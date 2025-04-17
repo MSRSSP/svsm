@@ -529,7 +529,8 @@ impl MemoryRegion {
     fn page_info_mut_ptr(&self, pfn: usize) -> *mut PageStorageType {
         let offset = pfn * size_of::<PageStorageType>();
         verus_with!(Tracked(self.perms.borrow().info_ptr_exposed));
-        let ret: *mut PageStorageType = self.start_virt
+        let ret: *mut PageStorageType = self
+            .start_virt
             .const_add(offset)
             .as_mut_ptr_with_provenance();
         ret
@@ -696,7 +697,7 @@ impl MemoryRegion {
                 pg
             );
         };
-        proof!{
+        proof! {
             use_type_invariant(fi);
         }
         self.next_page[order] = fi.next_page;
@@ -792,7 +793,7 @@ impl MemoryRegion {
         }
         verus_with!(Tracked(&mut reserved1));
         self.init_compound_page(pfn1, new_order, pfn2);
-        proof_decl!{
+        proof_decl! {
             let tracked mut info1 = PageInfoDb::tracked_new_unit(new_order, pfn1, id, reserved1);
             self.perms.borrow_mut().info.tracked_insert_shares(&mut info1);
             let tracked p1 = PgUnitPerm {mem: mem1, info: info1, typ: arbitrary()};
@@ -1180,14 +1181,14 @@ impl MemoryRegion {
             }
             verus_with!(Tracked(&current_perm));
             let current_pfn = self.next_free_pfn(old_pfn, order);
-           
+
             if current_pfn == 0 {
                 return Err(AllocError::OutOfMemory);
             }
 
             if current_pfn != pfn {
                 old_pfn = current_pfn;
-                proof! { idx_ = idx_ - 1; 
+                proof! { idx_ = idx_ - 1;
                 assert(self.req_allocate_pfn(old_pfn, order));
                 }
                 continue;
@@ -1203,13 +1204,13 @@ impl MemoryRegion {
                 let tracked mut current_perm = self.perms.borrow_mut().free.tracked_remove(order, idx_ + 1);
                 let tracked (prev_mem, prev_info) = current_perm.tracked_take();
                 self.perms.borrow_mut().info.tracked_remove_and_merge_shares(&mut prev_info);
-    
+
                 let tracked mut prev_perm = self.perms.borrow_mut().free.tracked_remove(order, idx_);
                 let tracked (mut mem, mut info) =  prev_perm.tracked_take();
                 self.perms.borrow_mut().info.tracked_remove_and_merge_shares(&mut info);
                 use_type_invariant(&info);
                 let tracked PageInfoDb {id, mut reserved, ..} = info;
-        
+
                 let tracked head_info = reserved.tracked_remove(current_pfn);
                 use_type_invariant(&prev_info);
                 let tracked PageInfoDb {id, reserved: mut prev_reserved, ..} = prev_info;
@@ -1228,11 +1229,11 @@ impl MemoryRegion {
 
             self.free_pages[order] -= 1;
 
-            proof!{
+            proof! {
                 prev_reserved.tracked_insert(old_pfn, prev_head_info);
                 let tracked mut info = PageInfoDb::tracked_new_unit(order, old_pfn, id, prev_reserved);
                 self.perms.borrow_mut().info.tracked_insert_shares(&mut info);
-            
+
                 let tracked mut prev_perm = PgUnitPerm {mem: prev_mem, info, typ: arbitrary()};
                 self.perms.borrow_mut().free.tracked_insert(order, idx_, old_pfn, prev_perm);
 
@@ -1242,7 +1243,6 @@ impl MemoryRegion {
                 *perm = PgUnitPerm {mem, info, typ: arbitrary()};
                 old(self)@.free.lemma_wf_restrict_remove(&self.perms.borrow().free, order, idx_);
             }
-
 
             return Ok(());
         }
@@ -1279,7 +1279,7 @@ impl MemoryRegion {
         verus_with!(Tracked(&mut head_info));
         self.write_page_info(pfn, pg);
 
-        proof!{
+        proof! {
             reserved.tracked_insert(pfn, head_info);
             let tracked mut info = PageInfoDb::tracked_new_unit(order, pfn, id, reserved);
             self.perms.borrow_mut().info.tracked_insert_shares(&mut info);
@@ -1290,7 +1290,6 @@ impl MemoryRegion {
         self.next_page[order] = pfn;
 
         self.free_pages[order] += 1;
-        
     }
 
     /// Attempts to merge a given page with its neighboring page.
