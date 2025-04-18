@@ -86,6 +86,7 @@ enum PageType {
     Reserved = (1u64 << PageStorageType::TYPE_SHIFT) - 1,
 }
 
+#[verus_verify]
 impl TryFrom<u64> for PageType {
     type Error = AllocError;
     fn try_from(val: u64) -> Result<Self, Self::Error> {
@@ -107,6 +108,7 @@ impl TryFrom<u64> for PageType {
 #[repr(transparent)]
 struct PageStorageType(u64);
 
+#[verus_verify]
 impl PageStorageType {
     const TYPE_SHIFT: u64 = 4;
     const TYPE_MASK: u64 = (1u64 << Self::TYPE_SHIFT) - 1;
@@ -115,9 +117,7 @@ impl PageStorageType {
     const ORDER_MASK: u64 = (1u64 << (Self::NEXT_SHIFT - Self::TYPE_SHIFT)) - 1;
     // Slab item sizes are encoded in a u16
     const SLAB_MASK: u64 = 0xffff;
-}
 
-impl PageStorageType {
     /// Creates a new [`PageStorageType`] with the specified page type.
     ///
     /// # Arguments
@@ -127,7 +127,8 @@ impl PageStorageType {
     /// # Returns
     ///
     /// A new instance of [`PageStorageType`].
-    #[verus_spec(ret=> ensures ret@ == t as u64)]
+    #[verus_verify(dual(spec_new))]
+    #[verus_spec(returns Self::spec_new(t))]
     const fn new(t: PageType) -> Self {
         Self(t as u64)
     }
@@ -141,11 +142,8 @@ impl PageStorageType {
     /// # Returns
     ///
     /// The updated [`PageStorageType`].
-    #[verus_verify(external_body)]
-    #[verus_spec(ret =>
-        ensures
-            ret@ == (self@ | (((order as u64) & 0xffu64) << 4))
-    )]
+    #[verus_verify(dual(spec_encode_order))]
+    #[verus_spec(returns self.spec_encode_order(order))]
     fn encode_order(self, order: usize) -> Self {
         Self(self.0 | ((order as u64) & Self::ORDER_MASK) << Self::TYPE_SHIFT)
     }
@@ -159,13 +157,8 @@ impl PageStorageType {
     /// # Returns
     ///
     /// The updated [`PageStorageType`].
-    #[verus_verify(external_body)]
-    #[verus_spec(ret =>
-        requires
-            next_page <= (u64::MAX >> 12),
-        ensures
-            ret@ == (self@ | ((next_page as u64) << 12))
-    )]
+    #[verus_verify(dual(spec_encode_next))]
+    #[verus_spec(returns self.spec_encode_next(next_page))]
     fn encode_next(self, next_page: usize) -> Self {
         Self(self.0 | (next_page as u64) << Self::NEXT_SHIFT)
     }
@@ -179,13 +172,8 @@ impl PageStorageType {
     /// # Returns
     ///
     /// The updated [`PageStorageType`]
-    #[verus_verify(external_body)]
-    #[verus_spec(ret =>
-        requires
-            slab <= 0xFFFF,
-        ensures
-            ret@ == (self@ | ((slab & 0xffff) << 4))
-    )]
+    #[verus_verify(dual(spec_encode_slab))]
+    #[verus_spec(returns self.spec_encode_slab(slab))]
     fn encode_slab(self, slab: u64) -> Self {
         let item_size = slab & Self::SLAB_MASK;
         Self(self.0 | (item_size << Self::TYPE_SHIFT))
@@ -200,58 +188,36 @@ impl PageStorageType {
     /// # Returns
     ///
     /// The updated [`PageStorageType`].
-    #[verus_verify(external_body)]
-    #[verus_spec(ret =>
-        requires
-            refcount <= (u64::MAX >> 4),
-        ensures
-            ret@ == (self@ | (refcount << 4))
-    )]
+    #[verus_verify(dual(spec_encode_refcount))]
+    #[verus_spec(returns self.spec_encode_refcount(refcount))]
     fn encode_refcount(self, refcount: u64) -> Self {
         Self(self.0 | refcount << Self::TYPE_SHIFT)
     }
 
     /// Decodes the order of the page.
-    #[verus_verify(external_body)]
-    #[verus_spec(order =>
-        ensures
-            order <= 0xff,
-            self@ | (((order as u64) & 0xffu64) << 4) == self@
-    )]
+    #[verus_verify(dual(spec_decode_order))]
+    #[verus_spec(returns self.spec_decode_order())]
     fn decode_order(&self) -> usize {
         ((self.0 >> Self::TYPE_SHIFT) & Self::ORDER_MASK) as usize
     }
 
     /// Decodes the index of the next page.
-    #[verus_verify(external_body)]
-    #[verus_spec(next =>
-        ensures
-            next <= (u64::MAX >> 12),
-            self@ | ((next as u64) << 12) == self@
-    )]
+    #[verus_verify(dual(spec_decode_next))]
+    #[verus_spec(returns self.spec_decode_next())]
     fn decode_next(&self) -> usize {
         (self.0 >> Self::NEXT_SHIFT) as usize
     }
 
     /// Decodes the slab
-    #[verus_verify(external_body)]
-    #[verus_spec(slab =>
-        ensures
-            slab <= 0xffff,
-            self@ | (slab << 4) == self@
-    )]
+    #[verus_verify(dual(spec_decode_slab))]
+    #[verus_spec(returns self.spec_decode_slab())]
     fn decode_slab(&self) -> u64 {
         (self.0 >> Self::TYPE_SHIFT) & Self::SLAB_MASK
     }
 
-    #[verus_verify(external_body)]
-    #[verus_spec(refcount =>
-        ensures
-            refcount <= (u64::MAX >> 4),
-            self@ | (refcount << 4) == self@
-    )]
     /// Decodes the reference count.
-    #[verus_verify(external_body)]
+    #[verus_verify(dual(spec_decode_refcount))]
+    #[verus_spec(returns self.spec_decode_refcount())]
     fn decode_refcount(&self) -> u64 {
         self.0 >> Self::TYPE_SHIFT
     }
@@ -280,6 +246,8 @@ struct FreeInfo {
 
 impl FreeInfo {
     /// Encodes the [`FreeInfo`] into a [`PageStorageType`].
+    #[verus_verify(dual(spec_encode_impl))]
+    #[verus_spec(returns self.spec_encode_impl())]
     fn encode(&self) -> PageStorageType {
         PageStorageType::new(PageType::Free)
             .encode_order(self.order)
@@ -287,6 +255,12 @@ impl FreeInfo {
     }
 
     /// Decodes a [`FreeInfo`] into a [`PageStorageType`].
+    #[verus_verify(dual(spec_decode_impl))]
+    #[verus_spec(
+        requires Self::spec_decode_impl(mem).order < MAX_ORDER,
+        Self::spec_decode_impl(mem).next_page < MAX_PAGE_COUNT,
+        returns Self::spec_decode_impl(mem)
+    )]
     fn decode(mem: PageStorageType) -> Self {
         let next_page = mem.decode_next();
         let order = mem.decode_order();
@@ -303,11 +277,18 @@ struct AllocatedInfo {
 
 impl AllocatedInfo {
     /// Encodes the [`AllocatedInfo`] into a [`PageStorageType`].
+    #[verus_verify(dual(spec_encode_impl))]
+    #[verus_spec(returns self.spec_encode_impl())]
     fn encode(&self) -> PageStorageType {
         PageStorageType::new(PageType::Allocated).encode_order(self.order)
     }
 
     /// Decodes a [`PageStorageType`] into an [`AllocatedInfo`].
+    #[verus_verify(dual(spec_decode_impl))]
+    #[verus_spec(
+        requires Self::spec_decode_impl(mem).order < MAX_ORDER,
+        returns Self::spec_decode_impl(mem)
+    )]
     fn decode(mem: PageStorageType) -> Self {
         let order = mem.decode_order();
         Self { order }
@@ -323,11 +304,18 @@ struct SlabPageInfo {
 
 impl SlabPageInfo {
     /// Encodes the [`SlabPageInfo`] into a [`PageStorageType`].
+    #[verus_verify(dual(spec_encode_impl))]
+    #[verus_spec(returns self.spec_encode_impl())]
     fn encode(&self) -> PageStorageType {
         PageStorageType::new(PageType::SlabPage).encode_slab(self.item_size)
     }
 
     /// Decodes a [`PageStorageType`] into a [`SlabPageInfo`].
+    #[verus_verify(dual(spec_decode_impl))]
+    #[verus_spec(
+        requires Self::spec_decode_impl(mem).item_size <= (u64::MAX >> PageStorageType::TYPE_SHIFT),
+        returns Self::spec_decode_impl(mem)
+    )]
     fn decode(mem: PageStorageType) -> Self {
         let item_size = mem.decode_slab();
         Self { item_size }
@@ -343,11 +331,18 @@ struct CompoundInfo {
 
 impl CompoundInfo {
     /// Encodes the [`CompoundInfo`] into a [`PageStorageType`].
+    #[verus_verify(dual(spec_encode_impl))]
+    #[verus_spec(returns self.spec_encode_impl())]
     fn encode(&self) -> PageStorageType {
         PageStorageType::new(PageType::Compound).encode_order(self.order)
     }
 
     /// Decodes a [`PageStorageType`] into a [`CompoundInfo`].
+    #[verus_verify(dual(spec_decode_impl))]
+    #[verus_spec(
+        requires Self::spec_decode_impl(mem).order < MAX_ORDER,
+        returns Self::spec_decode_impl(mem)
+    )]
     fn decode(mem: PageStorageType) -> Self {
         let order = mem.decode_order();
         Self { order }
@@ -361,11 +356,15 @@ struct ReservedInfo;
 
 impl ReservedInfo {
     /// Encodes the [`ReservedInfo`] into a [`PageStorageType`].
+    #[verus_verify(dual(spec_encode_impl))]
+    #[verus_spec(returns self.spec_encode_impl())]
     fn encode(&self) -> PageStorageType {
         PageStorageType::new(PageType::Reserved)
     }
 
     /// Decodes a [`PageStorageType`] into a [`ReservedInfo`].
+    #[verus_verify(dual(spec_decode_impl))]
+    #[verus_spec(returns Self::spec_decode_impl(_mem))]
     fn decode(_mem: PageStorageType) -> Self {
         Self
     }
@@ -381,16 +380,28 @@ struct FileInfo {
 
 impl FileInfo {
     /// Creates a new [`FileInfo`] with the specified reference count.
+    #[verus_verify(dual(spec_new))]
+    #[verus_spec(
+        requires ref_count <= u64::MAX >> PageStorageType::TYPE_SHIFT,
+        returns Self::spec_new(ref_count)
+    )]
     const fn new(ref_count: u64) -> Self {
         Self { ref_count }
     }
 
     /// Encodes the [`FileInfo`] into a [`PageStorageType`].
+    #[verus_verify(dual(spec_encode_impl))]
+    #[verus_spec(returns self.spec_encode_impl())]
     fn encode(&self) -> PageStorageType {
         PageStorageType::new(PageType::File).encode_refcount(self.ref_count)
     }
 
     /// Decodes a [`PageStorageType`] into a [`FileInfo`].
+    #[verus_verify(dual(spec_decode_impl))]
+    #[verus_spec(
+        requires Self::spec_decode_impl(mem).ref_count <= (u64::MAX >> PageStorageType::TYPE_SHIFT),
+        returns Self::spec_decode_impl(mem)
+    )]
     fn decode(mem: PageStorageType) -> Self {
         let ref_count = mem.decode_refcount();
         Self { ref_count }
@@ -412,13 +423,17 @@ enum PageInfo {
 #[verus_verify]
 impl PageInfo {
     /// Converts [`PageInfo`] into a [`PageStorageType`].
-    #[verus_verify(external_body)]
-    #[verus_spec(ret =>
+    #[verus_spec(ret=>
         ensures
-            PageInfo::spec_decode(ret) == Some(self),
-            Some(ret) == self.spec_encode(),
+            Self::spec_decode(ret) == Some(self),
+        returns 
+            self.spec_encode().unwrap()
     )]
     fn to_mem(self) -> PageStorageType {
+        proof!{
+            use_type_invariant(&self);
+            self.proof_encode_decode();
+        }
         match self {
             Self::Free(fi) => fi.encode(),
             Self::Allocated(ai) => ai.encode(),

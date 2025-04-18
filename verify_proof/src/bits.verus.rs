@@ -278,7 +278,7 @@ macro_rules! bit_not_properties {
 }
 
 macro_rules! bit_set_clear_mask {
-    ($typ:ty, $styp:ty, $pname_or_mask: ident, $pname_and_mask: ident) => {
+    ($typ:ty, $styp:ty, $pname_or_mask: ident, $pname_and_mask: ident, $pname_or_zero: ident, $pname_and_zero: ident) => {
         verus! {
         #[doc = "Proof that a mask m is set with or operation."]
         #[verifier(bit_vector)]
@@ -300,6 +300,21 @@ macro_rules! bit_set_clear_mask {
                 a & m <= m,
                 a & m <= a,
                 a == (a & m) + (a & !m),
+        {}
+
+        #[doc = "Proof that a mask m is cleared with and operation."]
+        #[verifier(bit_vector)]
+        pub broadcast proof fn $pname_or_zero(a: $typ, b: $typ)
+            ensures
+                b == 0 ==> #[trigger](a | b) == a,
+                a == 0 ==> #[trigger](a | b) == b,
+        {}
+
+        #[doc = "Proof that a mask m is cleared with and operation."]
+        #[verifier(bit_vector)]
+        pub broadcast proof fn $pname_and_zero(a: $typ, b: $typ)
+            ensures
+                a == 0 | b == 0 ==> #[trigger](a & b) == 0,
         {}
         }
     };
@@ -349,16 +364,16 @@ macro_rules! bit_and_mask_is_mod {
 
 bit_shl_values! {u64, u64, 1u64, lemma_bit_u64_shl_values}
 bit_not_properties! {u64, u64, spec_bit_u64_not_properties, lemma_bit_u64_not_is_sub}
-bit_set_clear_mask! {u64, u64, lemma_bit_u64_or_mask, lemma_bit_u64_and_mask}
+bit_set_clear_mask! {u64, u64, lemma_bit_u64_or_mask, lemma_bit_u64_and_mask, lemma_bit_u64_or_zero, lemma_bit_u64_and_zero}
 
 bit_shl_values! {usize, u64, 1usize, lemma_bit_usize_shl_values}
 bit_not_properties! {usize, u64, spec_bit_usize_not_properties, lemma_bit_usize_not_is_sub}
-bit_set_clear_mask! {usize, u64, lemma_bit_usize_or_mask, lemma_bit_usize_and_mask}
+bit_set_clear_mask! {usize, u64, lemma_bit_usize_or_mask, lemma_bit_usize_and_mask, lemma_bit_usize_or_zero, lemma_bit_usize_and_zero}
 bit_and_mask_is_mod! {usize, lemma_bit_usize_and_mask_is_mod}
 
 bit_shl_values! {u32, u32, 1usize, lemma_bit_u32_shl_values}
 bit_not_properties! {u32, u32, spec_bit_u32_not_properties, lemma_bit_u32_not_is_sub}
-bit_set_clear_mask! {u32, u32, lemma_bit_u32_or_mask, lemma_bit_u32_and_mask}
+bit_set_clear_mask! {u32, u32, lemma_bit_u32_or_mask, lemma_bit_u32_and_mask, lemma_bit_u32_or_zero, lemma_bit_u32_and_zero}
 bit_and_mask_is_mod! {u32, lemma_bit_u32_and_mask_is_mod}
 verus! {
 
@@ -387,6 +402,150 @@ pub broadcast proof fn lemma_bit_usize_shr_is_div(v: usize, n: usize)
     vstd::bits::lemma_u64_shr_is_div(v as u64, n as u64);
     lemma_pow2_eq_bit_value(n as nat);
 }
+
+pub broadcast proof fn lemma_bit_u64_shr_is_div(v: u64, n: u64)
+    requires
+        n < u64::BITS,
+    ensures
+        (#[trigger] (v >> n)) == v as int / bit_value(n as u64) as int,
+{
+    vstd::bits::lemma_u64_shr_is_div(v as u64, n as u64);
+    lemma_pow2_eq_bit_value(n as nat);
+}
+
+#[verifier(bit_vector)]
+pub proof fn lemma_u64_or_shl(x: u64, y: u64, n: u64)
+requires
+    n < 64,
+ensures
+    (x | y) << n == (x << n) | (y << n)
+{}
+
+#[verifier(bit_vector)]
+pub proof fn lemma_u64_or_shr(x: u64, y: u64, n: u64)
+requires
+    n < 64,
+ensures
+    (x | y) >> n == (x >> n) | (y >> n)
+{}
+
+#[verifier(bit_vector)]
+pub proof fn lemma_u64_and_is_distributive_or(x: u64, y: u64, mask: u64)
+ensures
+    (x | y) & mask == (x & mask) | (y & mask),
+{}
+
+#[verifier(bit_vector)]
+pub proof fn lemma_u64_and_bitmask_lower(x: u64, n: u64)
+requires
+    n < 64,
+    x < (1u64<<n),
+ensures
+    x & ((1u64<<n) - 1) as u64 == x,
+{}
+
+#[verifier(bit_vector)]
+pub proof fn lemma_u64_and_bitmask_higher(x: u64, n: u64, m: u64)
+requires
+    n <= m < 64,
+ensures
+    (x << m) & ((1u64<<n) - 1) as u64 == 0,
+{}
+
+pub proof fn lemma_u64_or_low_high_bitmask_lower(x: u64, y: u64, n: u64, m: u64)
+requires
+    n <= m < 64,
+    x <= (1u64<<n) - 1,
+ensures
+    (x | y << m) & ((1u64<<n) - 1) as u64  == x,
+{
+    let mask = ((1u64<<n) - 1) as u64;
+    let tmpy = y << m;
+    let ret  = (x | tmpy) & mask as u64;
+    lemma_u64_and_is_distributive_or(x, y << m, mask as u64);
+    assert(ret == (x & mask) | (tmpy & mask));
+    lemma_u64_and_bitmask_higher(y, n, m);
+    assert((tmpy & mask) == 0);
+    lemma_u64_and_bitmask_lower(x, n);
+    assert(x | 0 == x) by(bit_vector);
+}
+
+#[verifier(bit_vector)]
+pub proof fn lemma_u64_shl_add(x: u64, n: u64, m: u64)
+requires
+    n + m < 64,
+ensures
+    (x << n) << m == (x << (n + m)),
+    (x << m) << n == (x << (m + n)),
+{
+}
+
+#[verifier(bit_vector)]
+pub proof fn lemma_u64_shr_add_one(x: u64, n: u64)
+requires
+    n < 63, 
+ensures
+    (x >> n) >> 1 == (x >> (n + 1)),
+{
+}
+
+pub proof fn lemma_u64_shr_add(x: u64, n: u64, m: u64)
+requires
+    n + m < 64, 
+ensures
+    (x >> n) >> m == (x >> (n + m)),
+decreases
+    m
+{
+    if m > 0 {
+        lemma_u64_shr_add(x, n, (m - 1) as u64);
+        lemma_u64_shr_add_one(x >> n, (m - 1) as u64);
+        lemma_u64_shr_add_one(x, (n + m - 1) as u64);
+        assert((x >> n) >> m == (x >> (n + m - 1)) >> 1);
+    } else {
+        assert((x >> n) >> 0 == x >> n) by(bit_vector);
+    }
+}
+
+#[verifier(bit_vector)]
+pub proof fn lemma_u64_shlr_same(x: u64, n: u64)
+requires
+    x <= 0xffff_ffff_ffff_ffffu64 >> n,
+ensures
+    (x << n) >> n == x,
+{
+}
+
+pub proof fn lemma_u64_shl_shr(x: u64, n: u64, m: u64)
+requires
+    x <= u64::MAX >> n,
+    n < 64,
+    m < 64,
+    n <= m,
+ensures
+    n < m ==> (x << n) >> m == (x >> (m - n)),
+    n == m ==> (x << n) >> m == x,
+decreases
+    m
+{
+    
+    if m == 0 || n == 0 {
+        assert((x << n) >> 0 == x << n) by(bit_vector);
+        assert(x << 0 == x) by(bit_vector);
+        assert(x >> 0 == x) by(bit_vector);
+    } else if n == m {
+        lemma_u64_shlr_same(x, n);
+    } else {
+        let mm = (m - 1) as u64;
+        lemma_u64_shl_shr(x, n, mm);
+        lemma_u64_shr_add_one(x << n, mm);
+        if n < m {
+            let diff = (mm - n) as u64;
+            lemma_u64_shr_add_one(x, diff);
+        }
+    }
+}
+
 
 } // verus!
 macro_rules! bit_xor_neighbor {

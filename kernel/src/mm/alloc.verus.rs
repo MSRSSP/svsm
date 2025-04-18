@@ -19,9 +19,7 @@ use crate::mm::address_space::LinearMap;
 use crate::types::lemma_page_size;
 use verify_external::convert::FromSpec;
 use verify_external::hw_spec::{SpecMemMapTr, SpecVAddrImpl};
-use verify_proof::bits::{
-    lemma_bit_usize_and_mask_is_mod, lemma_bit_usize_shl_values, lemma_bit_usize_xor_neighbor,
-};
+use verify_proof::bits::*;
 use verify_proof::frac_ptr::{raw_perm_is_disjoint, FracTypedPerm};
 use verify_proof::nonlinear::*;
 use verify_proof::set::*;
