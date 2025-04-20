@@ -25,7 +25,7 @@ verus! {
 
 pub type RawPerm = PointsToRaw;
 
-pub spec const MAX_PAGE_COUNT: int = (usize::MAX >> 12) + 1;
+pub spec const MAX_PAGE_COUNT: u64 = 1u64 << (64 - 12) as u64;
 
 pub spec const MAX_PGINFO_SHARES: nat = 2;
 
@@ -302,7 +302,7 @@ impl MemRegionMapping {
     pub open spec fn base_ptr<T>(&self) -> *const T {
         vstd::raw_ptr::ptr_from_data(
             vstd::raw_ptr::PtrData {
-                addr: self@.map.start_virt@,
+                addr: self@.map.virt_start@,
                 provenance: self@.provenance,
                 metadata: vstd::raw_ptr::Metadata::Thin,
             },

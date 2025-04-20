@@ -48,6 +48,7 @@ broadcast group alloc_broadcast_group {
     lemma_bit_usize_shl_values,
     lemma_page_size,
     set_len_group,
+    //lemma_bit_u64_and_bound,
     alloc_spec::lemma_compound_neighbor,
 }
 
@@ -275,8 +276,8 @@ impl View for MemoryRegion {
 impl MemoryRegion {
     spec fn map(&self) -> LinearMap {
         LinearMap {
-            start_virt: self.start_virt,
-            start_phys: self.start_phys@ as int,
+            virt_start: self.virt_start,
+            phys_start: self.start_phys@ as int,
             size: (self.page_count * PAGE_SIZE) as nat,
         }
     }

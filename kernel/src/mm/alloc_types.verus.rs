@@ -93,12 +93,22 @@ trait SpecDecoderProof<T>: core::marker::Sized {
 
     spec fn spec_encode(&self) -> Option<T>;
 
-    proof fn proof_encode_decode(&self)
+    proof fn lemma_encode_decode(&self)
         requires
             self.spec_encode().is_some(),
         ensures
             Self::spec_decode(self.spec_encode().unwrap()) === Some(*self),
     ;
+
+    proof fn proof_encode_decode(&self)
+        ensures
+            self.spec_encode().is_some() ==> Self::spec_decode(self.spec_encode().unwrap())
+                === Some(*self),
+    {
+        if self.spec_encode().is_some() {
+            self.lemma_encode_decode();
+        }
+    }
 }
 
 impl PageType {
@@ -120,7 +130,7 @@ impl PageType {
     }
 
     #[verifier::spinoff_prover]
-    proof fn proof_encode_decode(&self) {
+    proof fn lemma_encode_decode(&self) {
     }
 }
 
@@ -164,15 +174,54 @@ impl FreeInfoSpec {
 }
 
 impl PageInfo {
-    #[verifier::type_invariant]
-    pub closed spec fn inv(&self) -> bool {
-        match *self {
-            PageInfo::Free(ref info) => info.inv(),
-            PageInfo::Allocated(ref info) => info.inv(),
-            PageInfo::Slab(ref info) => info.inv(),
-            PageInfo::Compound(ref info) => info.inv(),
-            PageInfo::File(ref info) => info.inv(),
-            PageInfo::Reserved(ref _info) => true,
+    spec fn inv(&self) -> bool {
+        match self {
+            PageInfo::Free(info) => info.inv(),
+            PageInfo::Allocated(info) => info.inv(),
+            PageInfo::Slab(info) => info.inv(),
+            PageInfo::Compound(info) => info.inv(),
+            PageInfo::File(info) => info.inv(),
+            PageInfo::Reserved(info) => true,
+        }
+    }
+
+    proof fn use_type_invariant(tracked &self)
+        ensures
+            self.inv(),
+    {
+        match self {
+            PageInfo::Free(info) => {
+                use_type_invariant(info);
+            },
+            PageInfo::Allocated(info) => {
+                use_type_invariant(info);
+            },
+            PageInfo::Slab(info) => {
+                use_type_invariant(info);
+            },
+            PageInfo::Compound(info) => {
+                use_type_invariant(info);
+            },
+            PageInfo::File(info) => {
+                use_type_invariant(info);
+            },
+            _ => {},
+        }
+    }
+}
+
+impl PageStorageType {
+    spec fn wf(&self) -> bool {
+        let mem_type = PageType::spec_decode(*self);
+        if mem_type.is_none() {
+            false
+        } else {
+            match mem_type.unwrap() {
+                (PageType::Free
+                | PageType::Allocated
+                | PageType::Compound) => self.spec_decode_order() < MAX_ORDER,
+                _ => true,
+            }
         }
     }
 }
@@ -206,7 +255,7 @@ proof fn lemma_free_encode_decode(info: FreeInfoSpec)
             ret == mem | (masked_order << 4) | (next_page << 12),
             mem < 15,
             masked_order < 6,
-            next_page - 1 < 0xffff_ffff_ffff_ffffu64 >> 12,
+            next_page < 1u64 << 52,
     ;
 }
 
@@ -223,7 +272,7 @@ impl SpecDecoderProof<PageStorageType> for FreeInfo {
         }
     }
 
-    proof fn proof_encode_decode(&self)
+    proof fn lemma_encode_decode(&self)
         ensures
             PageType::spec_decode(self.spec_encode().unwrap()) === Some(PageType::Free),
     {
@@ -254,7 +303,7 @@ impl SpecDecoderProof<PageStorageType> for FreeInfo {
                 ret == mem | (masked_order << 4) | (next_page << 12),
                 mem < 15,
                 masked_order < 6,
-                next_page - 1 < 0xffff_ffff_ffff_ffffu64 >> 12,
+                next_page < (1u64 << 52),
         ;
         broadcast use lemma_bit_u64_or_mask, lemma_bit_u64_and_mask;
 
@@ -291,12 +340,17 @@ impl SpecDecoderProof<PageStorageType> for AllocatedInfo {
         }
     }
 
-    proof fn proof_encode_decode(&self)
+    proof fn lemma_encode_decode(&self)
         ensures
             PageType::spec_decode(self.spec_encode().unwrap()) === Some(PageType::Allocated),
     {
-        PageType::Allocated.proof_encode_decode();
-        lemma_bit_u64_extract_fields_from_packed_2(PageType::Allocated as u64, self.order as u64, PageStorageType::TYPE_SHIFT, (PageStorageType::NEXT_SHIFT - PageStorageType::TYPE_SHIFT) as u64);
+        PageType::Allocated.lemma_encode_decode();
+        lemma_bit_u64_extract_fields_from_packed_2(
+            PageType::Allocated as u64,
+            self.order as u64,
+            PageStorageType::TYPE_SHIFT,
+            (PageStorageType::NEXT_SHIFT - PageStorageType::TYPE_SHIFT) as u64,
+        );
     }
 }
 
@@ -313,13 +367,18 @@ impl SpecDecoderProof<PageStorageType> for SlabPageInfo {
         }
     }
 
-    proof fn proof_encode_decode(&self)
+    proof fn lemma_encode_decode(&self)
         ensures
             PageType::spec_decode(self.spec_encode().unwrap()) === Some(PageType::SlabPage),
     {
-        PageType::SlabPage.proof_encode_decode();
-        assert(self.item_size <= (1u64<< 16)) by (compute);
-        lemma_bit_u64_extract_fields_from_packed_2(PageType::SlabPage as u64, self.item_size as u64, PageStorageType::TYPE_SHIFT, 16);
+        PageType::SlabPage.lemma_encode_decode();
+        assert(self.item_size <= (1u64 << 16)) by (compute);
+        lemma_bit_u64_extract_fields_from_packed_2(
+            PageType::SlabPage as u64,
+            self.item_size as u64,
+            PageStorageType::TYPE_SHIFT,
+            16,
+        );
     }
 }
 
@@ -336,12 +395,17 @@ impl SpecDecoderProof<PageStorageType> for CompoundInfo {
         }
     }
 
-    proof fn proof_encode_decode(&self)
+    proof fn lemma_encode_decode(&self)
         ensures
             PageType::spec_decode(self.spec_encode().unwrap()) === Some(PageType::Compound),
     {
-        PageType::Compound.proof_encode_decode();
-        lemma_bit_u64_extract_fields_from_packed_2(PageType::Compound as u64, self.order as u64, PageStorageType::TYPE_SHIFT, 8);
+        PageType::Compound.lemma_encode_decode();
+        lemma_bit_u64_extract_fields_from_packed_2(
+            PageType::Compound as u64,
+            self.order as u64,
+            PageStorageType::TYPE_SHIFT,
+            8,
+        );
     }
 }
 
@@ -358,16 +422,21 @@ impl SpecDecoderProof<PageStorageType> for FileInfo {
         }
     }
 
-    proof fn proof_encode_decode(&self)
+    proof fn lemma_encode_decode(&self)
         ensures
             PageType::spec_decode(self.spec_encode().unwrap()) === Some(PageType::File),
     {
-        PageType::File.proof_encode_decode();
+        PageType::File.lemma_encode_decode();
         let ref_count = self.ref_count as u64;
-        let tbits = PageStorageType::TYPE_SHIFT ;
+        let tbits = PageStorageType::TYPE_SHIFT;
         let bits = (64 - PageStorageType::TYPE_SHIFT) as u64;
-        let mem  = self.spec_encode().unwrap().0;
-        lemma_bit_u64_extract_fields_from_packed_2(PageType::File as u64, ref_count, PageStorageType::TYPE_SHIFT, bits);
+        let mem = self.spec_encode().unwrap().0;
+        lemma_bit_u64_extract_fields_from_packed_2(
+            PageType::File as u64,
+            ref_count,
+            PageStorageType::TYPE_SHIFT,
+            bits,
+        );
     }
 }
 
@@ -380,11 +449,11 @@ impl SpecDecoderProof<PageStorageType> for ReservedInfo {
         Some(Self::spec_decode_impl(mem))
     }
 
-    proof fn proof_encode_decode(&self)
+    proof fn lemma_encode_decode(&self)
         ensures
             PageType::spec_decode(self.spec_encode().unwrap()) === Some(PageType::Reserved),
     {
-        PageType::Reserved.proof_encode_decode();
+        PageType::Reserved.lemma_encode_decode();
         lemma_u64_and_bitmask_lower(PageType::Reserved as u64, PageStorageType::TYPE_SHIFT);
     }
 }
@@ -407,7 +476,7 @@ impl SpecDecoderProof<PageStorageType> for PageType {
         }
     }
 
-    proof fn proof_encode_decode(&self) {
+    proof fn lemma_encode_decode(&self) {
         let mem = self.spec_encode().unwrap();
         let val = mem.0;
         assert(val & 0xf == val) by (bit_vector)
@@ -418,31 +487,15 @@ impl SpecDecoderProof<PageStorageType> for PageType {
     }
 }
 
-proof fn lemma_or_and(a: u64, n: u64, b: u64)
-    requires
-        a < (1u64 << n),
-        n < 64,
-        b <= (u64::MAX >> n),
-    ensures
-        (a | (b << n)) >> n == b,
-        (a | (b << n)) & sub((1u64 << n), 1) == a,
-{
-    broadcast use lemma_bit_u64_shr_properties, lemma_bit_u64_or_mask, lemma_u64_shr_is_distributive_or, lemma_u64_shl_shr, lemma_u64_or_low_high_bitmask_lower;
-}
-
 impl SpecDecoderProof<PageStorageType> for PageInfo {
     closed spec fn spec_encode(&self) -> Option<PageStorageType> {
-        if self.inv() {
-            match self {
-                Self::Free(fi) => fi.spec_encode(),
-                Self::Allocated(ai) => ai.spec_encode(),
-                Self::Slab(si) => si.spec_encode(),
-                Self::Compound(ci) => ci.spec_encode(),
-                Self::File(fi) => fi.spec_encode(),
-                Self::Reserved(ri) => ri.spec_encode(),
-            }
-        } else {
-            None
+        match self {
+            Self::Free(fi) => fi.spec_encode(),
+            Self::Allocated(ai) => ai.spec_encode(),
+            Self::Slab(si) => si.spec_encode(),
+            Self::Compound(ci) => ci.spec_encode(),
+            Self::File(fi) => fi.spec_encode(),
+            Self::Reserved(ri) => ri.spec_encode(),
         }
     }
 
@@ -464,30 +517,30 @@ impl SpecDecoderProof<PageStorageType> for PageInfo {
         }
     }
 
-    proof fn proof_encode_decode(&self) {
+    proof fn lemma_encode_decode(&self) {
         let info = *self;
         let ty_mem = info.spec_type() as u64;
         let mem = info.spec_encode().unwrap();
-        info.spec_type().proof_encode_decode();
+        info.spec_type().lemma_encode_decode();
         let memval = mem.0;
         match info {
             PageInfo::Free(finfo) => {
-                finfo.proof_encode_decode();
+                finfo.lemma_encode_decode();
             },
             PageInfo::Reserved(rinfo) => {
-                rinfo.proof_encode_decode();
+                rinfo.lemma_encode_decode();
             },
             PageInfo::Allocated(ainfo) => {
-                ainfo.proof_encode_decode();
+                ainfo.lemma_encode_decode();
             },
             PageInfo::Slab(sinfo) => {
-                sinfo.proof_encode_decode();
+                sinfo.lemma_encode_decode();
             },
             PageInfo::Compound(cinfo) => {
-                cinfo.proof_encode_decode();
+                cinfo.lemma_encode_decode();
             },
             PageInfo::File(finfo) => {
-                finfo.proof_encode_decode();
+                finfo.lemma_encode_decode();
             },
         }
     }

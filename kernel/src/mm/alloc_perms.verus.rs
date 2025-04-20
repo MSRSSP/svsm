@@ -3,7 +3,7 @@ verus! {
 
 spec fn spec_map_page_info_addr(map: LinearMap, pfn: usize) -> VirtAddr {
     let reserved_unit_size = size_of::<PageStorageType>();
-    let start = map.start_virt;
+    let start = map.virt_start;
     VirtAddr::from_spec((start@ + (pfn * reserved_unit_size)) as usize)
 }
 
@@ -282,7 +282,7 @@ impl MemoryRegion {
 
     pub closed spec fn wf_params(&self) -> bool {
         &&& self.page_count <= MAX_PAGE_COUNT
-        &&& self.start_virt@ % PAGE_SIZE == 0
+        &&& self.virt_start@ % PAGE_SIZE == 0
         &&& self@.mr_map.wf()
         &&& self@.info_ptr_exposed@ == self@.mr_map@.provenance
         &&& self.map() == self@.mr_map@.map

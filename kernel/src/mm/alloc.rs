@@ -196,29 +196,53 @@ impl PageStorageType {
 
     /// Decodes the order of the page.
     #[verus_verify(dual(spec_decode_order))]
-    #[verus_spec(returns self.spec_decode_order())]
+    #[verus_spec(ret =>
+        ensures
+            ret <= Self::ORDER_MASK,
+        returns
+            self.spec_decode_order()
+    )]
     fn decode_order(&self) -> usize {
+        proof!{broadcast use lemma_bit_u64_and_bound;}
         ((self.0 >> Self::TYPE_SHIFT) & Self::ORDER_MASK) as usize
     }
 
     /// Decodes the index of the next page.
     #[verus_verify(dual(spec_decode_next))]
-    #[verus_spec(returns self.spec_decode_next())]
+    #[verus_spec(ret =>
+        ensures
+            ret < MAX_PAGE_COUNT,
+        returns
+            self.spec_decode_next()
+    )]
     fn decode_next(&self) -> usize {
+        proof! {broadcast use lemma_bit_u64_shr_bound;}
         (self.0 >> Self::NEXT_SHIFT) as usize
     }
 
     /// Decodes the slab
     #[verus_verify(dual(spec_decode_slab))]
-    #[verus_spec(returns self.spec_decode_slab())]
+    #[verus_spec(ret =>
+        ensures
+            ret <= Self::SLAB_MASK,
+        returns
+            self.spec_decode_slab(),
+    )]
     fn decode_slab(&self) -> u64 {
+        proof!{broadcast use lemma_bit_u64_and_bound;}
         (self.0 >> Self::TYPE_SHIFT) & Self::SLAB_MASK
     }
 
     /// Decodes the reference count.
     #[verus_verify(dual(spec_decode_refcount))]
-    #[verus_spec(returns self.spec_decode_refcount())]
+    #[verus_spec(ret =>
+        ensures
+            ret < (1u64 << (64 - Self::TYPE_SHIFT) as u64),
+        returns
+            self.spec_decode_refcount()
+    )]
     fn decode_refcount(&self) -> u64 {
+        proof! {broadcast use lemma_bit_u64_shr_bound;}
         self.0 >> Self::TYPE_SHIFT
     }
 
@@ -230,6 +254,7 @@ impl PageStorageType {
             ret.unwrap() === PageType::spec_decode(*self).unwrap(),
     )]
     fn page_type(&self) -> Result<PageType, AllocError> {
+        proof!{broadcast use lemma_bit_u64_and_bound;}
         PageType::try_from(self.0 & Self::TYPE_MASK)
     }
 }
@@ -257,9 +282,10 @@ impl FreeInfo {
     /// Decodes a [`FreeInfo`] into a [`PageStorageType`].
     #[verus_verify(dual(spec_decode_impl))]
     #[verus_spec(
-        requires Self::spec_decode_impl(mem).order < MAX_ORDER,
-        Self::spec_decode_impl(mem).next_page < MAX_PAGE_COUNT,
-        returns Self::spec_decode_impl(mem)
+        requires
+            Self::spec_decode_impl(mem).order < MAX_ORDER,
+        returns
+            Self::spec_decode_impl(mem)
     )]
     fn decode(mem: PageStorageType) -> Self {
         let next_page = mem.decode_next();
@@ -286,8 +312,10 @@ impl AllocatedInfo {
     /// Decodes a [`PageStorageType`] into an [`AllocatedInfo`].
     #[verus_verify(dual(spec_decode_impl))]
     #[verus_spec(
-        requires Self::spec_decode_impl(mem).order < MAX_ORDER,
-        returns Self::spec_decode_impl(mem)
+        requires
+            Self::spec_decode_impl(mem).order < MAX_ORDER,
+        returns
+            Self::spec_decode_impl(mem)
     )]
     fn decode(mem: PageStorageType) -> Self {
         let order = mem.decode_order();
@@ -313,8 +341,8 @@ impl SlabPageInfo {
     /// Decodes a [`PageStorageType`] into a [`SlabPageInfo`].
     #[verus_verify(dual(spec_decode_impl))]
     #[verus_spec(
-        requires Self::spec_decode_impl(mem).item_size <= PageStorageType::SLAB_MASK,
-        returns Self::spec_decode_impl(mem)
+        returns
+            Self::spec_decode_impl(mem)
     )]
     fn decode(mem: PageStorageType) -> Self {
         let item_size = mem.decode_slab();
@@ -399,7 +427,6 @@ impl FileInfo {
     /// Decodes a [`PageStorageType`] into a [`FileInfo`].
     #[verus_verify(dual(spec_decode_impl))]
     #[verus_spec(
-        requires Self::spec_decode_impl(mem).ref_count < (1u64 << (64 - PageStorageType::TYPE_SHIFT) as u64),
         returns Self::spec_decode_impl(mem)
     )]
     fn decode(mem: PageStorageType) -> Self {
@@ -426,12 +453,12 @@ impl PageInfo {
     #[verus_spec(ret=>
         ensures
             Self::spec_decode(ret) == Some(self),
-        returns 
+        returns
             self.spec_encode().unwrap()
     )]
     fn to_mem(self) -> PageStorageType {
         proof!{
-            use_type_invariant(&self);
+            self.use_type_invariant();
             self.proof_encode_decode();
         }
         match self {
@@ -445,11 +472,9 @@ impl PageInfo {
     }
 
     /// Converts a [`PageStorageType`] into [`PageInfo`].
-    #[verus_verify(external_body)]
     #[verus_spec(
+        requires mem.wf(),
         returns Self::spec_decode(mem).unwrap(),
-        opens_invariants none
-        no_unwind when Self::spec_decode(mem).is_some()
     )]
     fn from_mem(mem: PageStorageType) -> Self {
         let Ok(page_type) = mem.page_type() else {
@@ -481,7 +506,7 @@ pub struct MemInfo {
 #[derive(Debug)]
 struct MemoryRegion {
     start_phys: PhysAddr,
-    start_virt: VirtAddr,
+    virt_start: VirtAddr,
     page_count: usize,
     nr_pages: [usize; MAX_ORDER],
     next_page: [usize; MAX_ORDER],
@@ -501,7 +526,7 @@ impl MemoryRegion {
     const fn new() -> Self {
         Self {
             start_phys: PhysAddr::null(),
-            start_virt: VirtAddr::null(),
+            virt_start: VirtAddr::null(),
             page_count: 0,
             nr_pages: [0; MAX_ORDER],
             next_page: [0; MAX_ORDER],
@@ -545,7 +570,7 @@ impl MemoryRegion {
         let offset = pfn * size_of::<PageStorageType>();
         verus_with!(Tracked(self.perms.borrow().info_ptr_exposed));
         let ret: *mut PageStorageType = self
-            .start_virt
+            .virt_start
             .const_add(offset)
             .as_mut_ptr_with_provenance();
         ret
@@ -561,7 +586,7 @@ impl MemoryRegion {
     fn page_info_pptr(&self, pfn: usize) -> *const PageStorageType {
         let offset = pfn * size_of::<PageStorageType>();
         verus_with!(Tracked(self.perms.borrow().info_ptr_exposed));
-        self.start_virt.const_add(offset).as_ptr_with_provenance()
+        self.virt_start.const_add(offset).as_ptr_with_provenance()
     }
 
     /// Checks if a page frame number is valid.
@@ -631,7 +656,7 @@ impl MemoryRegion {
         requires
             self.wf_params(),
         ensures
-            ret.is_some() ==> ret.unwrap() == vaddr.offset() - self.start_virt.offset(),
+            ret.is_some() ==> ret.unwrap() == vaddr.offset() - self.virt_start.offset(),
             ret.is_some() == self.map().to_paddr(vaddr).is_some(),
     )]
     fn get_virt_offset(&self, vaddr: VirtAddr) -> Option<usize> {
@@ -639,12 +664,12 @@ impl MemoryRegion {
             broadcast use crate::address::group_addr_proofs;
             reveal(<LinearMap as SpecMemMapTr>::to_paddr);
         };
-        (self.start_virt <= vaddr && (vaddr - self.start_virt) < self.page_count * PAGE_SIZE).then(
+        (self.virt_start <= vaddr && (vaddr - self.virt_start) < self.page_count * PAGE_SIZE).then(
             verus_exec_expr!(
                 || -> (ret: usize)
-                requires vaddr.offset() > self.start_virt.offset(),
-                ensures ret == vaddr.offset() - self.start_virt.offset()
-                {vaddr - self.start_virt}
+                requires vaddr.offset() > self.virt_start.offset(),
+                ensures ret == vaddr.offset() - self.virt_start.offset()
+                {vaddr - self.virt_start}
             ),
         )
     }
@@ -661,7 +686,7 @@ impl MemoryRegion {
         proof! {
             use_type_invariant(vaddr);
             reveal(<LinearMap as SpecMemMapTr>::to_paddr);
-            if self@.map().start_virt.offset() <= vaddr.offset() < self@.map().start_virt.offset() + self@.map().size {
+            if self@.map().virt_start.offset() <= vaddr.offset() < self@.map().virt_start.offset() + self@.map().size {
                 self@.map().lemma_get_pfn_get_virt(vaddr);
             }
         }
@@ -897,7 +922,7 @@ impl MemoryRegion {
         }
         verus_with!(Tracked(&mut info_head));
         self.write_page_info(pfn, pg);
-        let vaddr = self.start_virt + (pfn * PAGE_SIZE);
+        let vaddr = self.virt_start + (pfn * PAGE_SIZE);
         proof! {
             reserved.tracked_insert(pfn, info_head);
             let tracked mut info = PageInfoDb::tracked_new_unit(order, pfn, id, reserved);
@@ -960,7 +985,7 @@ impl MemoryRegion {
             item_size: u64::from(item_size),
         });
         self.write_page_info(pfn, pg);
-        Ok(self.start_virt + (pfn * PAGE_SIZE))
+        Ok(self.virt_start + (pfn * PAGE_SIZE))
     }
 
     /// Allocates a file page with initial reference count.
@@ -2297,7 +2322,7 @@ pub fn root_mem_init(pstart: PhysAddr, vstart: VirtAddr, page_count: usize) {
     {
         let mut region = ROOT_MEM.lock();
         region.start_phys = pstart;
-        region.start_virt = vstart;
+        region.virt_start = vstart;
         region.page_count = page_count;
         region.init_memory();
         // drop lock here so slab initialization does not deadlock
@@ -2415,7 +2440,7 @@ impl Drop for TestRootMem<'_> {
 
         let mut root_mem = ROOT_MEM.lock();
         let layout = Layout::from_size_align(root_mem.page_count * PAGE_SIZE, PAGE_SIZE).unwrap();
-        unsafe { dealloc(root_mem.start_virt.as_mut_ptr::<u8>(), layout) };
+        unsafe { dealloc(root_mem.virt_start.as_mut_ptr::<u8>(), layout) };
         *root_mem = MemoryRegion::new();
 
         // Reset the Slabs

@@ -1221,14 +1221,14 @@ impl MemoryRegion {
         broadcast use lemma_page_size;
 
         reveal(<LinearMap as SpecMemMapTr>::to_paddr);
-        reveal(<LinearMap as SpecMemMapTr>::to_vaddr);
-        assert(self.start_virt@ % 0x1000 == 0);
+        //reveal(<LinearMap as SpecMemMapTr>::to_vaddr);
+        assert(self.virt_start@ % 0x1000 == 0);
         if vaddr@ % 0x1000 == 0 {
-            assert(vaddr.offset() - self.start_virt.offset() == (vaddr.offset()
-                - self.start_virt.offset()) / 0x1000 * 0x1000) by {
+            assert(vaddr.offset() - self.virt_start.offset() == (vaddr.offset()
+                - self.virt_start.offset()) / 0x1000 * 0x1000) by {
                 vaddr.property_canonical();
-                self.start_virt.property_canonical();
-                assert(self.start_virt.offset() % 0x1000 == 0);
+                self.virt_start.property_canonical();
+                assert(self.virt_start.offset() % 0x1000 == 0);
                 broadcast use verify_proof::bits::lemma_bit_usize_not_is_sub;
 
             }

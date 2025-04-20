@@ -278,7 +278,7 @@ macro_rules! bit_not_properties {
 }
 
 macro_rules! bit_set_clear_mask {
-    ($typ:ty, $styp:ty, $pname_or_mask: ident, $pname_and_mask: ident) => {
+    ($typ:ty, $styp:ty, $pname_or_mask: ident, $pname_and_mask: ident, $pname_and_mask_bound: ident) => {
         verus! {
         #[doc = "Proof that a mask m is set with or operation."]
         #[verifier(bit_vector)]
@@ -303,6 +303,14 @@ macro_rules! bit_set_clear_mask {
                 a & m <= a,
                 a == (a & m) + (a & !m),
                 a == 0 | m == 0 ==> #[trigger](a & m) == 0,
+        {}
+
+        #[doc = "Proof that a & m <= a and a & m <= m."]
+        #[verifier(bit_vector)]
+        pub broadcast proof fn $pname_and_mask_bound(a: $typ, m: $typ)
+            ensures
+                (#[trigger](a & m)) <= m,
+                a & m <= a,
         {}
         }
     };
@@ -352,16 +360,16 @@ macro_rules! bit_and_mask_is_mod {
 
 bit_shl_values! {u64, u64, 1u64, lemma_bit_u64_shl_values}
 bit_not_properties! {u64, u64, spec_bit_u64_not_properties, lemma_bit_u64_not_is_sub}
-bit_set_clear_mask! {u64, u64, lemma_bit_u64_or_mask, lemma_bit_u64_and_mask}
+bit_set_clear_mask! {u64, u64, lemma_bit_u64_or_mask, lemma_bit_u64_and_mask, lemma_bit_u64_and_bound}
 
 bit_shl_values! {usize, u64, 1usize, lemma_bit_usize_shl_values}
 bit_not_properties! {usize, u64, spec_bit_usize_not_properties, lemma_bit_usize_not_is_sub}
-bit_set_clear_mask! {usize, u64, lemma_bit_usize_or_mask, lemma_bit_usize_and_mask}
+bit_set_clear_mask! {usize, u64, lemma_bit_usize_or_mask, lemma_bit_usize_and_mask, lemma_bit_usize_and_bound}
 bit_and_mask_is_mod! {usize, lemma_bit_usize_and_mask_is_mod}
 
 bit_shl_values! {u32, u32, 1usize, lemma_bit_u32_shl_values}
 bit_not_properties! {u32, u32, spec_bit_u32_not_properties, lemma_bit_u32_not_is_sub}
-bit_set_clear_mask! {u32, u32, lemma_bit_u32_or_mask, lemma_bit_u32_and_mask}
+bit_set_clear_mask! {u32, u32, lemma_bit_u32_or_mask, lemma_bit_u32_and_mask, lemma_bit_u32_and_bound}
 bit_and_mask_is_mod! {u32, lemma_bit_u32_and_mask_is_mod}
 verus! {
 
@@ -389,6 +397,17 @@ pub broadcast proof fn lemma_bit_usize_shr_is_div(v: usize, n: usize)
 {
     vstd::bits::lemma_u64_shr_is_div(v as u64, n as u64);
     lemma_pow2_eq_bit_value(n as nat);
+}
+
+#[verifier(bit_vector)]
+pub broadcast proof fn lemma_bit_u64_shr_bound(v: u64, n: u64)
+    requires
+        n < u64::BITS,
+    ensures
+        n > 0 ==> (#[trigger] (v >> n)) < 1u64 << (64 - n),
+        n == 0 ==> (v >> n) == v,
+        v >> n <= v,
+{
 }
 
 pub broadcast proof fn lemma_bit_u64_shr_properties(v: u64, n: u64)
@@ -615,34 +634,6 @@ pub proof fn lemma_bit_u64_extract_fields_from_packed_2(a: u64, b: u64, n: u64, 
     lemma_bit_u64_or_mask(a, 0);
 }
 
-/*#[verifier::rlimit(16)]
-pub proof fn lemma_bit_u64_extract_fields_from_packed_3(a: u64, b: u64, c: u64, n1: u64, n2: u64)
-    requires
-        a < (1u64 << n1),
-        b < (1u64 << n2),
-        c < (u64::MAX >> (n1 + n2)),
-        n1 + n2 < 64,
-    ensures
-        (a | (b << n1) | c << add(n1, n2)) >> (n1 + n2) == c,
-        //((a | (b << n1) | c << add(n1, n2)) >> n1) & sub(1u64 << n2, 1) == b,
-        ((a | (b << n1) | c << add(n1, n2))) & sub((1u64 << n1), 1) == a,
-{
-    //broadcast use lemma_bit_u64_or_mask;
-    let ret =  a | (b << n1) | c << add(n1, n2);
-    let tmp1 = ((b | c << n2));
-    let tmp2 = (a | (b << n1));
-    assert(ret == tmp2 | (c << add(n1, n2)));
-
-    assert((c << n2) << n1 == c << (n1 + n2)) by {
-        lemma_u64_shl_add(c, n2, n1);
-    }
-    assert(ret == a | (tmp1 << n1)) by {
-        lemma_u64_or_is_associative(a, b << n1, c << add(n1, n2));
-        lemma_u64_shl_is_distributive_or(b, c << n2, n1);
-        assert((tmp1 << n1) == (b << n1) | c << add(n1, n2));
-    }
-    lemma_bit_u64_extract_fields_from_packed_2(a, tmp1, n1);
-}*/
 } // verus!
 macro_rules! bit_xor_neighbor {
     ($typ:ty, $pname: ident) => {
