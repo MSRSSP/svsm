@@ -313,7 +313,7 @@ impl SlabPageInfo {
     /// Decodes a [`PageStorageType`] into a [`SlabPageInfo`].
     #[verus_verify(dual(spec_decode_impl))]
     #[verus_spec(
-        requires Self::spec_decode_impl(mem).item_size <= (u64::MAX >> PageStorageType::TYPE_SHIFT),
+        requires Self::spec_decode_impl(mem).item_size <= PageStorageType::SLAB_MASK,
         returns Self::spec_decode_impl(mem)
     )]
     fn decode(mem: PageStorageType) -> Self {
@@ -382,7 +382,7 @@ impl FileInfo {
     /// Creates a new [`FileInfo`] with the specified reference count.
     #[verus_verify(dual(spec_new))]
     #[verus_spec(
-        requires ref_count <= u64::MAX >> PageStorageType::TYPE_SHIFT,
+        requires ref_count < (1u64 << (64 - PageStorageType::TYPE_SHIFT) as u64),
         returns Self::spec_new(ref_count)
     )]
     const fn new(ref_count: u64) -> Self {
@@ -399,7 +399,7 @@ impl FileInfo {
     /// Decodes a [`PageStorageType`] into a [`FileInfo`].
     #[verus_verify(dual(spec_decode_impl))]
     #[verus_spec(
-        requires Self::spec_decode_impl(mem).ref_count <= (u64::MAX >> PageStorageType::TYPE_SHIFT),
+        requires Self::spec_decode_impl(mem).ref_count < (1u64 << (64 - PageStorageType::TYPE_SHIFT) as u64),
         returns Self::spec_decode_impl(mem)
     )]
     fn decode(mem: PageStorageType) -> Self {

@@ -144,14 +144,14 @@ impl CompoundInfo {
 impl FileInfo {
     #[verifier::type_invariant]
     pub closed spec fn inv(&self) -> bool {
-        self.ref_count <= (u64::MAX >> PageStorageType::TYPE_SHIFT)
+        self.ref_count < (1u64 << (64 - PageStorageType::TYPE_SHIFT) as u64)
     }
 }
 
 impl SlabPageInfo {
     #[verifier::type_invariant]
     pub closed spec fn inv(&self) -> bool {
-        self.item_size <= (u64::MAX >> PageStorageType::TYPE_SHIFT)
+        self.item_size <= PageStorageType::SLAB_MASK
     }
 }
 
@@ -256,7 +256,7 @@ impl SpecDecoderProof<PageStorageType> for FreeInfo {
                 masked_order < 6,
                 next_page - 1 < 0xffff_ffff_ffff_ffffu64 >> 12,
         ;
-        broadcast use lemma_bit_u64_or_zero, lemma_bit_u64_and_zero;
+        broadcast use lemma_bit_u64_or_mask, lemma_bit_u64_and_mask;
 
         lemma_u64_and_bitmask_lower(tymem, PageStorageType::TYPE_SHIFT);
         lemma_u64_and_bitmask_higher(
@@ -284,15 +284,19 @@ impl SpecDecoderProof<PageStorageType> for AllocatedInfo {
     }
 
     spec fn spec_encode(&self) -> Option<PageStorageType> {
-        Some(self.spec_encode_impl())
+        if self.inv() {
+            Some(self.spec_encode_impl())
+        } else {
+            None
+        }
     }
 
-    #[verifier(external_body)]
     proof fn proof_encode_decode(&self)
         ensures
             PageType::spec_decode(self.spec_encode().unwrap()) === Some(PageType::Allocated),
     {
-        //PageType::Allocated.proof_encode_decode()
+        PageType::Allocated.proof_encode_decode();
+        lemma_bit_u64_extract_fields_from_packed_2(PageType::Allocated as u64, self.order as u64, PageStorageType::TYPE_SHIFT, (PageStorageType::NEXT_SHIFT - PageStorageType::TYPE_SHIFT) as u64);
     }
 }
 
@@ -302,14 +306,20 @@ impl SpecDecoderProof<PageStorageType> for SlabPageInfo {
     }
 
     spec fn spec_encode(&self) -> Option<PageStorageType> {
-        Some(self.spec_encode_impl())
+        if self.inv() {
+            Some(self.spec_encode_impl())
+        } else {
+            None
+        }
     }
 
-    #[verifier(external_body)]
     proof fn proof_encode_decode(&self)
         ensures
             PageType::spec_decode(self.spec_encode().unwrap()) === Some(PageType::SlabPage),
     {
+        PageType::SlabPage.proof_encode_decode();
+        assert(self.item_size <= (1u64<< 16)) by (compute);
+        lemma_bit_u64_extract_fields_from_packed_2(PageType::SlabPage as u64, self.item_size as u64, PageStorageType::TYPE_SHIFT, 16);
     }
 }
 
@@ -319,14 +329,19 @@ impl SpecDecoderProof<PageStorageType> for CompoundInfo {
     }
 
     spec fn spec_encode(&self) -> Option<PageStorageType> {
-        Some(self.spec_encode_impl())
+        if self.inv() {
+            Some(self.spec_encode_impl())
+        } else {
+            None
+        }
     }
 
-    #[verifier(external_body)]
     proof fn proof_encode_decode(&self)
         ensures
             PageType::spec_decode(self.spec_encode().unwrap()) === Some(PageType::Compound),
     {
+        PageType::Compound.proof_encode_decode();
+        lemma_bit_u64_extract_fields_from_packed_2(PageType::Compound as u64, self.order as u64, PageStorageType::TYPE_SHIFT, 8);
     }
 }
 
@@ -336,14 +351,23 @@ impl SpecDecoderProof<PageStorageType> for FileInfo {
     }
 
     spec fn spec_encode(&self) -> Option<PageStorageType> {
-        Some(self.spec_encode_impl())
+        if self.inv() {
+            Some(self.spec_encode_impl())
+        } else {
+            None
+        }
     }
 
-    #[verifier(external_body)]
     proof fn proof_encode_decode(&self)
         ensures
             PageType::spec_decode(self.spec_encode().unwrap()) === Some(PageType::File),
     {
+        PageType::File.proof_encode_decode();
+        let ref_count = self.ref_count as u64;
+        let tbits = PageStorageType::TYPE_SHIFT ;
+        let bits = (64 - PageStorageType::TYPE_SHIFT) as u64;
+        let mem  = self.spec_encode().unwrap().0;
+        lemma_bit_u64_extract_fields_from_packed_2(PageType::File as u64, ref_count, PageStorageType::TYPE_SHIFT, bits);
     }
 }
 
@@ -403,23 +427,7 @@ proof fn lemma_or_and(a: u64, n: u64, b: u64)
         (a | (b << n)) >> n == b,
         (a | (b << n)) & sub((1u64 << n), 1) == a,
 {
-    lemma_u64_shl_shr(b, n, n);
-    let upper_b = (b << n);
-    assert((b << n) >> n == b);
-    let ab_or = a | (b << n);
-    lemma_u64_or_shr(a, b << n, n);
-    let a2 = (a >> n);
-    assert(a2 == 0) by (bit_vector)
-        requires
-            a < (1u64 << n),
-            a2 == (a >> n),
-            n < 64,
-    ;
-    assert(a2 | b == b) by (bit_vector)
-        requires
-            a2 == 0,
-    ;
-    lemma_u64_or_low_high_bitmask_lower(a, b, n, n);
+    broadcast use lemma_bit_u64_shr_properties, lemma_bit_u64_or_mask, lemma_u64_shr_is_distributive_or, lemma_u64_shl_shr, lemma_u64_or_low_high_bitmask_lower;
 }
 
 impl SpecDecoderProof<PageStorageType> for PageInfo {
