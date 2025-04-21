@@ -15,6 +15,7 @@
 // Note:
 // - No additional specification needs to be trusted here; all assumptions are established
 //   within the trusted context of the kernel entry.
+use crate::address::group_addr_proofs;
 use crate::mm::address_space::LinearMap;
 use crate::types::lemma_page_size;
 use verify_external::convert::FromSpec;
@@ -28,6 +29,7 @@ use vstd::arithmetic::mul::*;
 use vstd::modes::tracked_swap;
 use vstd::raw_ptr::{IsExposed, PointsToRaw, Provenance};
 use vstd::set_lib::set_int_range;
+
 
 verus! {
 
@@ -276,7 +278,7 @@ impl View for MemoryRegion {
 impl MemoryRegion {
     spec fn map(&self) -> LinearMap {
         LinearMap {
-            virt_start: self.virt_start,
+            virt_start: self.start_virt,
             phys_start: self.start_phys@ as int,
             size: (self.page_count * PAGE_SIZE) as nat,
         }

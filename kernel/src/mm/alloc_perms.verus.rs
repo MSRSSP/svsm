@@ -281,7 +281,7 @@ impl MemoryRegion {
 
     pub closed spec fn wf_params(&self) -> bool {
         &&& self.page_count <= MAX_PAGE_COUNT
-        &&& self.virt_start@ % PAGE_SIZE == 0
+        &&& self.start_virt@ % PAGE_SIZE == 0
         &&& self@.mr_map.wf()
         &&& self@.info_ptr_exposed@ == self@.mr_map@.provenance
         &&& self.map() == self@.mr_map@.map

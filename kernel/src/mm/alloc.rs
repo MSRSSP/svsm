@@ -208,7 +208,7 @@ impl PageStorageType {
             self.spec_decode_order()
     )]
     fn decode_order(&self) -> usize {
-        proof!{broadcast use lemma_bit_u64_and_bound;}
+        proof! {broadcast use lemma_bit_u64_and_bound;}
         ((self.0 >> Self::TYPE_SHIFT) & Self::ORDER_MASK) as usize
     }
 
@@ -216,7 +216,7 @@ impl PageStorageType {
     #[verus_verify(dual(spec_decode_next))]
     #[verus_spec(ret =>
         ensures
-            ret < MAX_PAGE_COUNT,
+            ret < (1u64 << (u64::BITS - Self::NEXT_SHIFT) as u64),
         returns
             self.spec_decode_next()
     )]
@@ -234,7 +234,7 @@ impl PageStorageType {
             self.spec_decode_slab(),
     )]
     fn decode_slab(&self) -> u64 {
-        proof!{broadcast use lemma_bit_u64_and_bound;}
+        proof! {broadcast use lemma_bit_u64_and_bound;}
         (self.0 >> Self::TYPE_SHIFT) & Self::SLAB_MASK
     }
 
@@ -242,7 +242,7 @@ impl PageStorageType {
     #[verus_verify(dual(spec_decode_refcount))]
     #[verus_spec(ret =>
         ensures
-            ret < (1u64 << (64 - Self::TYPE_SHIFT) as u64),
+            ret < (1u64 << (u64::BITS - Self::TYPE_SHIFT) as u64),
         returns
             self.spec_decode_refcount()
     )]
@@ -413,7 +413,7 @@ impl FileInfo {
     /// Creates a new [`FileInfo`] with the specified reference count.
     #[verus_verify(dual(spec_new))]
     #[verus_spec(
-        requires ref_count < (1u64 << (64 - PageStorageType::TYPE_SHIFT) as u64),
+        requires ref_count < (1u64 << (u64::BITS - PageStorageType::TYPE_SHIFT) as u64),
         returns Self::spec_new(ref_count)
     )]
     const fn new(ref_count: u64) -> Self {
@@ -460,7 +460,7 @@ impl PageInfo {
             self.spec_encode().unwrap()
     )]
     fn to_mem(self) -> PageStorageType {
-        proof!{
+        proof! {
             self.use_type_invariant();
             self.proof_encode_decode();
         }
@@ -509,7 +509,7 @@ pub struct MemInfo {
 #[derive(Debug)]
 struct MemoryRegion {
     start_phys: PhysAddr,
-    virt_start: VirtAddr,
+    start_virt: VirtAddr,
     page_count: usize,
     nr_pages: [usize; MAX_ORDER],
     next_page: [usize; MAX_ORDER],
@@ -530,7 +530,7 @@ impl MemoryRegion {
     const fn new() -> Self {
         Self {
             start_phys: PhysAddr::null(),
-            virt_start: VirtAddr::null(),
+            start_virt: VirtAddr::null(),
             page_count: 0,
             nr_pages: [0; MAX_ORDER],
             next_page: [0; MAX_ORDER],
@@ -538,6 +538,37 @@ impl MemoryRegion {
             #[cfg(verus_keep_ghost_body)]
             perms: Tracked::assume_new(),
         }
+    }
+
+    /// Converts a physical address within this memory region to a virtual address.
+    #[expect(dead_code)]
+    #[verus_spec(ret =>
+        requires
+            self.wf_params(),
+        ensures
+            !self.map().is_identity_map() ==>
+                (ret.is_some() == self.map().to_vaddr(paddr@ as int).is_some()),
+            (!self.map().is_identity_map() && ret.is_some()) ==>
+                (ret.unwrap() == self.map().to_vaddr(paddr@ as int).unwrap()),
+            self.map().is_identity_map() && (self.start_phys@ == self.start_virt.offset()) ==> (ret == Some(VirtAddr::from_spec(paddr@))), 
+    )]
+    fn phys_to_virt(&self, paddr: PhysAddr) -> Option<VirtAddr> {
+        proof!{
+            reveal(<LinearMap as SpecMemMapTr>::to_vaddr);
+            use_type_invariant(self.start_virt);
+            broadcast use group_addr_proofs;
+        }
+        if paddr < self.start_phys || (paddr - self.start_phys) >= (self.page_count * PAGE_SIZE) {
+            // For the initial stage2 identity mapping, the root page table
+            // pages are static and outside of the heap memory region.
+            if VirtAddr::from(self.start_phys.bits()) == self.start_virt {
+                return Some(VirtAddr::from(paddr.bits()));
+            }
+            return None;
+        }
+
+        let offset = paddr - self.start_phys;
+        Some(self.start_virt + offset)
     }
 
     /// Converts a virtual address to a physical address within the memory region.
@@ -572,9 +603,9 @@ impl MemoryRegion {
     )]
     fn page_info_mut_ptr(&self, pfn: usize) -> *mut PageStorageType {
         let offset = pfn * size_of::<PageStorageType>();
-        verus_with!(Tracked(self.perms.borrow().info_ptr_exposed));
+        proof_with!(Tracked(self.perms.borrow().info_ptr_exposed));
         let ret: *mut PageStorageType = self
-            .virt_start
+            .start_virt
             .const_add(offset)
             .as_mut_ptr_with_provenance();
         ret
@@ -589,8 +620,8 @@ impl MemoryRegion {
     )]
     fn page_info_pptr(&self, pfn: usize) -> *const PageStorageType {
         let offset = pfn * size_of::<PageStorageType>();
-        verus_with!(Tracked(self.perms.borrow().info_ptr_exposed));
-        self.virt_start.const_add(offset).as_ptr_with_provenance()
+        proof_with!(Tracked(self.perms.borrow().info_ptr_exposed));
+        self.start_virt.const_add(offset).as_ptr_with_provenance()
     }
 
     /// Checks if a page frame number is valid.
@@ -618,11 +649,11 @@ impl MemoryRegion {
             old(self).ens_write_page_info(*self, pfn, pi, *old(perm), *perm),
     )]
     fn write_page_info(&mut self, pfn: usize, pi: PageInfo) {
+        proof!{pi.use_type_invariant();}
         self.check_pfn(pfn);
-        //proof!{use_type_invariant(&pi);}
         let info: PageStorageType = pi.to_mem();
         unsafe {
-            verus_with!(Tracked(perm));
+            proof_with!(Tracked(perm));
             self.page_info_mut_ptr(pfn).v_write(info);
         }
         proof! {
@@ -649,7 +680,7 @@ impl MemoryRegion {
         // SAFETY: we have checked that the pfn is valid via check_pfn() above.
         // Verification makes it safe enough. We can drop unsafe.
         let info = unsafe {
-            verus_with!(Tracked(perm));
+            proof_with!(Tracked(perm));
             self.page_info_pptr(pfn).v_borrow()
         };
         PageInfo::from_mem(*info)
@@ -660,7 +691,7 @@ impl MemoryRegion {
         requires
             self.wf_params(),
         ensures
-            ret.is_some() ==> ret.unwrap() == vaddr.offset() - self.virt_start.offset(),
+            ret.is_some() ==> ret.unwrap() == vaddr.offset() - self.start_virt.offset(),
             ret.is_some() == self.map().to_paddr(vaddr).is_some(),
     )]
     fn get_virt_offset(&self, vaddr: VirtAddr) -> Option<usize> {
@@ -668,12 +699,12 @@ impl MemoryRegion {
             broadcast use crate::address::group_addr_proofs;
             reveal(<LinearMap as SpecMemMapTr>::to_paddr);
         };
-        (self.virt_start <= vaddr && (vaddr - self.virt_start) < self.page_count * PAGE_SIZE).then(
+        (self.start_virt <= vaddr && (vaddr - self.start_virt) < self.page_count * PAGE_SIZE).then(
             verus_exec_expr!(
                 || -> (ret: usize)
-                requires vaddr.offset() > self.virt_start.offset(),
-                ensures ret == vaddr.offset() - self.virt_start.offset()
-                {vaddr - self.virt_start}
+                requires vaddr.offset() > self.start_virt.offset(),
+                ensures ret == vaddr.offset() - self.start_virt.offset()
+                {vaddr - self.start_virt}
             ),
         )
     }
@@ -772,7 +803,7 @@ impl MemoryRegion {
                 let ghost current = (pfn + i) as usize;
                 let tracked mut perm = perms.tracked_remove(current);
             }
-            verus_with!(Tracked(&mut perm));
+            proof_with!(Tracked(&mut perm));
             self.write_page_info(pfn + i, compound);
             proof! {
                 perms.tracked_insert(current, perm);
@@ -794,9 +825,9 @@ impl MemoryRegion {
         proof_decl! {
             let tracked mut perm = perms.tracked_remove(pfn);
         }
-        verus_with!(Tracked(&mut perm));
+        proof_with!(Tracked(&mut perm));
         self.write_page_info(pfn, head);
-        verus_with!(Tracked(perms));
+        proof_with!(Tracked(perms));
         self.mark_compound_page(pfn, order);
         proof! {
             perms.tracked_insert(pfn, perm);
@@ -835,13 +866,13 @@ impl MemoryRegion {
             self.perms.borrow().free.tracked_next(new_order);
             let tracked (mem1, mem2) = self.perms.borrow().mr_map.tracked_split_pages(mem, pfn, order);
         }
-        verus_with!(Tracked(&mut reserved1));
+        proof_with!(Tracked(&mut reserved1));
         self.init_compound_page(pfn1, new_order, pfn2);
         proof_decl! {
             let tracked info1 =  self.perms.borrow_mut().info.tracked_insert_unit(new_order, pfn1, id, reserved1);
             let tracked p1 = PgUnitPerm {mem: mem1, info: info1, typ: arbitrary()};
         }
-        verus_with!(Tracked(&mut reserved));
+        proof_with!(Tracked(&mut reserved));
         self.init_compound_page(pfn2, new_order, next_pfn);
         proof! {
             let tracked info2 = self.perms.borrow_mut().info.tracked_insert_unit(new_order, pfn2, id, reserved);
@@ -891,9 +922,9 @@ impl MemoryRegion {
         proof_decl! {
             let tracked mut perm = PgUnitPerm::empty(arbitrary());
         }
-        verus_with!(Tracked(&mut perm));
+        proof_with!(Tracked(&mut perm));
         let pfn = self.get_next_page(order + 1)?;
-        verus_with!(Tracked(perm));
+        proof_with!(Tracked(perm));
         self.split_page(pfn, order + 1)
     }
 
@@ -913,7 +944,7 @@ impl MemoryRegion {
             let tracked mut perm = PgUnitPerm::empty(arbitrary());
         }
         self.refill_page_list(order)?;
-        verus_with!(Tracked(&mut perm));
+        proof_with!(Tracked(&mut perm));
         let pfn = self.get_next_page(order)?;
         proof_decl! {
             let tracked (mem, mut info) = perm.tracked_take();
@@ -922,9 +953,9 @@ impl MemoryRegion {
             let tracked PageInfoDb {id, mut reserved, ..} = info;
             let tracked mut info_head = reserved.tracked_remove(pfn);
         }
-        verus_with!(Tracked(&mut info_head));
+        proof_with!(Tracked(&mut info_head));
         self.write_page_info(pfn, pg);
-        let vaddr = self.virt_start + (pfn * PAGE_SIZE);
+        let vaddr = self.start_virt + (pfn * PAGE_SIZE);
         proof! {
             reserved.tracked_insert(pfn, info_head);
             let tracked info = self.perms.borrow_mut().info.tracked_insert_unit(order, pfn, id, reserved);
@@ -948,7 +979,7 @@ impl MemoryRegion {
     )]
     fn allocate_pages(&mut self, order: usize) -> Result<VirtAddr, AllocError> {
         let pg = PageInfo::Allocated(AllocatedInfo { order });
-        verus_with!(Tracked(perm));
+        proof_with!(Tracked(perm));
         self.allocate_pages_info(order, pg)
     }
 
@@ -961,7 +992,7 @@ impl MemoryRegion {
             old(self).ens_allocate_pages_info(self, 0, PageInfo::Allocated(AllocatedInfo { order: 0 }), ret, *perm),
     )]
     fn allocate_page(&mut self) -> Result<VirtAddr, AllocError> {
-        verus_with!(Tracked(perm));
+        proof_with!(Tracked(perm));
         self.allocate_pages(0)
     }
 
@@ -995,7 +1026,7 @@ impl MemoryRegion {
         let pg = PageInfo::Slab(SlabPageInfo {
             item_size: u64::from(item_size),
         });
-        verus_with!(Tracked(perm));
+        proof_with!(Tracked(perm));
         self.allocate_pages_info(0, pg)
     }
 
@@ -1010,7 +1041,7 @@ impl MemoryRegion {
     )]
     fn allocate_file_page(&mut self) -> Result<VirtAddr, AllocError> {
         let pg = PageInfo::File(FileInfo::new(1));
-        verus_with!(Tracked(perm));
+        proof_with!(Tracked(perm));
         self.allocate_pages_info(0, pg)
     }
 
@@ -1118,11 +1149,11 @@ impl MemoryRegion {
         }
         // Write new compound head
         let pg = PageInfo::Allocated(AllocatedInfo { order: new_order });
-        verus_with!(Tracked(&mut head_info));
+        proof_with!(Tracked(&mut head_info));
         self.write_page_info(pfn, pg);
 
         // Write compound pages
-        verus_with!(Tracked(&mut reserved));
+        proof_with!(Tracked(&mut reserved));
         self.mark_compound_page(pfn, new_order);
 
         proof! {
@@ -1202,7 +1233,7 @@ impl MemoryRegion {
         } else if first_pfn == pfn {
             // Requested pfn is first in list
             {
-                verus_with!(Tracked(perm));
+                proof_with!(Tracked(perm));
                 self.get_next_page(order)
             }
             .unwrap();
@@ -1234,7 +1265,7 @@ impl MemoryRegion {
                     let tracked next_perm = self.perms.borrow().free.tracked_borrow(order, idx_);
                 }
             }
-            verus_with!(Tracked(&current_perm));
+            proof_with!(Tracked(&current_perm));
             let current_pfn = self.next_free_pfn(old_pfn, order);
 
             if current_pfn == 0 {
@@ -1252,7 +1283,7 @@ impl MemoryRegion {
             proof_decl! {
                 let tracked current_perm = self.perms.borrow().free.tracked_borrow(order, idx_);
             }
-            verus_with!(Tracked(current_perm));
+            proof_with!(Tracked(current_perm));
             let next_pfn = self.next_free_pfn(current_pfn, order);
             proof_decl! {
                 self.perms.borrow_mut().free.tracked_disjoint_pfn(order, idx_ + 1, order, idx_);
@@ -1275,11 +1306,11 @@ impl MemoryRegion {
                 next_page: next_pfn,
                 order,
             });
-            verus_with!(Tracked(&mut prev_head_info));
+            proof_with!(Tracked(&mut prev_head_info));
             self.write_page_info(old_pfn, pg);
 
             let pg = PageInfo::Allocated(AllocatedInfo { order });
-            verus_with!(Tracked(&mut head_info));
+            proof_with!(Tracked(&mut head_info));
             self.write_page_info(current_pfn, pg);
 
             self.free_pages[order] -= 1;
@@ -1329,7 +1360,7 @@ impl MemoryRegion {
             order,
         });
 
-        verus_with!(Tracked(&mut head_info));
+        proof_with!(Tracked(&mut head_info));
         self.write_page_info(pfn, pg);
 
         proof! {
@@ -1374,14 +1405,14 @@ impl MemoryRegion {
         proof_decl! {
             let tracked mut p2 = PgUnitPerm::empty(arbitrary());
         }
-        verus_with!(Tracked(&mut p2));
+        proof_with!(Tracked(&mut p2));
         let _ = self.allocate_pfn(neighbor_pfn, order)?;
         proof! {
             assert(p2.wf_pfn_order(self@.mr_map, neighbor_pfn, order));
             assert(perm.wf_pfn_order(self@.mr_map, pfn, order));
         }
 
-        verus_with!(Tracked(perm), Tracked(p2));
+        proof_with!(Tracked(perm), Tracked(p2));
         let new_pfn = self.merge_pages(pfn, neighbor_pfn, order)?;
 
         Ok(new_pfn)
@@ -1403,16 +1434,16 @@ impl MemoryRegion {
             let tracked mut perm = perm;
         }
 
-        verus_with!(Tracked(&mut perm));
+        proof_with!(Tracked(&mut perm));
         let merged = self.try_to_merge_page(pfn, order);
 
         match merged {
             Err(_) => {
-                verus_with!(Tracked(perm));
+                proof_with!(Tracked(perm));
                 let _ = self.free_page_raw(pfn, order);
             }
             Ok(new_pfn) => {
-                verus_with!(Tracked(perm));
+                proof_with!(Tracked(perm));
                 let _ = self.free_page_order(new_pfn, order + 1);
             }
         }
@@ -1452,15 +1483,15 @@ impl MemoryRegion {
 
         match res {
             PageInfo::Allocated(ai) => {
-                verus_with!(Tracked(perm));
+                proof_with!(Tracked(perm));
                 self.free_page_order(pfn, ai.order);
             }
             PageInfo::Slab(_si) => {
-                verus_with!(Tracked(perm));
+                proof_with!(Tracked(perm));
                 self.free_page_order(pfn, 0);
             }
             PageInfo::File(_) => {
-                verus_with!(Tracked(perm));
+                proof_with!(Tracked(perm));
                 self.free_page_order(pfn, 0);
             }
             _ => {
@@ -2333,7 +2364,7 @@ pub fn root_mem_init(pstart: PhysAddr, vstart: VirtAddr, page_count: usize) {
     {
         let mut region = ROOT_MEM.lock();
         region.start_phys = pstart;
-        region.virt_start = vstart;
+        region.start_virt = vstart;
         region.page_count = page_count;
         region.init_memory();
         // drop lock here so slab initialization does not deadlock
@@ -2451,7 +2482,7 @@ impl Drop for TestRootMem<'_> {
 
         let mut root_mem = ROOT_MEM.lock();
         let layout = Layout::from_size_align(root_mem.page_count * PAGE_SIZE, PAGE_SIZE).unwrap();
-        unsafe { dealloc(root_mem.virt_start.as_mut_ptr::<u8>(), layout) };
+        unsafe { dealloc(root_mem.start_virt.as_mut_ptr::<u8>(), layout) };
         *root_mem = MemoryRegion::new();
 
         // Reset the Slabs

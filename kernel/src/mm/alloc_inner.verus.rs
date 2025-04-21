@@ -25,7 +25,7 @@ verus! {
 
 pub type RawPerm = PointsToRaw;
 
-pub spec const MAX_PAGE_COUNT: u64 = 1u64 << (64 - 12) as u64;
+pub spec const MAX_PAGE_COUNT: u64 = 1u64 << (u64::BITS - 12) as u64;
 
 pub spec const MAX_PGINFO_SHARES: nat = 2;
 

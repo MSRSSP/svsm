@@ -11,6 +11,7 @@ use verify_external::convert::{exists_into, forall_into, FromSpec};
 use verify_external::hw_spec::SpecVAddrImpl;
 use vstd::set_lib::set_int_range;
 use vstd::std_specs::ops::{SpecAddRequires, SpecSubRequires};
+use vstd::raw_ptr::{PtrData, ptr_from_data, Metadata};
 
 verus! {
 
@@ -43,8 +44,6 @@ broadcast group vaddr_impl_proof {
 pub broadcast group group_addr_proofs {
     VirtAddr::property_canonical,
     VirtAddr::lemma_wf,
-    //VirtAddr::reveal_closed_cmp_op_spec,
-    //VirtAddr::reveal_closed_eq_op_spec,
 }
 
 broadcast use vaddr_impl_proof;
@@ -54,10 +53,6 @@ broadcast use vaddr_impl_proof;
 mod address_spec { include!("address_inner.verus.rs");  }
 
 pub use address_spec::*;
-
-unsafe impl Structural for PhysAddr {
-
-}
 
 // The inner address should be smaller than VADDR_RANGE_SIZE.
 // Define a simple spec for sign_extend without using bit ops.
@@ -127,7 +122,7 @@ impl VirtAddr {
         self.is_low() || self.is_high()
     }
 
-    /// @Property:
+    /// Property:
     /// A valid virtual address have a canonical form where the upper bits
     /// are either all zeroes or all ones.
     pub broadcast proof fn property_canonical(&self)
@@ -354,7 +349,13 @@ impl SpecAddRequires<InnerAddr> for PhysAddr {
     }
 }
 
-// TOOD: wait for verus derive automation.
+// TOOD(verus): need derive automation.
+pub assume_specification[ VirtAddr::eq ](lhs: &VirtAddr, rhs: &VirtAddr) -> (ret: bool)
+    ensures
+        usize::eq.ensures((&lhs@, &rhs@), ret),
+;
+
+// TOOD(verus): need derive automation.
 pub assume_specification[ VirtAddr::partial_cmp ](lhs: &VirtAddr, rhs: &VirtAddr) -> (ret: Option<
     core::cmp::Ordering,
 >)

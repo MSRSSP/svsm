@@ -42,7 +42,7 @@ impl FixedAddressMappingRange {
             ret == self@.spec_phys_to_virt(paddr@ as int)
     )]
     fn phys_to_virt(&self, paddr: PhysAddr) -> Option<VirtAddr> {
-        proof!{self.use_type_invariant();}
+        proof! {self.use_type_invariant();}
         if paddr < self.phys_start {
             None
         } else {
