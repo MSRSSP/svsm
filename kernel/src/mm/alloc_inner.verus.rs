@@ -11,7 +11,7 @@ use crate::types::{lemma_page_size, PAGE_SIZE};
 use crate::utils::util::spec_align_up;
 
 use crate::mm::alloc::MAX_ORDER;
-use verify_external::hw_spec::{SpecMemMapTr, SpecVAddrImpl};
+use verify_external::hw_spec::SpecVAddrImpl;
 use verify_proof::bits::*;
 use verify_proof::frac_ptr::*;
 use verify_proof::nonlinear::*;

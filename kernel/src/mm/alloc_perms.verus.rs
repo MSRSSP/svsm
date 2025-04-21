@@ -1,4 +1,3 @@
-use vstd::math::min;
 verus! {
 
 spec fn spec_map_page_info_addr(map: LinearMap, pfn: usize) -> VirtAddr {

@@ -16,16 +16,12 @@ use crate::address::group_addr_proofs;
 use crate::mm::address_space::LinearMap;
 use crate::types::lemma_page_size;
 use verify_external::convert::FromSpec;
-use verify_external::hw_spec::{SpecMemMapTr, SpecVAddrImpl};
+use verify_external::hw_spec::SpecMemMapTr;
 use verify_proof::bits::*;
-use verify_proof::frac_ptr::{raw_perm_is_disjoint, FracTypedPerm};
-use verify_proof::nonlinear::*;
-use verify_proof::set::*;
-use vstd::arithmetic::div_mod::{lemma_add_mod_noop, lemma_mod_self_0, lemma_small_mod};
+use verify_proof::frac_ptr::FracTypedPerm;
 use vstd::arithmetic::mul::*;
 use vstd::modes::tracked_swap;
-use vstd::raw_ptr::{IsExposed, PointsToRaw, Provenance};
-use vstd::set_lib::set_int_range;
+use vstd::raw_ptr::IsExposed;
 
 verus! {
 
@@ -34,14 +30,11 @@ mod alloc_spec { include!("alloc_inner.verus.rs");  }
 use alloc_spec::*;
 
 broadcast group set_len_group {
-    verify_proof::set::lemma_set_filter_disjoint_len,
-    verify_proof::set::lemma_int_range,
     verify_proof::set::lemma_len_filter,
     verify_proof::set::lemma_len_subset,
 }
 
 broadcast group alloc_broadcast_group {
-    //crate::address::group_addr_proofs,
     LinearMap::lemma_get_paddr,
     lemma_bit_usize_shl_values,
     lemma_page_size,
