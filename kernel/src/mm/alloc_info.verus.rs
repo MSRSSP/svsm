@@ -1,3 +1,15 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+//
+// Copyright (c) Microsoft Corporation
+//
+// Author: Ziqiao Zhou <ziqiaozhou@microsoft.com>
+//
+// Proofs for tracking the page info in reserved memory regions.
+// To ensure the global allocator and the locally allocated heap memory
+// have consistent page info, we use `FracPtr` to share the page info
+// and guarantee that the page info is immutable once shared.
+// PageInfoDb is the main data structure to track the page info with the same
+// shared status.
 use crate::address::spec_ptr_add;
 use verify_proof::frac_ptr::tracked_map_merge_right_shares;
 use verify_proof::frac_ptr::tracked_map_shares;
@@ -88,6 +100,11 @@ impl ValidPageInfo for FracTypedPerm<PageStorageType> {
     }
 }
 
+// The `PageInfoDb` is a map of page info with the same shared status.
+// It is used to track the page info stored in reserved memory regions.
+// Those permissions should be grouped as (1usize<<order) continuous physical
+// pages with consistent page type and order information (see
+// new_unit_requires).
 struct PageInfoDb {
     ghost unit_start: usize,  // only for unit
     ghost id: PInfoGroupId,
@@ -95,6 +112,11 @@ struct PageInfoDb {
 }
 
 impl PageInfoDb {
+    /*** Basic spec functions ***/
+    pub closed spec fn view(&self) -> Map<usize, FracTypedPerm<PageStorageType>> {
+        self.reserved
+    }
+
     pub closed spec fn id(&self) -> PInfoGroupId {
         self.id
     }
@@ -103,24 +125,19 @@ impl PageInfoDb {
         self.unit_start
     }
 
+    /*** Useful spec functions ***/
     #[verifier(inline)]
     spec fn order(&self) -> usize {
         self@[self.unit_start].order()
     }
 
-    pub closed spec fn npages(&self) -> nat {
-        self.dom().len()
-    }
-
-    /*** Basic spec functions ***/
-    pub closed spec fn view(&self) -> Map<usize, FracTypedPerm<PageStorageType>> {
-        self.reserved
-    }
-
-    /*** Useful spec functions ***/
     #[verifier(inline)]
-    pub open spec fn dom(&self) -> Set<usize> {
+    spec fn dom(&self) -> Set<usize> {
         self@.dom()
+    }
+
+    spec fn npages(&self) -> nat {
+        self.dom().len()
     }
 
     #[verifier(inline)]
@@ -134,7 +151,7 @@ impl PageInfoDb {
     }
 
     #[verifier::inline]
-    pub open spec fn share_total(&self) -> (nat, nat) {
+    spec fn share_total(&self) -> (nat, nat) {
         (self.id().shares, self.id().total)
     }
 
@@ -185,7 +202,7 @@ impl PageInfoDb {
         set_usize_range(idx, idx + self@[idx].size())
     }
 
-    pub closed spec fn writable(&self) -> bool {
+    spec fn writable(&self) -> bool {
         self.id().shares == self.id().total > DEALLOC_PGINFO_SHARES
     }
 
@@ -193,7 +210,7 @@ impl PageInfoDb {
         AllocatorUnit::wf_share_total(self.id().shares, self.id().total)
     }
 
-    pub closed spec fn marked_compound(
+    spec fn marked_compound(
         reserved: Map<usize, FracTypedPerm<PageStorageType>>,
         head_idx: usize,
         order: usize,
@@ -231,6 +248,12 @@ impl PageInfoDb {
             ==> self@[next as usize].is_head()
     }
 
+    /// A memory "unit" is a block of contiguous pages. This function ensures:
+    /// - All pages within the unit are continuous and well-formed.
+    /// - All pages within the unit have the same sharing state.
+    /// - The unit is properly aligned.
+    /// - If the unit contains compound pages, they follow the head page
+    ///   correctly and consistently.
     spec fn new_unit_requires(
         reserved: Map<usize, FracTypedPerm<PageStorageType>>,
         id: PInfoGroupId,
@@ -256,11 +279,11 @@ impl PageInfoDb {
         }
     }
 
-    pub closed spec fn wf_unit(&self) -> bool {
+    spec fn wf_unit(&self) -> bool {
         &&& Self::new_unit_requires(self@, self.id(), self.unit_start, self.order())
     }
 
-    pub closed spec fn remove(&self, idx: usize) -> PageInfoDb {
+    spec fn remove(&self, idx: usize) -> PageInfoDb {
         PageInfoDb {
             unit_start: self.unit_start,
             id: self.id,
@@ -268,8 +291,9 @@ impl PageInfoDb {
         }
     }
 
+    /// Extract a unit from the `PageInfoDb` at the given index.
     #[verifier(opaque)]
-    pub closed spec fn restrict(&self, idx: usize) -> PageInfoDb {
+    spec fn restrict(&self, idx: usize) -> PageInfoDb {
         if self@[idx].is_head() {
             PageInfoDb {
                 unit_start: idx,
@@ -281,8 +305,9 @@ impl PageInfoDb {
         }
     }
 
+    /// The invariant of the `PageInfoDb`
     #[verifier::type_invariant]
-    pub closed spec fn wf(&self) -> bool {
+    spec fn wf(&self) -> bool {
         &&& forall|idx: usize|
             #![trigger self@[idx]]
             self@.dom().contains(idx) && self@[idx].is_head() ==> {
@@ -298,20 +323,21 @@ impl PageInfoDb {
         &&& self.is_unit() ==> self.wf_unit()
     }
 
-    pub closed spec fn empty(id: PInfoGroupId) -> PageInfoDb {
+    spec fn empty(id: PInfoGroupId) -> PageInfoDb {
         PageInfoDb { unit_start: 0, id, reserved: Map::empty() }
     }
 
-    pub closed spec fn _info_dom(&self, order: usize) -> Set<usize> {
+    spec fn _info_dom(&self, order: usize) -> Set<usize> {
         self@.dom().filter(|i| self@[i].order() == order && self@[i].is_head())
     }
 
+    /// The number of pages with the given order in the `PageInfoDb`.
     #[verifier(opaque)]
-    pub closed spec fn nr_page(&self, order: usize) -> nat {
+    spec fn nr_page(&self, order: usize) -> nat {
         self._info_dom(order).len()
     }
 
-    pub closed spec fn _info_head_dom(&self, order: usize) -> Set<usize> {
+    spec fn _info_head_dom(&self, order: usize) -> Set<usize> {
         self@.dom().filter(|i| self@[i].order() == order && self@[i].is_head())
     }
 
@@ -483,7 +509,7 @@ impl PageInfoDb {
         PageInfoDb { unit_start, id, reserved }
     }
 
-    pub open spec fn ens_split_inner(&self, left: Self, right: Self) -> bool {
+    spec fn ens_split_inner(&self, left: Self, right: Self) -> bool {
         &&& left.dom().disjoint(right.dom())
         &&& left@ =~= self@.restrict(left.dom())
         &&& right@ =~= self@.restrict(right.dom())
@@ -492,7 +518,7 @@ impl PageInfoDb {
         &&& right.id() == self.id()
     }
 
-    pub open spec fn ens_split(&self, left: Self, right: Self) -> bool {
+    spec fn ens_split(&self, left: Self, right: Self) -> bool {
         &&& left.dom().disjoint(right.dom())
         &&& left@ == self@.restrict(left.dom())
         &&& right@ == self@.restrict(right.dom())

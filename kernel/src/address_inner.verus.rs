@@ -200,8 +200,7 @@ pub broadcast proof fn lemma_align_up_ens<A: AddressSpec>(addr: A, align: InnerA
     crate::utils::util::proof_align_up(iaddr, align, iret);
 }
 
-// Increment a thin pointer.
-// It does not make sense to increment a fat pointer.
+// Incrementing a thin pointers.
 pub open spec fn spec_ptr_add<T>(base_ptr: *const T, idx: usize) -> *const T
     recommends
         base_ptr@.metadata == vstd::raw_ptr::Metadata::Thin,

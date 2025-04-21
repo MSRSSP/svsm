@@ -550,7 +550,7 @@ impl MemoryRegion {
             self.ens_phys_to_virt(paddr, ret),
     )]
     fn phys_to_virt(&self, paddr: PhysAddr) -> Option<VirtAddr> {
-        proof!{
+        proof! {
             reveal(<LinearMap as SpecMemMapTr>::to_vaddr);
             use_type_invariant(self.start_virt);
             broadcast use group_addr_proofs;
@@ -641,12 +641,13 @@ impl MemoryRegion {
     #[verus_spec(
         with Tracked(perm): Tracked<&mut FracTypedPerm<PageStorageType>>
         requires
-            old(self).req_write_page_info(pfn, pi, *old(perm)),
+            pi.spec_order() < MAX_ORDER,
+            old(self).writable_page_info(pfn, *old(perm)),
         ensures
             old(self).ens_write_page_info(*self, pfn, pi, *old(perm), *perm),
     )]
     fn write_page_info(&mut self, pfn: usize, pi: PageInfo) {
-        proof!{pi.use_type_invariant();}
+        proof! {pi.use_type_invariant();}
         self.check_pfn(pfn);
         let info: PageStorageType = pi.to_mem();
         // SAFETY: we have checked that the pfn is valid via check_pfn() above.
@@ -677,7 +678,7 @@ impl MemoryRegion {
             let tracked perm = self.perms.borrow().info.reserved.tracked_borrow(pfn);
         }
         // SAFETY: we have checked that the pfn is valid via check_pfn() above.
-        // Verification makes it safe enough. 
+        // Verification makes it safe enough.
         // We can drop unsafe but keep it here for consistency with unverified mode.
         let info = unsafe {
             proof_with!(Tracked(perm));
@@ -714,7 +715,6 @@ impl MemoryRegion {
         requires
             self.wf_params(),
         ensures
-            ret.is_ok() == self.map().get_pfn(vaddr).is_some(),
             self.ens_get_pfn(vaddr, ret),
     )]
     fn get_pfn(&self, vaddr: VirtAddr) -> Result<usize, AllocError> {
@@ -787,7 +787,7 @@ impl MemoryRegion {
         ensures
             old(self).ens_mark_compound_page(*self, pfn, order, *old(perms), *perms),
     )]
-    #[verus_verify(rlimit(2))]
+    #[verus_verify(spinoff_prover)]
     fn mark_compound_page(&mut self, pfn: usize, order: usize) {
         let nr_pages: usize = 1 << order;
         let compound = PageInfo::Compound(CompoundInfo { order });
@@ -841,7 +841,7 @@ impl MemoryRegion {
             old(self).ens_split_page_ok(&*self, pfn, order),
             ret.is_ok(),
     )]
-    #[verus_verify(spinoff_prover, rlimit(4))]
+    #[verus_verify(spinoff_prover, rlimit(2))]
     fn split_page(&mut self, pfn: usize, order: usize) -> Result<(), AllocError> {
         if !(1..MAX_ORDER).contains(&order) {
             return Err(AllocError::InvalidPageOrder(order));
@@ -898,7 +898,6 @@ impl MemoryRegion {
             old(self).wf_next_pages(),
             0 <= order <= MAX_ORDER,
         ensures
-            self.wf_next_pages(),
             old(self).ens_refill_page_list(*self, ret.is_ok(), order),
     )]
     fn refill_page_list(&mut self, order: usize) -> Result<(), AllocError> {
@@ -910,7 +909,7 @@ impl MemoryRegion {
         let next_page = *(&self.next_page)
             .get(order)
             .ok_or(AllocError::InvalidPageOrder(order))?;
-        
+
         if next_page != 0 {
             return Ok(());
         }
@@ -1084,7 +1083,7 @@ impl MemoryRegion {
         requires
             self.valid_pfn_order(pfn, order),
         ensures
-            ret.is_ok() ==> self.ens_compound_neighbor_ok(pfn, order, ret.unwrap()),
+            self.ens_compound_neighbor(pfn, order, ret),
     )]
     #[verus_verify(spinoff_prover)]
     fn compound_neighbor(&self, pfn: usize, order: usize) -> Result<usize, AllocError> {
@@ -1114,7 +1113,7 @@ impl MemoryRegion {
         ensures
             old(self).ens_merge_pages(self, pfn1, pfn2, order, ret, *perm),
     )]
-    #[verus_verify(spinoff_prover, rlimit(6))]
+    #[verus_verify(spinoff_prover, rlimit(2))]
     fn merge_pages(&mut self, pfn1: usize, pfn2: usize, order: usize) -> Result<usize, AllocError> {
         if order >= MAX_ORDER - 1 {
             return Err(AllocError::InvalidPageOrder(order));
@@ -1212,7 +1211,7 @@ impl MemoryRegion {
             ret.is_ok() ==> old(self).ens_allocate_pfn(self, pfn, order, *perm),
             !ret.is_ok() ==> old(self) === self,
     )]
-    #[verus_verify(spinoff_prover, rlimit(16))]
+    #[verus_verify(spinoff_prover, rlimit(2))]
     fn allocate_pfn(&mut self, pfn: usize, order: usize) -> Result<(), AllocError> {
         proof_decl! {
             let ghost mut idx_ = self@.free.next_lists()[order as int].len() - 1;

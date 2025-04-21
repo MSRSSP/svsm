@@ -7,7 +7,7 @@ tracked struct MRFreePerms {
 
 impl MRFreePerms {
     /* properties to external */
-    pub closed spec fn nr_free(&self) -> Seq<usize> {
+    spec fn nr_free(&self) -> Seq<usize> {
         self.avail.map_values(|perms: Seq<PgUnitPerm<DeallocUnit>>| perms.len() as usize)
     }
 

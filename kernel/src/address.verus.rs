@@ -296,8 +296,9 @@ impl VirtAddr {
             self.is_canonical() && vaddr2.is_canonical(),
             vaddr2.offset() == self.offset() + size1,
         ensures
-            #[trigger] self.region_to_dom(size1) + #[trigger] vaddr2.region_to_dom(size2)
-                == self.region_to_dom(size1 + size2),
+            self.region_to_dom(size1) + vaddr2.region_to_dom(size2) == self.region_to_dom(
+                size1 + size2,
+            ),
             self.region_to_dom(size1 + size2).difference(self.region_to_dom(size1))
                 == vaddr2.region_to_dom(size2),
     {
@@ -363,7 +364,7 @@ pub assume_specification[ VirtAddr::partial_cmp ](lhs: &VirtAddr, rhs: &VirtAddr
         usize::partial_cmp.ensures((&lhs@, &rhs@), ret),
 ;
 
-// TOOD: wait for verus derive automation.
+// TOOD(verus): need derive automation.
 pub assume_specification[ PhysAddr::partial_cmp ](lhs: &PhysAddr, rhs: &PhysAddr) -> (ret: Option<
     core::cmp::Ordering,
 >)

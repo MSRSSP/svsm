@@ -4,17 +4,14 @@
 //
 // Author: Ziqiao Zhou <ziqiaozhou@microsoft.com>
 //
-// This module defines specification helper functions to verify the correct use of memory.
+// This module defines specification functions for MemoryRegion implementations
 //
-// Trusted Assumptions:
+// Trusted Context:
 // - Upon entry to the SVSM (Secure Virtual Machine Monitor) kernel, there exists a set of unique
 //   memory permissions that are predefined and trusted.
-// - Memory permissions are considered unforgeable, ensuring their integrity during execution.
+// - Memory permissions are unforgeable, ensuring their integrity during execution.
 // - LinearMap is correct and is used for all memory managed by allocator.
 //
-// Note:
-// - No additional specification needs to be trusted here; all assumptions are established
-//   within the trusted context of the kernel entry.
 use crate::address::group_addr_proofs;
 use crate::mm::address_space::LinearMap;
 use crate::types::lemma_page_size;
@@ -64,11 +61,29 @@ include!("alloc_perms.verus.rs");
 //include!("alloc_mr.verus.rs");
 include!("alloc_types.verus.rs");
 
+impl View for MemoryRegion {
+    type V = MemoryRegionPerms;
+
+    closed spec fn view(&self) -> MemoryRegionPerms {
+        self.perms@
+    }
+}
+
 impl MemoryRegion {
-    spec fn remove_tracked(&self) -> Self {
-        MemoryRegion { perms: arbitrary(), ..*self }
+    spec fn map(&self) -> LinearMap {
+        LinearMap {
+            virt_start: self.start_virt,
+            phys_start: self.start_phys@ as int,
+            size: (self.page_count * PAGE_SIZE) as nat,
+        }
     }
 
+    spec fn with_same_mapping(&self, new: &Self) -> bool {
+        self@.mr_map === new@.mr_map
+    }
+}
+
+impl MemoryRegion {
     spec fn writable_page_info(&self, pfn: usize, perm: FracTypedPerm<PageStorageType>) -> bool {
         &&& perm.valid()
         &&& perm.writable()
@@ -88,17 +103,6 @@ impl MemoryRegion {
             pfn <= i < pfn + npage ==> {
                 &&& self.writable_page_info(i, (#[trigger] perms[i]))
             }
-    }
-
-    #[verifier(inline)]
-    spec fn req_write_page_info(
-        &self,
-        pfn: usize,
-        pi: PageInfo,
-        perm: FracTypedPerm<PageStorageType>,
-    ) -> bool {
-        &&& pi.spec_order() < MAX_ORDER
-        &&& self.writable_page_info(pfn, perm)
     }
 
     spec fn ens_write_page_info(
@@ -133,7 +137,7 @@ impl MemoryRegion {
         perms: Map<usize, PInfoPerm>,
         new_perms: Map<usize, PInfoPerm>,
     ) -> bool {
-        &&& self.ens_mark_compound_page_loop(new, pfn, 1usize << order, order, perms, new_perms)
+        self.ens_mark_compound_page_loop(new, pfn, 1usize << order, order, perms, new_perms)
     }
 
     spec fn ens_mark_compound_page_loop(
@@ -250,10 +254,6 @@ impl MemoryRegion {
         &&& perm.page_type() == PageType::Free
         &&& self.valid_pfn_order(pfn, order)
         &&& order >= 1
-        //&&& self@.pfn_range_is_allocated(pfn, order)
-        //&&& self@.marked_order(pfn, order)
-        //&&& self@.pfn_order_is_writable(pfn, order)
-
     }
 
     spec fn ens_split_page_ok(&self, new: &Self, pfn: usize, order: usize) -> bool {
@@ -263,28 +263,6 @@ impl MemoryRegion {
         &&& new.wf_next_pages()
         &&& new.next_page[order - 1] != 0
         &&& self.with_same_mapping(new)
-    }
-}
-
-impl View for MemoryRegion {
-    type V = MemoryRegionPerms;
-
-    closed spec fn view(&self) -> MemoryRegionPerms {
-        self.perms@
-    }
-}
-
-impl MemoryRegion {
-    spec fn map(&self) -> LinearMap {
-        LinearMap {
-            virt_start: self.start_virt,
-            phys_start: self.start_phys@ as int,
-            size: (self.page_count * PAGE_SIZE) as nat,
-        }
-    }
-
-    spec fn with_same_mapping(&self, new: &Self) -> bool {
-        self@.mr_map === new@.mr_map
     }
 
     spec fn spec_get_pfn(&self, vaddr: VirtAddr) -> Option<usize> {
@@ -359,24 +337,20 @@ impl MemoryRegion {
         &&& ret ==> valid_order
         &&& ret ==> new.next_page[order as int] != 0
         &&& self.with_same_mapping(&new)
+        &&& new.wf_next_pages()
     }
 
-    spec fn only_update_reserved_and_tmp_nr(&self, new: &Self) -> bool {
-        true
-    }
-
-    spec fn only_update_order_higher(&self, new: Self, order: usize) -> bool {
-        &&& forall|i: int|
-            0 <= i < order ==> {
-                &&& self.free_pages[i] == new.free_pages[i]
-                &&& self.nr_pages[i] == new.nr_pages[i]
-                &&& self.next_page[i] == new.next_page[i]
-            }
-    }
-
-    spec fn ens_compound_neighbor_ok(&self, pfn: usize, order: usize, ret_pfn: usize) -> bool {
-        &&& ret_pfn < self.page_count
-        &&& ens_find_neighbor(pfn, order, ret_pfn)
+    spec fn ens_compound_neighbor(
+        &self,
+        pfn: usize,
+        order: usize,
+        ret: Result<usize, AllocError>,
+    ) -> bool {
+        let ret_pfn = ret.unwrap();
+        ret.is_ok() ==> {
+            &&& ret_pfn < self.page_count
+            &&& ens_find_neighbor(pfn, order, ret_pfn)
+        }
     }
 
     spec fn req_allocate_pfn(&self, pfn: usize, order: usize) -> bool {

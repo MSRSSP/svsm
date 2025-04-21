@@ -4,7 +4,7 @@
 //
 // Author: Ziqiao Zhou <ziqiaozhou@microsoft.com>
 //
-// Proves the encode/decode functions used in alloc.rs.
+// Proves the encode/decode functions for PageInfo used in alloc.rs.
 use vstd::simple_pptr::MemContents;
 verus! {
 
@@ -54,7 +54,7 @@ impl PageType {
 }
 
 impl PageInfo {
-    pub closed spec fn spec_order(&self) -> usize {
+    spec fn spec_order(&self) -> usize {
         match *self {
             PageInfo::Compound(CompoundInfo { order }) => order,
             PageInfo::Allocated(AllocatedInfo { order }) => order,
@@ -63,7 +63,7 @@ impl PageInfo {
         }
     }
 
-    pub closed spec fn spec_type(&self) -> PageType {
+    spec fn spec_type(&self) -> PageType {
         match *self {
             PageInfo::Free(_) => PageType::Free,
             PageInfo::Allocated(_) => PageType::Allocated,
@@ -74,7 +74,7 @@ impl PageInfo {
         }
     }
 
-    pub closed spec fn spec_get_free(&self) -> Option<FreeInfo> {
+    spec fn spec_get_free(&self) -> Option<FreeInfo> {
         match *self {
             PageInfo::Free(info) => { Some(info) },
             _ => { None },
@@ -131,35 +131,35 @@ pub type FreeInfoSpec = FreeInfo;
 
 impl AllocatedInfo {
     #[verifier::type_invariant]
-    pub closed spec fn inv(&self) -> bool {
+    spec fn inv(&self) -> bool {
         self.order < MAX_ORDER
     }
 }
 
 impl CompoundInfo {
     #[verifier::type_invariant]
-    pub closed spec fn inv(&self) -> bool {
+    spec fn inv(&self) -> bool {
         self.order < MAX_ORDER
     }
 }
 
 impl FileInfo {
     #[verifier::type_invariant]
-    pub closed spec fn inv(&self) -> bool {
+    spec fn inv(&self) -> bool {
         self.ref_count < (1u64 << (u64::BITS - PageStorageType::TYPE_SHIFT) as u64)
     }
 }
 
 impl SlabPageInfo {
     #[verifier::type_invariant]
-    pub closed spec fn inv(&self) -> bool {
+    spec fn inv(&self) -> bool {
         self.item_size <= PageStorageType::SLAB_MASK
     }
 }
 
 impl FreeInfoSpec {
     #[verifier::type_invariant]
-    pub closed spec fn inv(&self) -> bool {
+    spec fn inv(&self) -> bool {
         &&& self.next_page < MAX_PAGE_COUNT
         &&& self.order < MAX_ORDER
     }

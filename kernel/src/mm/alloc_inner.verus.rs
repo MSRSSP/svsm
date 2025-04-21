@@ -55,9 +55,11 @@ pub proof fn tracked_empty_seq_of_seq<T>(n: nat) -> (tracked ret: Seq<Seq<T>>)
 }
 
 pub open spec fn ens_find_neighbor(pfn: usize, order: usize, ret_pfn: usize) -> bool {
-    &&& ret_pfn == pfn - (1usize << order) || ret_pfn == pfn + (1usize << order)
-    &&& ret_pfn == pfn - (1usize << order) ==> ret_pfn % (1usize << (order + 1) as usize) == 0
-    &&& ret_pfn == pfn + (1usize << order) ==> pfn % (1usize << (order + 1) as usize) == 0
+    let lower_neighbor = pfn - (1usize << order);
+    let upper_neighbor = pfn + (1usize << order);
+    &&& ret_pfn == lower_neighbor || ret_pfn == upper_neighbor
+    &&& ret_pfn == lower_neighbor ==> ret_pfn % (1usize << (order + 1) as usize) == 0
+    &&& ret_pfn == upper_neighbor ==> pfn % (1usize << (order + 1) as usize) == 0
     &&& ret_pfn % (1usize << order) == 0
 }
 

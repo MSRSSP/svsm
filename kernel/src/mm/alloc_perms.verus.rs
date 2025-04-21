@@ -250,9 +250,7 @@ impl MemoryRegionPerms {
     }
 
     spec fn wf(&self) -> bool {
-        &&& self.wf_info()
-        //&&& self.wf_base_ptr()
-
+        self.wf_info()
     }
 }
 
@@ -261,17 +259,14 @@ impl MemoryRegion {
         &&& self.wf_perms()
         &&& self.wf_params()
         &&& self.next_page@ =~= self@.free.next_pages()
-        &&& forall|o|   //#![trigger self@.free.next_pages()[o]]
-
-            0 <= o < MAX_ORDER ==> self.next_page[o] < MAX_PAGE_COUNT
+        &&& forall|o| 0 <= o < MAX_ORDER ==> #[trigger] self.next_page[o] < MAX_PAGE_COUNT
         &&& self@.free.wf_strict()
     }
 
     pub closed spec fn wf_perms(&self) -> bool {
         let info = self@.info;
         &&& self@.wf()
-        &&& forall|order|   //#![trigger info.nr_page(order)]
-
+        &&& forall|order|
             0 <= order < MAX_ORDER ==> info.nr_page(order) == (
             #[trigger] self.nr_pages[order as int])
         &&& self@.free.nr_free() =~= self.free_pages@
