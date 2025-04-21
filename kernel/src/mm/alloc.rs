@@ -89,6 +89,11 @@ enum PageType {
 #[verus_verify]
 impl TryFrom<u64> for PageType {
     type Error = AllocError;
+    #[verus_spec(ret=>
+        ensures
+            ret.is_ok() == PageType::spec_try_from(val).is_some(),
+            ret.is_ok() ==> ret.unwrap() == PageType::spec_try_from(val).unwrap(),
+    )]
     fn try_from(val: u64) -> Result<Self, Self::Error> {
         match val {
             v if v == Self::Free as u64 => Ok(Self::Free),
@@ -247,14 +252,12 @@ impl PageStorageType {
     }
 
     /// Retrieves the page type from the [`PageStorageType`].
-    #[verus_verify(external_body)]
     #[verus_spec(ret =>
         ensures
             ret.is_ok() == PageType::spec_decode(*self).is_some(),
-            ret.unwrap() === PageType::spec_decode(*self).unwrap(),
+            ret.is_ok() ==> ret.unwrap() == PageType::spec_decode(*self).unwrap(),
     )]
     fn page_type(&self) -> Result<PageType, AllocError> {
-        proof!{broadcast use lemma_bit_u64_and_bound;}
         PageType::try_from(self.0 & Self::TYPE_MASK)
     }
 }
@@ -520,7 +523,8 @@ impl MemoryRegion {
     /// Creates a new [`MemoryRegion`] with default values.
     #[verus_spec(ret =>
         ensures
-            ret.wf_next_pages()
+            ret.wf_next_pages(),
+            ret.page_count == 0,
     )]
     #[verus_verify(external_body)]
     const fn new() -> Self {
@@ -834,15 +838,13 @@ impl MemoryRegion {
         verus_with!(Tracked(&mut reserved1));
         self.init_compound_page(pfn1, new_order, pfn2);
         proof_decl! {
-            let tracked mut info1 = PageInfoDb::tracked_new_unit(new_order, pfn1, id, reserved1);
-            self.perms.borrow_mut().info.tracked_insert_shares(&mut info1);
+            let tracked info1 =  self.perms.borrow_mut().info.tracked_insert_unit(new_order, pfn1, id, reserved1);
             let tracked p1 = PgUnitPerm {mem: mem1, info: info1, typ: arbitrary()};
         }
         verus_with!(Tracked(&mut reserved));
         self.init_compound_page(pfn2, new_order, next_pfn);
         proof! {
-            let tracked mut info2 = PageInfoDb::tracked_new_unit(new_order, pfn2, id, reserved);
-            self.perms.borrow_mut().info.tracked_insert_shares(&mut info2);
+            let tracked info2 = self.perms.borrow_mut().info.tracked_insert_unit(new_order, pfn2, id, reserved);
             let tracked p2 = PgUnitPerm {mem: mem2, info: info2, typ: arbitrary()};
             use_type_invariant(&p2.info);
             self.perms.borrow_mut().free.tracked_push(new_order, pfn2, p2);
@@ -903,7 +905,7 @@ impl MemoryRegion {
             !matches!(pg, PageInfo::Compound(_)),
             pg.spec_order() == order,
         ensures
-            old(self).ens_allocate_pages_info(self, order, ret, *perm_with_dealloc),
+            old(self).ens_allocate_pages_info(self, order, pg, ret, *perm_with_dealloc),
     )]
     fn allocate_pages_info(&mut self, order: usize, pg: PageInfo) -> Result<VirtAddr, AllocError> {
         proof_decl! {
@@ -925,10 +927,12 @@ impl MemoryRegion {
         let vaddr = self.virt_start + (pfn * PAGE_SIZE);
         proof! {
             reserved.tracked_insert(pfn, info_head);
-            let tracked mut info = PageInfoDb::tracked_new_unit(order, pfn, id, reserved);
-            self.perms.borrow_mut().info.tracked_insert_shares(&mut info);
+            let tracked info = self.perms.borrow_mut().info.tracked_insert_unit(order, pfn, id, reserved);
             let tracked perm = PgUnitPerm {mem, info, typ: arbitrary()};
             *perm_with_dealloc = Some(UnitDeallocPerm(perm));
+            assert(pfn == self.spec_get_pfn(vaddr).unwrap()) by {
+                reveal(<LinearMap as SpecMemMapTr>::to_paddr);
+            };
         }
         Ok(vaddr)
     }
@@ -940,7 +944,7 @@ impl MemoryRegion {
             old(self).wf_next_pages(),
             order < MAX_ORDER,
         ensures
-            old(self).ens_allocate_pages_info(self, order, ret, *perm),
+            old(self).ens_allocate_pages_info(self, order, PageInfo::Allocated(AllocatedInfo { order }), ret, *perm),
     )]
     fn allocate_pages(&mut self, order: usize) -> Result<VirtAddr, AllocError> {
         let pg = PageInfo::Allocated(AllocatedInfo { order });
@@ -954,7 +958,7 @@ impl MemoryRegion {
         requires
             old(self).wf_next_pages(),
         ensures
-            old(self).ens_allocate_pages_info(self, 0, ret, *perm),
+            old(self).ens_allocate_pages_info(self, 0, PageInfo::Allocated(AllocatedInfo { order: 0 }), ret, *perm),
     )]
     fn allocate_page(&mut self) -> Result<VirtAddr, AllocError> {
         verus_with!(Tracked(perm));
@@ -977,21 +981,36 @@ impl MemoryRegion {
     }
 
     /// Allocates a slab page.
-    #[verus_verify(external_body)]
+    #[verus_spec(ret =>
+        with Tracked(perm): Tracked<&mut Option<UnitDeallocPerm>>
+        requires
+            old(self).wf_next_pages(),
+        ensures
+            self.wf_next_pages(),
+            old(self).ens_allocate_pages_info(self, 0, PageInfo::Slab(SlabPageInfo {
+                item_size: item_size as u64,
+            }) , ret, *perm),
+    )]
     fn allocate_slab_page(&mut self, item_size: u16) -> Result<VirtAddr, AllocError> {
-        self.refill_page_list(0)?;
-        let pfn = self.get_next_page(0)?;
         let pg = PageInfo::Slab(SlabPageInfo {
             item_size: u64::from(item_size),
         });
-        self.write_page_info(pfn, pg);
-        Ok(self.virt_start + (pfn * PAGE_SIZE))
+        verus_with!(Tracked(perm));
+        self.allocate_pages_info(0, pg)
     }
 
     /// Allocates a file page with initial reference count.
-    #[verus_verify(external_body)]
+    #[verus_spec(ret =>
+        with Tracked(perm): Tracked<&mut Option<UnitDeallocPerm>>
+        requires
+            old(self).wf_next_pages(),
+        ensures
+            self.wf_next_pages(),
+            old(self).ens_allocate_pages_info(self, 0, PageInfo::File(FileInfo::spec_new(1)), ret, *perm),
+    )]
     fn allocate_file_page(&mut self) -> Result<VirtAddr, AllocError> {
         let pg = PageInfo::File(FileInfo::new(1));
+        verus_with!(Tracked(perm));
         self.allocate_pages_info(0, pg)
     }
 
@@ -1061,7 +1080,6 @@ impl MemoryRegion {
     }
 
     /// Merges two pages of the same order into a new compound page.
-    //#[verus_verify(external_body)]
     #[verus_spec(ret =>
         with Tracked(perm): Tracked<&mut PgUnitPerm<DeallocUnit>>, Tracked(p2): Tracked<PgUnitPerm<DeallocUnit>>
         requires
@@ -1088,7 +1106,6 @@ impl MemoryRegion {
             info2.tracked_unit_nr_page(order);
             info2.tracked_unit_nr_page(new_order);
             // grant write access to the page info
-            assert(self@.info.is_readonly_allocator_shares());
             self.perms.borrow_mut().info.tracked_remove_and_merge_shares(&mut info);
             self.perms.borrow_mut().info.tracked_remove_and_merge_shares(&mut info2);
             self.perms.borrow().mr_map.tracked_merge_pages(&mut mem, mem2, pfn1, pfn2, order);
@@ -1096,7 +1113,6 @@ impl MemoryRegion {
             use_type_invariant(&info2);
             let tracked PageInfoDb {id, mut reserved, unit_start} = info;
             reserved.tracked_union_prefer_right(info2.reserved);
-            let ghost old_reserved = reserved;
             let tracked mut head_info = reserved.tracked_remove(pfn);
 
         }
@@ -1111,8 +1127,7 @@ impl MemoryRegion {
 
         proof! {
             reserved.tracked_insert(pfn, head_info);
-            let tracked mut info = PageInfoDb::tracked_new_unit(new_order, pfn, id, reserved);
-            self.perms.borrow_mut().info.tracked_insert_shares(&mut info);
+            let tracked info = self.perms.borrow_mut().info.tracked_insert_unit(new_order, pfn, id, reserved);
             *perm = PgUnitPerm{mem, info, typ: DeallocUnit{}};
             assert(2 * (1usize << order) == (1usize << new_order));
             assert(self@.info.nr_page(order) == old(self)@.info.nr_page(order) - 2);
@@ -1271,15 +1286,13 @@ impl MemoryRegion {
 
             proof! {
                 prev_reserved.tracked_insert(old_pfn, prev_head_info);
-                let tracked mut info = PageInfoDb::tracked_new_unit(order, old_pfn, id, prev_reserved);
-                self.perms.borrow_mut().info.tracked_insert_shares(&mut info);
+                let tracked info = self.perms.borrow_mut().info.tracked_insert_unit(order, old_pfn, id, prev_reserved);
 
                 let tracked mut prev_perm = PgUnitPerm {mem: prev_mem, info, typ: arbitrary()};
                 self.perms.borrow_mut().free.tracked_insert(order, idx_, old_pfn, prev_perm);
 
                 reserved.tracked_insert(current_pfn, head_info);
-                let tracked mut info = PageInfoDb::tracked_new_unit(order, current_pfn, id, reserved);
-                self.perms.borrow_mut().info.tracked_insert_shares(&mut info);
+                let tracked info =  self.perms.borrow_mut().info.tracked_insert_unit(order, current_pfn, id, reserved);
                 *perm = PgUnitPerm {mem, info, typ: arbitrary()};
                 old(self)@.free.lemma_wf_restrict_remove(&self.perms.borrow().free, order, idx_);
             }
@@ -1321,8 +1334,7 @@ impl MemoryRegion {
 
         proof! {
             reserved.tracked_insert(pfn, head_info);
-            let tracked mut info = PageInfoDb::tracked_new_unit(order, pfn, id, reserved);
-            self.perms.borrow_mut().info.tracked_insert_shares(&mut info);
+            let tracked info = self.perms.borrow_mut().info.tracked_insert_unit(order, pfn, id, reserved);
             let tracked mut pfn_perm = PgUnitPerm {mem, info, typ: arbitrary()};
             self.perms.borrow_mut().free.tracked_push(order, pfn, pfn_perm);
         }
@@ -1378,7 +1390,6 @@ impl MemoryRegion {
     /// Frees a page of a specific order. If merging is successful, it
     /// continues merging until merging is no longer possible. If merging
     /// fails, the page is marked as a free page.
-    //#[verus_verify(external_body)]
     #[verus_spec(
         with Tracked(perm): Tracked<PgUnitPerm<DeallocUnit>>
         requires

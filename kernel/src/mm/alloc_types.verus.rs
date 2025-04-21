@@ -118,15 +118,7 @@ impl PageType {
 
     spec fn spec_decode(mem: PageStorageType) -> Option<Self> {
         let val = mem.0 & 0xf;
-        match val {
-            v if v == Self::Free as u64 => Some(Self::Free),
-            v if v == Self::Allocated as u64 => Some(Self::Allocated),
-            v if v == Self::SlabPage as u64 => Some(Self::SlabPage),
-            v if v == Self::Compound as u64 => Some(Self::Compound),
-            v if v == Self::File as u64 => Some(Self::File),
-            v if v == Self::Reserved as u64 => Some(Self::Reserved),
-            _ => None,
-        }
+        PageType::spec_try_from(val)
     }
 
     #[verifier::spinoff_prover]
@@ -154,7 +146,7 @@ impl CompoundInfo {
 impl FileInfo {
     #[verifier::type_invariant]
     pub closed spec fn inv(&self) -> bool {
-        self.ref_count < (1u64 << (64 - PageStorageType::TYPE_SHIFT) as u64)
+        self.ref_count < (1u64 << (u64::BITS - PageStorageType::TYPE_SHIFT) as u64)
     }
 }
 
@@ -429,7 +421,7 @@ impl SpecDecoderProof<PageStorageType> for FileInfo {
         PageType::File.lemma_encode_decode();
         let ref_count = self.ref_count as u64;
         let tbits = PageStorageType::TYPE_SHIFT;
-        let bits = (64 - PageStorageType::TYPE_SHIFT) as u64;
+        let bits = (u64::BITS - PageStorageType::TYPE_SHIFT) as u64;
         let mem = self.spec_encode().unwrap().0;
         lemma_bit_u64_extract_fields_from_packed_2(
             PageType::File as u64,
@@ -458,13 +450,8 @@ impl SpecDecoderProof<PageStorageType> for ReservedInfo {
     }
 }
 
-impl SpecDecoderProof<PageStorageType> for PageType {
-    spec fn spec_encode(&self) -> Option<PageStorageType> {
-        Some(PageStorageType(*self as u64))
-    }
-
-    spec fn spec_decode(mem: PageStorageType) -> Option<Self> {
-        let val = mem.0 & 0xf;
+impl PageType {
+    pub closed spec fn spec_try_from(val: u64) -> Option<Self> {
         match val {
             v if v == Self::Free as u64 => Some(Self::Free),
             v if v == Self::Allocated as u64 => Some(Self::Allocated),
@@ -474,6 +461,17 @@ impl SpecDecoderProof<PageStorageType> for PageType {
             v if v == Self::Reserved as u64 => Some(Self::Reserved),
             _ => None,
         }
+    }
+}
+
+impl SpecDecoderProof<PageStorageType> for PageType {
+    spec fn spec_encode(&self) -> Option<PageStorageType> {
+        Some(PageStorageType(*self as u64))
+    }
+
+    spec fn spec_decode(mem: PageStorageType) -> Option<Self> {
+        let val = mem.0 & PageStorageType::TYPE_MASK;
+        PageType::spec_try_from(val)
     }
 
     proof fn lemma_encode_decode(&self) {

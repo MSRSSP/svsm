@@ -506,8 +506,7 @@ impl PageInfoDb {
         &&& forall|o: usize| #[trigger] self.nr_page(o) == left.nr_page(o) + right.nr_page(o)
     }
 
-    spec fn ens_add_unit_nr_pages(&self, left: Self, unit: Self) -> bool {
-        let order = unit.order();
+    spec fn ens_add_unit_nr_pages(&self, left: Self, order: usize) -> bool {
         &&& self.npages() == left.npages() + (1usize << order)
         &&& forall|o: usize| order != o ==> #[trigger] self.nr_page(o) == left.nr_page(o)
         &&& self.nr_page(order) == left.nr_page(order) + 1
@@ -785,7 +784,7 @@ impl PageInfoDb {
             self@ == old(self)@.remove_keys(unit@.dom()),
             self.id() == old(self).id(),
             forall|order: usize| #[trigger] old(unit).nr_page(order) == unit.nr_page(order),
-            old(self).ens_add_unit_nr_pages(*self, *unit),
+            old(self).ens_add_unit_nr_pages(*self, unit.order()),
     {
         let idx = unit.unit_start();
         use_type_invariant(&*self);
@@ -808,6 +807,39 @@ impl PageInfoDb {
         *unit = PageInfoDb::tracked_new_unit(order, unit_start, id, reserved);
     }
 
+    proof fn tracked_insert_unit(
+        tracked &mut self,
+        order: usize,
+        unit_start: usize,
+        id: PInfoGroupId,
+        tracked reserved: Map<usize, FracTypedPerm<PageStorageType>>,
+    ) -> (tracked unit: PageInfoDb)
+        requires
+            order < MAX_ORDER,
+            unit_start + (1usize << order) <= usize::MAX + 1,
+            reserved.dom() =~= Set::new(|k| unit_start <= k < unit_start + (1usize << order)),
+            reserved[unit_start].is_head(),
+            reserved[unit_start].order() == order,
+            PageInfoDb::new_unit_requires(reserved, id, unit_start, order),
+            old(self).dom().disjoint(reserved.dom()),
+            old(self).id() == id.update_shares(old(self).id().shares),
+            0 < old(self).id().shares < id.shares,
+        ensures
+            unit.is_unit(),
+            unit.id() == id.update_shares((id.shares - old(self).id().shares) as nat),
+            unit.unit_head()@ == reserved[unit_start]@.update_shares(unit.id().shares),
+            unit.unit_start() == unit_start,
+            unit.npages() == (1usize << order),
+            self.id() == old(self).id(),
+            self@.dom() == old(self)@.dom() + reserved.dom(),
+            self@ =~= old(self)@.union_prefer_right(self@.restrict(reserved.dom())),
+            self.ens_add_unit_nr_pages(*old(self), order),
+    {
+        let tracked mut info = PageInfoDb::tracked_new_unit(order, unit_start, id, reserved);
+        self.tracked_insert_shares(&mut info);
+        info
+    }
+
     #[verifier(spinoff_prover)]
     proof fn tracked_insert_shares(tracked &mut self, tracked unit: &mut PageInfoDb)
         requires
@@ -826,7 +858,7 @@ impl PageInfoDb {
             self@.dom() == old(self)@.dom() + old(unit)@.dom(),
             self@ =~= old(self)@.union_prefer_right(self@.restrict(unit@.dom())),
             forall|order: usize| #[trigger] old(unit).nr_page(order) == unit.nr_page(order),
-            self.ens_add_unit_nr_pages(*old(self), *unit),
+            self.ens_add_unit_nr_pages(*old(self), unit.order()),
     {
         use_type_invariant(&*unit);
         unit.tracked_unit_nr_pages();

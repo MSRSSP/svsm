@@ -486,6 +486,7 @@ impl MemoryRegion {
         &self,
         new: &Self,
         order: usize,
+        pg: PageInfo,
         ret: Result<VirtAddr, AllocError>,
         perm_with_dealloc: Option<UnitDeallocPerm>,
     ) -> bool {
@@ -493,6 +494,10 @@ impl MemoryRegion {
         let UnitDeallocPerm(perm) = perm_with_dealloc.unwrap();
         &&& self.with_same_mapping(new)
         &&& new.wf_next_pages()
+        &&& ret.is_ok() ==> {
+            &&& perm.page_info() == Some(pg)
+            &&& perm.wf_pfn_order(new@.mr_map, pfn, order)
+        }
     }
 }
 

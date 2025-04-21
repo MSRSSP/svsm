@@ -404,7 +404,7 @@ pub broadcast proof fn lemma_bit_u64_shr_bound(v: u64, n: u64)
     requires
         n < u64::BITS,
     ensures
-        n > 0 ==> (#[trigger] (v >> n)) < 1u64 << (64 - n),
+        n > 0 ==> (#[trigger] (v >> n)) < 1u64 << (u64::BITS - n) as u64,
         n == 0 ==> (v >> n) == v,
         v >> n <= v,
 {

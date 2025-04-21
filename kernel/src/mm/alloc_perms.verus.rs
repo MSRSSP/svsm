@@ -176,7 +176,7 @@ impl<T: UnitType> PgUnitPerm<T> {
 
 impl MemoryRegionPerms {
     /** Attributes from free && info_ptr_exposed **/
-    proof fn tracked_empty(
+    /*proof fn tracked_empty(
         tracked mr_map: MemRegionMapping,
         tracked info_ptr_exposed: IsExposed,
     ) -> (tracked ret: Self)
@@ -203,8 +203,7 @@ impl MemoryRegionPerms {
             info_ptr_exposed,
             mr_map,
         }
-    }
-
+    }*/
     spec fn npages(&self) -> usize {
         self.mr_map.pg_params().page_count
     }
