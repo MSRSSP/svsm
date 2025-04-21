@@ -515,7 +515,7 @@ struct MemoryRegion {
     next_page: [usize; MAX_ORDER],
     free_pages: [usize; MAX_ORDER],
     #[cfg(verus_keep_ghost_body)]
-    perms: Tracked<MemoryRegionPerms>,
+    perms: Tracked<MemoryRegionPerms>, // tracks all memory region permissions
 }
 
 #[verus_verify]
@@ -541,16 +541,13 @@ impl MemoryRegion {
     }
 
     /// Converts a physical address within this memory region to a virtual address.
+    /// TODO: Remove this function since it is never called.
     #[expect(dead_code)]
     #[verus_spec(ret =>
         requires
             self.wf_params(),
         ensures
-            !self.map().is_identity_map() ==>
-                (ret.is_some() == self.map().to_vaddr(paddr@ as int).is_some()),
-            (!self.map().is_identity_map() && ret.is_some()) ==>
-                (ret.unwrap() == self.map().to_vaddr(paddr@ as int).unwrap()),
-            self.map().is_identity_map() && (self.start_phys@ == self.start_virt.offset()) ==> (ret == Some(VirtAddr::from_spec(paddr@))), 
+            self.ens_phys_to_virt(paddr, ret),
     )]
     fn phys_to_virt(&self, paddr: PhysAddr) -> Option<VirtAddr> {
         proof!{
@@ -652,6 +649,8 @@ impl MemoryRegion {
         proof!{pi.use_type_invariant();}
         self.check_pfn(pfn);
         let info: PageStorageType = pi.to_mem();
+        // SAFETY: we have checked that the pfn is valid via check_pfn() above.
+        // proved to be safe enough if passing valid tracked perm.
         unsafe {
             proof_with!(Tracked(perm));
             self.page_info_mut_ptr(pfn).v_write(info);
@@ -678,7 +677,8 @@ impl MemoryRegion {
             let tracked perm = self.perms.borrow().info.reserved.tracked_borrow(pfn);
         }
         // SAFETY: we have checked that the pfn is valid via check_pfn() above.
-        // Verification makes it safe enough. We can drop unsafe.
+        // Verification makes it safe enough. 
+        // We can drop unsafe but keep it here for consistency with unverified mode.
         let info = unsafe {
             proof_with!(Tracked(perm));
             self.page_info_pptr(pfn).v_borrow()
@@ -747,9 +747,6 @@ impl MemoryRegion {
     )]
     #[verus_verify(spinoff_prover)]
     fn get_next_page(&mut self, order: usize) -> Result<usize, AllocError> {
-        proof! {
-            //broadcast use lemma_wf_next_page_info;
-        }
         let pfn = self.next_page[order];
 
         if pfn == 0 {
@@ -776,6 +773,7 @@ impl MemoryRegion {
             use_type_invariant(fi);
         }
         self.next_page[order] = fi.next_page;
+
         self.free_pages[order] -= 1;
 
         Ok(pfn)
@@ -852,6 +850,7 @@ impl MemoryRegion {
         let new_order = order - 1;
         let pfn1 = pfn;
         let pfn2 = pfn + (1usize << new_order);
+
         let next_pfn = self.next_page[new_order];
 
         proof_decl! {
@@ -903,21 +902,19 @@ impl MemoryRegion {
             old(self).ens_refill_page_list(*self, ret.is_ok(), order),
     )]
     fn refill_page_list(&mut self, order: usize) -> Result<(), AllocError> {
-        let next_page = (&self.next_page)
-            .get(order)
-            .ok_or(AllocError::InvalidPageOrder(order));
         proof! {
             if 0 <= order < MAX_ORDER {
                 self.perms.borrow().free.tracked_next(order);
-                assert(next_page.is_ok());
-            } else {
-                assert(!next_page.is_ok());
             }
         }
-        let next_page = *next_page?;
+        let next_page = *(&self.next_page)
+            .get(order)
+            .ok_or(AllocError::InvalidPageOrder(order))?;
+        
         if next_page != 0 {
             return Ok(());
         }
+
         self.refill_page_list(order + 1)?;
         proof_decl! {
             let tracked mut perm = PgUnitPerm::empty(arbitrary());
@@ -955,17 +952,16 @@ impl MemoryRegion {
         }
         proof_with!(Tracked(&mut info_head));
         self.write_page_info(pfn, pg);
-        let vaddr = self.start_virt + (pfn * PAGE_SIZE);
         proof! {
             reserved.tracked_insert(pfn, info_head);
             let tracked info = self.perms.borrow_mut().info.tracked_insert_unit(order, pfn, id, reserved);
             let tracked perm = PgUnitPerm {mem, info, typ: arbitrary()};
             *perm_with_dealloc = Some(UnitDeallocPerm(perm));
-            assert(pfn == self.spec_get_pfn(vaddr).unwrap()) by {
-                reveal(<LinearMap as SpecMemMapTr>::to_paddr);
-            };
+            //assert(pfn == self.spec_get_pfn(vaddr).unwrap()) by {
+            reveal(<LinearMap as SpecMemMapTr>::to_paddr);
+            //};
         }
-        Ok(vaddr)
+        Ok(self.start_virt + (pfn * PAGE_SIZE))
     }
 
     /// Allocates pages with a specific order.
@@ -1267,15 +1263,15 @@ impl MemoryRegion {
             }
             proof_with!(Tracked(&current_perm));
             let current_pfn = self.next_free_pfn(old_pfn, order);
-
             if current_pfn == 0 {
                 return Err(AllocError::OutOfMemory);
             }
 
             if current_pfn != pfn {
                 old_pfn = current_pfn;
-                proof! { idx_ = idx_ - 1;
-                assert(self.req_allocate_pfn(old_pfn, order));
+                proof! {
+                    idx_ = idx_ - 1;
+                    assert(self.req_allocate_pfn(old_pfn, order));
                 }
                 continue;
             }
@@ -1407,10 +1403,6 @@ impl MemoryRegion {
         }
         proof_with!(Tracked(&mut p2));
         let _ = self.allocate_pfn(neighbor_pfn, order)?;
-        proof! {
-            assert(p2.wf_pfn_order(self@.mr_map, neighbor_pfn, order));
-            assert(perm.wf_pfn_order(self@.mr_map, pfn, order));
-        }
 
         proof_with!(Tracked(perm), Tracked(p2));
         let new_pfn = self.merge_pages(pfn, neighbor_pfn, order)?;
@@ -1477,8 +1469,6 @@ impl MemoryRegion {
                 mr_map.pg_params().lemma_reserved_pfn_count();
             }
             use_type_invariant(&mr_map);
-            //self.perms.borrow_mut().mr_map.0.merge(mr_map.0);
-            //assert(self@.mr_map.shares() == mr_map.shares() + old(self)@.mr_map.shares());
         }
 
         match res {
@@ -1911,7 +1901,6 @@ impl<const N: u16> SlabPage<N> {
     }
 
     /// Get the virtual address of the next [`SlabPage`]
-    #[verus_spec]
     fn get_next_page(&self) -> VirtAddr {
         self.next_page
     }
@@ -2660,7 +2649,7 @@ mod test {
 
     #[test]
     /// Allocate and free a couple of objects for each slab size.
-    fn test_slab_alloc_free_marbitrary() {
+    fn test_slab_alloc_free_many() {
         extern crate alloc;
         use alloc::vec::Vec;
 

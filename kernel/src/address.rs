@@ -380,14 +380,17 @@ impl VirtAddr {
             ret == ptr_from_data::<T>(PtrData { addr: self@, provenance: provenance@, metadata: Metadata::Thin }),
     )]
     pub fn as_ptr_with_provenance<T>(&self) -> *const T {
-        vstd::raw_ptr::with_exposed_provenance(self.0, verus_exec_expr! {Tracked(provenance)}) as _
+        ({
+            proof_with!(Tracked(provenance));
+            self.as_mut_ptr_with_provenance()
+        }) as *const T
     }
 
     #[verus_spec(ret =>
         with Tracked(provenance): Tracked<vstd::raw_ptr::IsExposed>
         ensures
-            ret == vstd::raw_ptr::ptr_mut_from_data::<T>(
-                vstd::raw_ptr::PtrData { addr: self@, provenance: provenance@, metadata: vstd::raw_ptr::Metadata::Thin },
+            ret == ptr_mut_from_data::<T>(
+                vstd::raw_ptr::PtrData { addr: self@, provenance: provenance@, metadata: Metadata::Thin },
             ),
     )]
     pub fn as_mut_ptr_with_provenance<T>(&self) -> *mut T {
