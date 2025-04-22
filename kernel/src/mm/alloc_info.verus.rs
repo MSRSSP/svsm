@@ -447,17 +447,6 @@ impl PageInfoDb {
         }
     }
 
-    proof fn tracked_unit_nr_page(tracked &self, order: usize)
-        requires
-            self.is_unit(),
-        ensures
-            self.nr_page(order) == Self::const_nr_page(self.npages(), order),
-            self.npages() == 1usize << (self@[self.unit_start()].order()),
-    {
-        use_type_invariant(self);
-        self.lemma_unit_nr_page(order);
-    }
-
     proof fn lemma_unit_nr_page(&self, order: usize)
         requires
             self.wf(),
@@ -794,7 +783,7 @@ impl PageInfoDb {
         ret
     }
 
-    proof fn tracked_remove_and_merge_shares(tracked &mut self, tracked unit: &mut PageInfoDb)
+    proof fn tracked_unshare_for_write(tracked &mut self, tracked unit: &mut PageInfoDb)
         requires
             old(self).dom().contains(old(unit).unit_start()),
             old(unit).is_unit(),

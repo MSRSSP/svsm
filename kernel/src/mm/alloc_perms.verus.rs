@@ -165,10 +165,12 @@ impl<T: UnitType> PgUnitPerm<T> {
             ret == (old(self).mem, old(self).info),
             ret.1.npages() > 0 ==> ret.1.is_unit(),
             ret.1.npages() > 0 ==> T::wf_share_total(ret.1.id().shares, ret.1.id().total),
+            ret.1.wf(),
     {
         use_type_invariant(&*self);
         let tracked mut tmp = PgUnitPerm::empty(self.info.id);
         tracked_swap(self, &mut tmp);
+        use_type_invariant(&tmp.info);
         (tmp.mem, tmp.info)
     }
 }
