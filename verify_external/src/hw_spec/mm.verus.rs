@@ -58,48 +58,33 @@ pub trait SpecMemMapTr {
         }
     }
 
-    open spec fn get_paddr(&self, vaddr: Self::VAddr) -> Self::PAddr
-        recommends
-            self.to_paddr(vaddr).is_some(),
-    {
-        self.to_paddr(vaddr).unwrap()
-    }
-
-    open spec fn get_vaddr(&self, paddr: Self::PAddr) -> Self::VAddr
-        recommends
-            self.is_one_to_one_mapping(),
-            self.to_vaddr(paddr).is_some(),
-    {
-        self.to_vaddr(paddr).unwrap()
-    }
-
     proof fn proof_one_to_one_mapping(&self, addr: Self::PAddr)
         requires
             self.is_one_to_one_mapping(),
         ensures
             self.to_vaddrs(addr).len() <= 1,
-            self.to_vaddr(addr).is_some() ==> self.to_paddr(self.get_vaddr(addr)).is_some(),
+            self.to_vaddr(addr).is_some() ==> self.to_paddr(self.to_vaddr(addr).unwrap()).is_some(),
     ;
 
     proof fn proof_one_to_one_mapping_vaddr(&self, addr: Self::VAddr)
         requires
             self.is_one_to_one_mapping(),
         ensures
-            self.to_paddr(addr).is_some() ==> self.to_vaddr(self.get_paddr(addr)) == Some(addr),
+            self.to_paddr(addr).is_some() ==> self.to_vaddr(self.to_paddr(addr).unwrap()) == Some(addr),
     ;
 
     proof fn proof_correct_mapping_vaddr(&self, addr: Self::VAddr)
         requires
             self.to_paddr(addr).is_some(),
         ensures
-            self.to_vaddrs(self.get_paddr(addr)).contains(addr),
+            self.to_vaddrs(self.to_paddr(addr).unwrap()).contains(addr),
     ;
 
     proof fn proof_correct_mapping_paddr(&self, addr: Self::PAddr)
         ensures
             (self.to_vaddrs(addr).len() > 0) == self.to_vaddr(addr).is_some(),
-            self.to_vaddr(addr).is_some() ==> self.to_vaddrs(addr).contains(self.get_vaddr(addr)),
-            self.to_vaddrs(addr).len() > 0 ==> self.to_vaddrs(addr).contains(self.get_vaddr(addr)),
+            self.to_vaddr(addr).is_some() ==> self.to_vaddrs(addr).contains(self.to_vaddr(addr).unwrap()),
+            self.to_vaddrs(addr).len() > 0 ==> self.to_vaddrs(addr).contains(self.to_vaddr(addr).unwrap()),
     ;
 
     proof fn proof_correct_mapping_addrs(&self, addr: Self::PAddr, vaddr: Self::VAddr)

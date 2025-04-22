@@ -195,16 +195,18 @@ dependencies = [
 [[package]]
 name = "builtin"
 version = "0.1.0"
+source = "git+https://github.com/verus-lang/verus?rev=7faf296#7faf296aaccd01c6d542b1fead8fe85e2085f238"
 
 [[package]]
 name = "builtin_macros"
 version = "0.1.0"
+source = "git+https://github.com/verus-lang/verus?rev=7faf296#7faf296aaccd01c6d542b1fead8fe85e2085f238"
 dependencies = [
  "prettyplease_verus",
  "proc-macro2",
  "quote",
  "syn",
- "syn_verus",
+ "syn_verus 2.0.96 (git+https://github.com/verus-lang/verus?rev=7faf296)",
  "synstructure",
 ]
 
@@ -881,9 +883,10 @@ dependencies = [
 [[package]]
 name = "prettyplease_verus"
 version = "0.2.29"
+source = "git+https://github.com/verus-lang/verus?rev=7faf296#7faf296aaccd01c6d542b1fead8fe85e2085f238"
 dependencies = [
  "proc-macro2",
- "syn_verus",
+ "syn_verus 2.0.96 (git+https://github.com/verus-lang/verus?rev=7faf296)",
 ]
 
 [[package]]
@@ -1063,7 +1066,18 @@ dependencies = [
  "indexmap",
  "proc-macro2",
  "quote",
- "syn_verus",
+ "syn_verus 2.0.96",
+]
+
+[[package]]
+name = "state_machines_macros"
+version = "0.1.0"
+source = "git+https://github.com/verus-lang/verus?rev=7faf296#7faf296aaccd01c6d542b1fead8fe85e2085f238"
+dependencies = [
+ "indexmap",
+ "proc-macro2",
+ "quote",
+ "syn_verus 2.0.96 (git+https://github.com/verus-lang/verus?rev=7faf296)",
 ]
 
 [[package]]
@@ -1136,6 +1150,16 @@ dependencies = [
 [[package]]
 name = "syn_verus"
 version = "2.0.96"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "unicode-ident",
+]
+
+[[package]]
+name = "syn_verus"
+version = "2.0.96"
+source = "git+https://github.com/verus-lang/verus?rev=7faf296#7faf296aaccd01c6d542b1fead8fe85e2085f238"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1286,7 +1310,7 @@ dependencies = [
  "builtin_macros",
  "paste",
  "seq-macro",
- "state_machines_macros",
+ "state_machines_macros 0.1.0",
  "vstd",
 ]
 
@@ -1299,10 +1323,11 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 [[package]]
 name = "vstd"
 version = "0.1.0"
+source = "git+https://github.com/verus-lang/verus?rev=7faf296#7faf296aaccd01c6d542b1fead8fe85e2085f238"
 dependencies = [
  "builtin",
  "builtin_macros",
- "state_machines_macros",
+ "state_machines_macros 0.1.0 (git+https://github.com/verus-lang/verus?rev=7faf296)",
 ]
 
 [[package]]

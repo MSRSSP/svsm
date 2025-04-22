@@ -1,5 +1,4 @@
 use vstd::prelude::*;
-use vstd::set_lib::set_int_range;
 
 verus! {
 

@@ -183,7 +183,6 @@ impl SpecMemMapTr for LinearMap {
 
     proof fn proof_one_to_one_mapping(&self, paddr: Self::PAddr) {
         reveal(<LinearMap as SpecMemMapTr>::to_vaddr);
-        reveal(<LinearMap as SpecMemMapTr>::to_vaddrs);
         reveal(<LinearMap as SpecMemMapTr>::to_paddr);
         let offset = paddr - self.phys_start;
         let inner = (self.virt_start.offset() + offset) as usize;
@@ -192,7 +191,6 @@ impl SpecMemMapTr for LinearMap {
 
     proof fn proof_one_to_one_mapping_vaddr(&self, vaddr: Self::VAddr) {
         reveal(<LinearMap as SpecMemMapTr>::to_vaddr);
-        reveal(<LinearMap as SpecMemMapTr>::to_vaddrs);
         reveal(<LinearMap as SpecMemMapTr>::to_paddr);
         if self.to_paddr(vaddr).is_some() {
             self.proof_correct_mapping_vaddr(vaddr);
@@ -201,7 +199,6 @@ impl SpecMemMapTr for LinearMap {
 
     proof fn proof_correct_mapping_vaddr(&self, addr: Self::VAddr) {
         reveal(<LinearMap as SpecMemMapTr>::to_vaddr);
-        reveal(<LinearMap as SpecMemMapTr>::to_vaddrs);
         reveal(<LinearMap as SpecMemMapTr>::to_paddr);
         let offset = self.to_paddr(addr).unwrap() - self.phys_start;
         let inner = (self.virt_start.offset() + offset) as usize;
@@ -212,6 +209,14 @@ impl SpecMemMapTr for LinearMap {
         reveal(<LinearMap as SpecMemMapTr>::to_vaddr);
         reveal(<LinearMap as SpecMemMapTr>::to_vaddrs);
         reveal(<LinearMap as SpecMemMapTr>::to_paddr);
+        assert(set!{self.to_vaddr(paddr).unwrap()}.contains(
+            self.to_vaddr(paddr).unwrap(),
+        ));
+        if self.to_vaddr(paddr).is_some() {
+            assert(self.to_vaddrs(paddr).contains(self.to_vaddr(paddr).unwrap()));
+        }
+
+        assert(Set::<VirtAddr>::empty().is_empty());
         VirtAddr::lemma_wf((self.virt_start.offset() + paddr - self.phys_start) as usize);
     }
 
