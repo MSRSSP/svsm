@@ -1,3 +1,10 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+//
+// Copyright (c) Microsoft Corporation
+//
+// Author: Ziqiao Zhou <ziqiaozhou@microsoft.com>
+//
+// Defines memory region permissions.
 verus! {
 
 spec fn spec_map_page_info_addr(map: LinearMap, pfn: usize) -> VirtAddr {
@@ -66,9 +73,6 @@ pub struct AllocatorUnit {}
 #[allow(missing_debug_implementations)]
 pub struct DeallocUnit {}
 
-#[allow(missing_debug_implementations)]
-pub struct WritableUnit {}
-
 pub trait UnitType {
     spec fn wf_share_total(shares: nat, total: nat) -> bool;
 }
@@ -86,12 +90,6 @@ impl UnitType for AllocatorUnit {
         &&& shares == total - DEALLOC_PGINFO_SHARES
         &&& total == MAX_PGINFO_SHARES
         &&& 0 < shares < total
-    }
-}
-
-impl UnitType for WritableUnit {
-    closed spec fn wf_share_total(shares: nat, total: nat) -> bool {
-        0 < shares == total
     }
 }
 
@@ -252,42 +250,6 @@ impl MemoryRegionPerms {
 
     spec fn wf(&self) -> bool {
         self.wf_info()
-    }
-}
-
-impl MemoryRegion {
-    pub closed spec fn wf_next_pages(&self) -> bool {
-        &&& self.wf_perms()
-        &&& self.wf_params()
-        &&& self.next_page@ =~= self@.free.next_pages()
-        &&& forall|o| 0 <= o < MAX_ORDER ==> #[trigger] self.next_page[o] < MAX_PAGE_COUNT
-        &&& self@.free.wf_strict()
-    }
-
-    pub closed spec fn wf_perms(&self) -> bool {
-        let info = self@.info;
-        &&& self@.wf()
-        &&& forall|order|
-            0 <= order < MAX_ORDER ==> info.nr_page(order) == (
-            #[trigger] self.nr_pages[order as int])
-        &&& self@.free.nr_free() =~= self.free_pages@
-        &&& info.dom() =~= Set::new(|idx| 0 <= idx < self.page_count)
-        &&& self.page_count == self@.npages()
-    }
-
-    pub closed spec fn wf_params(&self) -> bool {
-        &&& self.page_count <= MAX_PAGE_COUNT
-        &&& self.start_virt@ % PAGE_SIZE == 0
-        &&& self@.mr_map.wf()
-        &&& self@.info_ptr_exposed@ == self@.mr_map@.provenance
-        &&& self.map() == self@.mr_map@.map
-        &&& self.map().wf()
-    }
-
-    pub closed spec fn req_read_any_info(&self) -> bool {
-        &&& self.page_count == self@.npages()
-        &&& self.wf_params()
-        &&& self@.wf()
     }
 }
 

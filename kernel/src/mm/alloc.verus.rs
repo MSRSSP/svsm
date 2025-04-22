@@ -6,11 +6,14 @@
 //
 // This module defines specification functions for MemoryRegion implementations
 //
-// Trusted Context:
-// - Upon entry to the SVSM (Secure Virtual Machine Monitor) kernel, there exists a set of unique
+// How the proof works:
+// - Upon entry to the SVSM (Secure Virtual Machine Monitor) kernel, we ensure there exists a set of unique
 //   memory permissions that are predefined and trusted.
 // - Memory permissions are unforgeable, ensuring their integrity during execution.
-// - LinearMap is correct and is used for all memory managed by allocator.
+// - The memory region tracks the memory page permissions and their page info permissions.
+// - The PageInfo's permission will be shared as read-only permissions if the page is allocated.
+//   observes the same PageInfo.
+// - LinearMap is correct and is used for all memory managed.
 //
 use crate::address::group_addr_proofs;
 use crate::mm::address_space::LinearMap;
@@ -59,6 +62,36 @@ impl View for MemoryRegion {
 
     closed spec fn view(&self) -> MemoryRegionPerms {
         self.perms@
+    }
+}
+
+impl MemoryRegion {
+    spec fn wf_next_pages(&self) -> bool {
+        &&& self.wf_perms()
+        &&& self.wf_params()
+        &&& self.next_page@ =~= self@.free.next_pages()
+        &&& forall|o| 0 <= o < MAX_ORDER ==> #[trigger] self.next_page[o] < MAX_PAGE_COUNT
+        &&& self@.free.wf_strict()
+    }
+
+    spec fn wf_perms(&self) -> bool {
+        let info = self@.info;
+        &&& self@.wf()
+        &&& forall|order|
+            0 <= order < MAX_ORDER ==> info.nr_page(order) == (
+            #[trigger] self.nr_pages[order as int])
+        &&& self@.free.nr_free() =~= self.free_pages@
+        &&& info.dom() =~= Set::new(|idx| 0 <= idx < self.page_count)
+        &&& self.page_count == self@.npages()
+    }
+
+    spec fn wf_params(&self) -> bool {
+        &&& self.page_count <= MAX_PAGE_COUNT
+        &&& self.start_virt@ % PAGE_SIZE == 0
+        &&& self@.mr_map.wf()
+        &&& self@.info_ptr_exposed@ == self@.mr_map@.provenance
+        &&& self.map() == self@.mr_map@.map
+        &&& self.map().wf()
     }
 }
 
@@ -296,6 +329,12 @@ impl MemoryRegion {
             &&& new.free_pages@[order] == self.free_pages[order] - 1
             &&& self.with_same_mapping(new)
         }
+    }
+
+    spec fn req_read_any_info(&self) -> bool {
+        &&& self.page_count == self@.npages()
+        &&& self.wf_params()
+        &&& self@.wf()
     }
 
     spec fn ens_read_page_info(self, pfn: usize, ret: PageInfo) -> bool {

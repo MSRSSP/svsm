@@ -884,7 +884,7 @@ impl MemoryRegion {
             let tracked info =  self.perms.borrow_mut().info.tracked_insert_unit(new_order, pfn1, id, reserved);
             let tracked p1 = PgUnitPerm {mem, info, typ: arbitrary()};
         }
-    
+
         proof_with!(Tracked(&mut reserved2));
         self.init_compound_page(pfn2, new_order, next_pfn);
 

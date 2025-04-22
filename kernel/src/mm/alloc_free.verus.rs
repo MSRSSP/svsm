@@ -1,3 +1,12 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+//
+// Copyright (c) Microsoft Corporation
+//
+// Author: Ziqiao Zhou <ziqiaozhou@microsoft.com>
+//
+// Proofs for the free pages.
+// The allocator should have memory permissions for all free pages.
+// The free_page counter should be consistant with the actual free pages defined by nr_free.
 verus! {
 
 tracked struct MRFreePerms {
@@ -180,6 +189,7 @@ impl MRFreePerms {
         }
     }
 
+    // If providing a mutable tracked perm, the tracked free perms must be disjoint with it.
     proof fn tracked_perm_disjoint(
         tracked &self,
         tracked perm: &mut RawPerm,
@@ -203,6 +213,7 @@ impl MRFreePerms {
         self.tracked_perm_disjoint_rec2(pfn, order, perm, MAX_ORDER);
     }
 
+    // Any pair of free pages in the free lists are disjoint.
     proof fn tracked_disjoint_pfn(tracked &mut self, o1: usize, i: int, o2: usize, j: int)
         requires
             (o1, i) != (o2, j),
