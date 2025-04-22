@@ -13,11 +13,16 @@ use crate::console::init_svsm_console;
 use crate::cpu::apic::{ApicIcr, IcrMessageType};
 use crate::cpu::control_regs::read_cr3;
 use crate::cpu::cpuid::CpuidResult;
+use crate::cpu::msr::write_msr;
 use crate::cpu::percpu::PerCpu;
 use crate::cpu::smp::create_ap_start_context;
-use crate::cpu::x86::apic::{x2apic_enable, x2apic_eoi, x2apic_icr_write};
+use crate::cpu::x86::{
+    apic_enable, apic_initialize, apic_post_irq, apic_sw_enable, X2APIC_ACCESSOR,
+};
 use crate::error::SvsmError;
-use crate::hyperv::{hyperv_setup_hypercalls, hyperv_start_cpu, is_hyperv_hypervisor};
+use crate::hyperv;
+use crate::hyperv::hyperv_start_cpu;
+use crate::hyperv::IS_HYPERV;
 use crate::io::{IOPort, DEFAULT_IO_DRIVER};
 use crate::mm::PerCPUPageMappingGuard;
 use crate::types::{PageSize, PAGE_SIZE};
@@ -35,7 +40,6 @@ use bootlib::platform::SvsmPlatformType;
 
 #[derive(Clone, Copy, Debug)]
 pub struct NativePlatform {
-    is_hyperv: bool,
     transition_cr3: u32,
 }
 
@@ -47,7 +51,6 @@ impl NativePlatform {
             panic!("X2APIC is not supported");
         }
         Self {
-            is_hyperv: is_hyperv_hypervisor(),
             transition_cr3: u64::from(read_cr3()).try_into().unwrap(),
         }
     }
@@ -70,23 +73,17 @@ impl SvsmPlatform for NativePlatform {
     }
 
     fn env_setup_svsm(&self) -> Result<(), SvsmError> {
-        if self.is_hyperv {
-            hyperv_setup_hypercalls()?;
-        }
-
         Ok(())
     }
 
-    fn setup_percpu(&self, cpu: &PerCpu) -> Result<(), SvsmError> {
-        if self.is_hyperv {
-            cpu.allocate_hypercall_pages()?;
-        }
-
+    fn setup_percpu(&self, _cpu: &PerCpu) -> Result<(), SvsmError> {
         Ok(())
     }
 
     fn setup_percpu_current(&self, _cpu: &PerCpu) -> Result<(), SvsmError> {
-        x2apic_enable();
+        apic_initialize(&X2APIC_ACCESSOR);
+        apic_enable();
+        apic_sw_enable();
         Ok(())
     }
 
@@ -106,8 +103,34 @@ impl SvsmPlatform for NativePlatform {
         Caps::new(0, features)
     }
 
+    fn setup_hyperv_hypercalls(&self) -> Result<(), SvsmError> {
+        hyperv::setup_hypercall_page()
+    }
+
+    /// # Safety
+    /// Hypercalls may have side-effects that affect the integrity of the
+    /// system, and the caller must take responsibility for ensuring that the
+    /// hypercall operation is safe.
+    unsafe fn hypercall(
+        &self,
+        input_control: hyperv::HvHypercallInput,
+        hypercall_pages: &hyperv::HypercallPagesGuard<'_>,
+    ) -> hyperv::HvHypercallOutput {
+        // SAFETY: the caller guarantees the safety of the hypercall
+        // parameters.
+        unsafe { hyperv::execute_hypercall(input_control, hypercall_pages) }
+    }
+
     fn cpuid(&self, eax: u32) -> Option<CpuidResult> {
         Some(CpuidResult::get(eax, 0))
+    }
+
+    unsafe fn write_host_msr(&self, msr: u32, value: u64) {
+        // SAFETY: the caller takes responsibility for ensuring the safety
+        // of the MSR write.
+        unsafe {
+            write_msr(msr, value);
+        }
     }
 
     fn setup_guest_host_comm(&mut self, _cpu: &PerCpu, _is_bsp: bool) {}
@@ -169,15 +192,6 @@ impl SvsmPlatform for NativePlatform {
         true
     }
 
-    fn post_irq(&self, icr: u64) -> Result<(), SvsmError> {
-        x2apic_icr_write(icr);
-        Ok(())
-    }
-
-    fn eoi(&self) {
-        x2apic_eoi();
-    }
-
     fn is_external_interrupt(&self, _vector: usize) -> bool {
         // For a native platform, the hypervisor is fully trusted with all
         // event delivery, so all events are assumed not to be external
@@ -187,7 +201,7 @@ impl SvsmPlatform for NativePlatform {
 
     fn start_cpu(&self, cpu: &PerCpu, start_rip: u64) -> Result<(), SvsmError> {
         let context = cpu.get_initial_context(start_rip);
-        if self.is_hyperv {
+        if *IS_HYPERV {
             return hyperv_start_cpu(cpu, &context);
         }
 
@@ -212,12 +226,12 @@ impl SvsmPlatform for NativePlatform {
         // running virtualized.
         let icr = ApicIcr::new().with_destination(cpu.shared().apic_id());
         let init_icr = icr.with_message_type(IcrMessageType::Init);
-        self.post_irq(init_icr.into())?;
+        apic_post_irq(init_icr.into());
         let sipi_vector = SIPI_STUB_GPA >> 12;
         let sipi_icr = icr
             .with_message_type(IcrMessageType::Sipi)
             .with_vector(sipi_vector.try_into().unwrap());
-        self.post_irq(sipi_icr.into())?;
+        apic_post_irq(sipi_icr.into());
 
         Ok(())
     }

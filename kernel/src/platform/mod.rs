@@ -19,7 +19,7 @@ use snp::SnpPlatform;
 use tdp::TdpPlatform;
 
 use core::arch::asm;
-use core::ops::{Deref, DerefMut};
+use core::fmt::Debug;
 
 use crate::address::{PhysAddr, VirtAddr};
 use crate::config::SvsmConfig;
@@ -28,6 +28,7 @@ use crate::cpu::percpu::PerCpu;
 use crate::cpu::shadow_stack::determine_cet_support_from_cpuid;
 use crate::cpu::tlb::{flush_tlb, TlbFlushScope};
 use crate::error::SvsmError;
+use crate::hyperv;
 use crate::io::IOPort;
 use crate::types::PageSize;
 use crate::utils::immut_after_init::ImmutAfterInitCell;
@@ -36,7 +37,8 @@ use crate::utils::MemoryRegion;
 use bootlib::platform::SvsmPlatformType;
 
 static SVSM_PLATFORM_TYPE: ImmutAfterInitCell<SvsmPlatformType> = ImmutAfterInitCell::uninit();
-pub static SVSM_PLATFORM: ImmutAfterInitCell<SvsmPlatformCell> = ImmutAfterInitCell::uninit();
+static SVSM_PLATFORM_CELL: ImmutAfterInitCell<SvsmPlatformCell> = ImmutAfterInitCell::uninit();
+pub static SVSM_PLATFORM: ImmutAfterInitCell<&dyn SvsmPlatform> = ImmutAfterInitCell::uninit();
 pub static CAPS: ImmutAfterInitCell<Caps> = ImmutAfterInitCell::uninit();
 
 #[derive(Clone, Copy, Debug)]
@@ -63,7 +65,7 @@ pub enum PageValidateOp {
 
 /// This defines a platform abstraction to permit the SVSM to run on different
 /// underlying architectures.
-pub trait SvsmPlatform {
+pub trait SvsmPlatform: Sync {
     #[cfg(test)]
     fn platform_type(&self) -> SvsmPlatformType;
 
@@ -120,8 +122,30 @@ pub trait SvsmPlatform {
     /// Get the features and the capabilities of the platform.
     fn capabilities(&self) -> Caps;
 
+    /// Enable platform-specific Hyper-V hypercall operations.
+    fn setup_hyperv_hypercalls(&self) -> Result<(), SvsmError> {
+        Ok(())
+    }
+
+    /// Perform a hypercall.
+    /// # Safety
+    /// Hypercalls may have side-effects that affect the integrity of the
+    /// system, and the caller must take responsibility for ensuring that the
+    /// hypercall operation is safe.
+    unsafe fn hypercall(
+        &self,
+        input_control: hyperv::HvHypercallInput,
+        hypercall_pages: &hyperv::HypercallPagesGuard<'_>,
+    ) -> hyperv::HvHypercallOutput;
+
     /// Obtain CPUID using platform-specific tables.
     fn cpuid(&self, eax: u32) -> Option<CpuidResult>;
+
+    /// Write a host-owned MSR.
+    /// # Safety
+    /// The caller must ensure that the requested MSR modification does mot
+    /// affect memory safety.
+    unsafe fn write_host_msr(&self, msr: u32, value: u64);
 
     /// Establishes state required for guest/host communication.
     fn setup_guest_host_comm(&mut self, cpu: &PerCpu, is_bsp: bool);
@@ -173,12 +197,6 @@ pub trait SvsmPlatform {
     /// Determines whether the platform supports interrupts to the SVSM.
     fn use_interrupts(&self) -> bool;
 
-    /// Signal an IRQ on one or more CPUs.
-    fn post_irq(&self, icr: u64) -> Result<(), SvsmError>;
-
-    /// Perform an EOI of the current interrupt.
-    fn eoi(&self);
-
     /// Determines whether a given interrupt vector was invoked as an external
     /// interrupt.
     fn is_external_interrupt(&self, vector: usize) -> bool;
@@ -201,9 +219,8 @@ pub enum SvsmPlatformCell {
 }
 
 impl SvsmPlatformCell {
-    pub fn new(platform_type: SvsmPlatformType, suppress_svsm_interrupts: bool) -> Self {
-        assert_eq!(platform_type, *SVSM_PLATFORM_TYPE);
-        match platform_type {
+    pub fn new(suppress_svsm_interrupts: bool) -> Self {
+        match *SVSM_PLATFORM_TYPE {
             SvsmPlatformType::Native => {
                 SvsmPlatformCell::Native(NativePlatform::new(suppress_svsm_interrupts))
             }
@@ -216,6 +233,15 @@ impl SvsmPlatformCell {
         }
     }
 
+    pub fn global_init(self) {
+        SVSM_PLATFORM_CELL
+            .init(self)
+            .expect("Failed to initialize SVSM platform cell");
+        SVSM_PLATFORM
+            .init(SVSM_PLATFORM_CELL.platform())
+            .expect("Failed to initialize SVSM platform");
+    }
+
     pub fn platform(&self) -> &dyn SvsmPlatform {
         match self {
             SvsmPlatformCell::Native(platform) => platform,
@@ -223,22 +249,8 @@ impl SvsmPlatformCell {
             SvsmPlatformCell::Tdp(platform) => platform,
         }
     }
-}
 
-impl Deref for SvsmPlatformCell {
-    type Target = dyn SvsmPlatform;
-
-    fn deref(&self) -> &Self::Target {
-        match self {
-            SvsmPlatformCell::Native(platform) => platform,
-            SvsmPlatformCell::Snp(platform) => platform,
-            SvsmPlatformCell::Tdp(platform) => platform,
-        }
-    }
-}
-
-impl DerefMut for SvsmPlatformCell {
-    fn deref_mut(&mut self) -> &mut Self::Target {
+    pub fn platform_mut(&mut self) -> &mut dyn SvsmPlatform {
         match self {
             SvsmPlatformCell::Native(platform) => platform,
             SvsmPlatformCell::Snp(platform) => platform,

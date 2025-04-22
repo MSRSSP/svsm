@@ -4,6 +4,7 @@
 //
 // Author: Joerg Roedel <jroedel@suse.de>
 
+use crate::cpu::ipi::wait_for_ipi_block;
 use crate::cpu::percpu::{process_requests, this_cpu, wait_for_requests};
 use crate::cpu::{flush_tlb_global_sync, IrqGuard};
 use crate::error::SvsmError;
@@ -14,9 +15,12 @@ use crate::protocols::errors::{SvsmReqError, SvsmResultCode};
 use crate::sev::ghcb::switch_to_vmpl;
 use crate::task::go_idle;
 
+use crate::protocols::attest::attest_protocol_request;
 #[cfg(all(feature = "vtpm", not(test)))]
 use crate::protocols::{vtpm::vtpm_protocol_request, SVSM_VTPM_PROTOCOL};
-use crate::protocols::{RequestParams, SVSM_APIC_PROTOCOL, SVSM_CORE_PROTOCOL};
+use crate::protocols::{
+    RequestParams, SVSM_APIC_PROTOCOL, SVSM_ATTEST_PROTOCOL, SVSM_CORE_PROTOCOL,
+};
 use crate::sev::vmsa::VMSAControl;
 use crate::types::GUEST_VMPL;
 use cpuarch::vmsa::GuestVMExit;
@@ -113,6 +117,7 @@ fn request_loop_once(
 
     match protocol {
         SVSM_CORE_PROTOCOL => core_protocol_request(request, params).map(|_| true),
+        SVSM_ATTEST_PROTOCOL => attest_protocol_request(request, params).map(|_| true),
         #[cfg(all(feature = "vtpm", not(test)))]
         SVSM_VTPM_PROTOCOL => vtpm_protocol_request(request, params).map(|_| true),
         SVSM_APIC_PROTOCOL => apic_protocol_request(request, params).map(|_| true),
@@ -146,6 +151,10 @@ fn check_requests() -> Result<bool, SvsmReqError> {
 
 #[no_mangle]
 pub extern "C" fn request_loop_main() {
+    // Suppress the use of IPIs before entering the guest, and ensure that all
+    // other CPUs have done the same.
+    wait_for_ipi_block();
+
     let apic_id = this_cpu().get_apic_id();
     log::info!("Launching request loop task on CPU {}", apic_id);
 

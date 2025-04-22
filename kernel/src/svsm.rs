@@ -19,7 +19,7 @@ use svsm::cpu::control_regs::{cr0_init, cr4_init};
 use svsm::cpu::cpuid::{dump_cpuid_table, register_cpuid_table};
 use svsm::cpu::gdt::GLOBAL_GDT;
 use svsm::cpu::idt::svsm::{early_idt_init, idt_init};
-use svsm::cpu::percpu::{cpu_idle_loop, this_cpu, PerCpu};
+use svsm::cpu::percpu::{cpu_idle_loop, this_cpu, try_this_cpu, PerCpu, PERCPU_AREAS};
 use svsm::cpu::shadow_stack::{
     determine_cet_support, is_cet_ss_supported, SCetFlags, MODE_64BIT, S_CET,
 };
@@ -29,6 +29,7 @@ use svsm::debug::gdbstub::svsm_gdbstub::{debug_break, gdbstub_start};
 use svsm::debug::stacktrace::print_stack;
 use svsm::enable_shadow_stacks;
 use svsm::fs::{initialize_fs, opendir, populate_ram_fs};
+use svsm::hyperv::hyperv_setup;
 use svsm::igvm_params::IgvmParams;
 use svsm::kernel_region::new_kernel_region;
 use svsm::mm::alloc::{memory_info, print_memory_info, root_mem_init};
@@ -52,8 +53,8 @@ use svsm::mm::validate::{init_valid_bitmap_ptr, migrate_valid_bitmap};
 use release::COCONUT_VERSION;
 
 extern "C" {
-    pub static bsp_stack: u8;
-    pub static bsp_stack_end: u8;
+    static bsp_stack: u8;
+    static bsp_stack_end: u8;
 }
 
 /*
@@ -97,8 +98,10 @@ global_asm!(
         .bss
 
         .align {PAGE_SIZE}
+        .globl bsp_stack
     bsp_stack:
         .fill 8*{PAGE_SIZE}, 1, 0
+        .globl bsp_stack_end
     bsp_stack_end:
         "#,
     PAGE_SIZE = const PAGE_SIZE,
@@ -166,7 +169,6 @@ extern "C" fn svsm_start(li: &KernelLaunchInfo, vb_addr: usize) -> ! {
     // SAFETY: we trust the previous stage to pass a valid pointer
     unsafe { init_valid_bitmap_ptr(new_kernel_region(&launch_info), vb_ptr) };
 
-    GLOBAL_GDT.load();
     GLOBAL_GDT.load_selectors();
     early_idt_init();
 
@@ -178,7 +180,8 @@ extern "C" fn svsm_start(li: &KernelLaunchInfo, vb_addr: usize) -> ! {
         .init_from_ref(li)
         .expect("Already initialized launch info");
 
-    let mut platform = SvsmPlatformCell::new(li.platform_type, li.suppress_svsm_interrupts);
+    let mut platform_cell = SvsmPlatformCell::new(li.suppress_svsm_interrupts);
+    let platform = platform_cell.platform_mut();
 
     init_cpuid_table(VirtAddr::from(launch_info.cpuid_page));
 
@@ -192,8 +195,8 @@ extern "C" fn svsm_start(li: &KernelLaunchInfo, vb_addr: usize) -> ! {
     }
 
     cr0_init();
-    determine_cet_support(&*platform);
-    cr4_init(&*platform);
+    determine_cet_support(platform);
+    cr4_init(platform);
 
     install_console_logger("SVSM").expect("Console logger already initialized");
     platform
@@ -216,7 +219,7 @@ extern "C" fn svsm_start(li: &KernelLaunchInfo, vb_addr: usize) -> ! {
         Err(e) => panic!("error reading kernel ELF: {}", e),
     };
 
-    paging_init(&*platform, false).expect("Failed to initialize paging");
+    paging_init(platform, false).expect("Failed to initialize paging");
     let init_pgtable =
         init_page_table(&launch_info, &kernel_elf).expect("Could not initialize the page table");
     // SAFETY: we are initializing the state, including stack and registers
@@ -224,13 +227,16 @@ extern "C" fn svsm_start(li: &KernelLaunchInfo, vb_addr: usize) -> ! {
         init_pgtable.load();
     }
 
-    let bsp_percpu = PerCpu::alloc(0).expect("Failed to allocate BSP per-cpu data");
+    // SAFETY: this is the first CPU, so there can be no other dependencies
+    // on multi-threaded access to the per-cpu areas.
+    let percpu_shared = unsafe { PERCPU_AREAS.create_new(0) };
+    let bsp_percpu = PerCpu::alloc(percpu_shared).expect("Failed to allocate BSP per-cpu data");
 
     bsp_percpu
-        .setup(&*platform, init_pgtable)
+        .setup(platform, init_pgtable)
         .expect("Failed to setup BSP per-cpu area");
     bsp_percpu
-        .setup_on_cpu(&*platform)
+        .setup_on_cpu(platform)
         .expect("Failed to run percpu.setup_on_cpu()");
     bsp_percpu.load();
     // Now the stack unwinder can be used
@@ -238,6 +244,8 @@ extern "C" fn svsm_start(li: &KernelLaunchInfo, vb_addr: usize) -> ! {
         VirtAddr::from(&raw const bsp_stack),
         VirtAddr::from(&raw const bsp_stack_end),
     ));
+
+    idt_init();
 
     if is_cet_ss_supported() {
         enable_shadow_stacks!(bsp_percpu);
@@ -250,7 +258,6 @@ extern "C" fn svsm_start(li: &KernelLaunchInfo, vb_addr: usize) -> ! {
         .setup_idle_task(svsm_main)
         .expect("Failed to allocate idle task for BSP");
 
-    idt_init();
     platform
         .env_setup_late(debug_serial_port)
         .expect("Late environment setup failed");
@@ -266,9 +273,7 @@ extern "C" fn svsm_start(li: &KernelLaunchInfo, vb_addr: usize) -> ! {
         .configure_alternate_injection(launch_info.use_alternate_injection)
         .expect("Alternate injection required but not available");
 
-    SVSM_PLATFORM
-        .init(platform)
-        .expect("Failed to initialize SVSM platform object");
+    platform_cell.global_init();
 
     sse_init();
 
@@ -294,6 +299,8 @@ pub extern "C" fn svsm_main() {
         .env_setup_svsm()
         .expect("SVSM platform environment setup failed");
 
+    hyperv_setup().expect("failed to complete Hyper-V setup");
+
     let launch_info = &*LAUNCH_INFO;
     let igvm_params = if launch_info.igvm_params_virt_addr != 0 {
         let igvm_params = IgvmParams::new(VirtAddr::from(launch_info.igvm_params_virt_addr))
@@ -306,7 +313,7 @@ pub extern "C" fn svsm_main() {
         None
     };
 
-    let config = SvsmConfig::new(SVSM_PLATFORM.platform(), igvm_params);
+    let config = SvsmConfig::new(*SVSM_PLATFORM, igvm_params);
 
     init_memory_map(&config, &LAUNCH_INFO).expect("Failed to init guest memory map");
 
@@ -367,11 +374,15 @@ fn panic(info: &PanicInfo<'_>) -> ! {
     secrets_page_mut().clear_vmpck(2);
     secrets_page_mut().clear_vmpck(3);
 
-    log::error!(
-        "Panic on CPU[{}]! COCONUT-SVSM Version: {}",
-        this_cpu().get_apic_id(),
-        COCONUT_VERSION
-    );
+    if let Some(cpu) = try_this_cpu() {
+        log::error!(
+            "Panic on CPU[{}]! COCONUT-SVSM Version: {}",
+            cpu.get_apic_id(),
+            COCONUT_VERSION
+        );
+    } else {
+        log::error!("Panic on CPU[?]! COCONUT-SVSM Version: {}", COCONUT_VERSION);
+    }
     log::error!("Info: {}", info);
 
     print_stack(3);

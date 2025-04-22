@@ -15,19 +15,21 @@ use crate::console::init_svsm_console;
 use crate::cpu::cpuid::{cpuid_table, CpuidResult};
 use crate::cpu::percpu::{current_ghcb, this_cpu, PerCpu};
 use crate::cpu::tlb::TlbFlushScope;
+use crate::cpu::x86::{apic_enable, apic_initialize, apic_sw_enable};
 use crate::error::ApicError::Registration;
 use crate::error::SvsmError;
 use crate::greq::driver::guest_request_driver_init;
+use crate::hyperv;
 use crate::io::IOPort;
 use crate::mm::memory::write_guest_memory_map;
 use crate::mm::{PerCPUPageMappingGuard, PAGE_SIZE, PAGE_SIZE_2M};
 use crate::sev::ghcb::GHCBIOSize;
-use crate::sev::hv_doorbell::current_hv_doorbell;
 use crate::sev::msr_protocol::{
     hypervisor_ghcb_features, request_termination_msr, verify_ghcb_version, GHCBHvFeatures,
 };
 use crate::sev::status::vtom_enabled;
 use crate::sev::tlb::flush_tlb_scope;
+use crate::sev::GHCB_APIC_ACCESSOR;
 use crate::sev::{
     init_hypervisor_ghcb_features, pvalidate_range, sev_status_init, sev_status_verify, PvalidateOp,
 };
@@ -36,12 +38,10 @@ use crate::utils::immut_after_init::ImmutAfterInitCell;
 use crate::utils::MemoryRegion;
 use syscall::GlobalFeatureFlags;
 
-use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use core::sync::atomic::{AtomicU32, Ordering};
 
 #[cfg(test)]
 use bootlib::platform::SvsmPlatformType;
-
-static SVSM_ENV_INITIALIZED: AtomicBool = AtomicBool::new(false);
 
 static GHCB_IO_DRIVER: GHCBIOPort = GHCBIOPort::new();
 
@@ -112,9 +112,11 @@ impl SvsmPlatform for SnpPlatform {
     }
 
     fn env_setup_svsm(&self) -> Result<(), SvsmError> {
-        this_cpu().configure_hv_doorbell()?;
+        if hypervisor_ghcb_features().contains(GHCBHvFeatures::SEV_SNP_RESTR_INJ) {
+            GHCB_APIC_ACCESSOR.set_use_restr_inj(true);
+            this_cpu().setup_hv_doorbell()?;
+        }
         guest_request_driver_init();
-        SVSM_ENV_INITIALIZED.store(true, Ordering::Relaxed);
         Ok(())
     }
 
@@ -150,12 +152,13 @@ impl SvsmPlatform for SnpPlatform {
     fn setup_percpu_current(&self, cpu: &PerCpu) -> Result<(), SvsmError> {
         cpu.register_ghcb()?;
 
-        // #HV doorbell allocation can only occur if the SVSM environment has
-        // already been initialized.  Skip allocation if not; it will be done
-        // during environment initialization.
-        if SVSM_ENV_INITIALIZED.load(Ordering::Relaxed) {
-            cpu.configure_hv_doorbell()?;
+        if GHCB_APIC_ACCESSOR.use_restr_inj() {
+            cpu.setup_hv_doorbell()?;
         }
+
+        apic_initialize(&GHCB_APIC_ACCESSOR);
+        apic_enable();
+        apic_sw_enable();
 
         Ok(())
     }
@@ -204,8 +207,37 @@ impl SvsmPlatform for SnpPlatform {
         Caps::new(vm_bitmap, features)
     }
 
+    /// # Safety
+    /// Hypercalls may have side-effects that affect the integrity of the
+    /// system, and the caller must take responsibility for ensuring that the
+    /// hypercall operation is safe.
+    unsafe fn hypercall(
+        &self,
+        input_control: hyperv::HvHypercallInput,
+        hypercall_pages: &hyperv::HypercallPagesGuard<'_>,
+    ) -> hyperv::HvHypercallOutput {
+        hyperv::execute_host_hypercall(input_control, hypercall_pages, |registers| {
+            current_ghcb()
+                .vmmcall(registers)
+                .expect("VMMCALL exit failed");
+        })
+    }
+
     fn cpuid(&self, eax: u32) -> Option<CpuidResult> {
-        cpuid_table(eax)
+        // If this is an architectural CPUID leaf, then extract the result
+        // from the CPUID table.  Otherwise, request the value from the
+        // hypervisor.
+        if (eax >> 28) == 4 {
+            current_ghcb().cpuid(eax).ok()
+        } else {
+            cpuid_table(eax)
+        }
+    }
+
+    unsafe fn write_host_msr(&self, msr: u32, value: u64) {
+        current_ghcb()
+            .wrmsr(msr, value)
+            .expect("Host MSR access failed");
     }
 
     fn setup_guest_host_comm(&mut self, cpu: &PerCpu, is_bsp: bool) {
@@ -314,21 +346,6 @@ impl SvsmPlatform for SnpPlatform {
 
     fn use_interrupts(&self) -> bool {
         self.can_use_interrupts
-    }
-
-    fn post_irq(&self, icr: u64) -> Result<(), SvsmError> {
-        current_ghcb().hv_ipi(icr)?;
-        Ok(())
-    }
-
-    fn eoi(&self) {
-        // Issue an explicit EOI unless no explicit EOI is required.
-        if !current_hv_doorbell().no_eoi_required() {
-            // 0x80B is the X2APIC EOI MSR.
-            // Errors here cannot be handled but should not be grounds for
-            // panic.
-            let _ = current_ghcb().wrmsr(0x80B, 0);
-        }
     }
 
     fn is_external_interrupt(&self, _vector: usize) -> bool {

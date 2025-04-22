@@ -23,12 +23,14 @@ use crate::cpu::idt::common::INT_INJ_VECTOR;
 use crate::cpu::tss::TSS_LIMIT;
 use crate::cpu::vmsa::{init_guest_vmsa, init_svsm_vmsa};
 use crate::cpu::vmsa::{svsm_code_segment, svsm_data_segment, svsm_gdt_segment, svsm_idt_segment};
-use crate::cpu::{IrqState, LocalApic};
+use crate::cpu::x86::{ApicAccess, X86Apic};
+use crate::cpu::{IrqGuard, IrqState, LocalApic};
 use crate::error::{ApicError, SvsmError};
 use crate::hyperv;
-use crate::hyperv::HypercallPagesGuard;
+use crate::hyperv::{HypercallPagesGuard, IS_HYPERV};
 use crate::locking::{LockGuard, RWLock, RWLockIrqSafe, SpinLock};
-use crate::mm::alloc::allocate_pages;
+use crate::mm::alloc::{allocate_pages, free_page};
+use crate::mm::page_visibility::{make_page_private, make_page_shared};
 use crate::mm::pagetable::{PTEntryFlags, PageTable};
 use crate::mm::virtualrange::VirtualRange;
 use crate::mm::vm::{
@@ -46,7 +48,6 @@ use crate::platform::{halt, SvsmPlatform, SVSM_PLATFORM};
 use crate::requests::{request_loop_main, request_processing_main};
 use crate::sev::ghcb::{GhcbPage, GHCB};
 use crate::sev::hv_doorbell::{allocate_hv_doorbell_page, HVDoorbell};
-use crate::sev::msr_protocol::{hypervisor_ghcb_features, GHCBHvFeatures};
 use crate::sev::utils::RMPFlags;
 use crate::sev::vmsa::{VMSAControl, VmsaPage};
 use crate::task::{
@@ -56,35 +57,18 @@ use crate::types::{
     PAGE_SHIFT, PAGE_SHIFT_2M, PAGE_SIZE, PAGE_SIZE_2M, SVSM_TR_ATTRIBUTES, SVSM_TSS,
 };
 use crate::utils::MemoryRegion;
+use alloc::boxed::Box;
 use alloc::format;
 use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
+use core::arch::asm;
 use core::cell::{Cell, OnceCell, Ref, RefCell, RefMut, UnsafeCell};
 use core::mem::size_of;
 use core::ptr;
 use core::slice::Iter;
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use cpuarch::vmsa::VMSA;
-
-#[derive(Copy, Clone, Debug)]
-pub struct PerCpuInfo {
-    apic_id: u32,
-    cpu_shared: &'static PerCpuShared,
-}
-
-impl PerCpuInfo {
-    const fn new(apic_id: u32, cpu_shared: &'static PerCpuShared) -> Self {
-        Self {
-            apic_id,
-            cpu_shared,
-        }
-    }
-
-    pub fn as_cpu_ref(&self) -> &'static PerCpuShared {
-        self.cpu_shared
-    }
-}
 
 // PERCPU areas virtual addresses into shared memory
 pub static PERCPU_AREAS: PerCpuAreas = PerCpuAreas::new();
@@ -96,7 +80,7 @@ pub static PERCPU_AREAS: PerCpuAreas = PerCpuAreas::new();
 // should only occur after all writes are done.
 #[derive(Debug)]
 pub struct PerCpuAreas {
-    areas: UnsafeCell<Vec<PerCpuInfo>>,
+    areas: UnsafeCell<Vec<&'static PerCpuShared>>,
 }
 
 unsafe impl Sync for PerCpuAreas {}
@@ -108,21 +92,44 @@ impl PerCpuAreas {
         }
     }
 
-    fn next_cpu_index(&self) -> usize {
-        let ptr = unsafe { self.areas.get().as_ref().unwrap() };
-        ptr.len()
+    /// # Safety
+    /// The areas vector obtained here is not multi-thread safe, so the caller
+    /// must guarantee that is not used in a context that expects multiwthread
+    /// safety.
+    unsafe fn get_areas(&self) -> &Vec<&'static PerCpuShared> {
+        // SAFETY: the caller guarantees that accessing the unsafe cell is
+        // appropriate.
+        unsafe { &*self.areas.get() }
     }
 
-    unsafe fn push(&self, info: PerCpuInfo) {
-        let ptr = unsafe { self.areas.get().as_mut().unwrap() };
-        ptr.push(info);
-        let cpu_shared = ptr[info.as_cpu_ref().cpu_index];
-        assert_eq!(cpu_shared.apic_id, info.cpu_shared.apic_id);
+    /// # Safety
+    /// This function can only be invoked before any other processors have
+    /// started.  Otherwise, accesses to the areas vector will not be safe.
+    pub unsafe fn create_new(&self, apic_id: u32) -> &'static PerCpuShared {
+        // SAFETY: the caller guarantees that it is safe to obtain a mutable
+        // reference to the areas vector.
+        let areas = unsafe { &mut *self.areas.get() };
+
+        // Allocate a new shared per-CPU area to describe the APIC ID being
+        // created.  The CPU index will be the next in sequence ased on the
+        // size of the vector.  The new shared per-CPU area is allocated on
+        // the heap so it is globally visible.
+        let cpu_index = areas.len();
+        let percpu_shared = Box::leak(Box::new(PerCpuShared::new(apic_id, cpu_index)));
+
+        // Leak the box so the allocation persists with a static lifetime,
+        // and install the allocated per-CPU area into the areas vector.
+        areas.push(percpu_shared);
+
+        percpu_shared
     }
 
-    pub fn iter(&self) -> Iter<'_, PerCpuInfo> {
-        let ptr = unsafe { self.areas.get().as_ref().unwrap() };
-        ptr.iter()
+    pub fn iter(&self) -> Iter<'_, &'static PerCpuShared> {
+        // SAFETY: it is safe to obtain a shared reference to the areas
+        // vector because callers attempting to mutate the vector guarantee
+        // that they cannot race with iteration.
+        let areas = unsafe { self.get_areas() };
+        areas.iter()
     }
 
     // Fails if no such area exists or its address is NULL
@@ -131,16 +138,18 @@ impl PerCpuAreas {
         // uphold is that there are no mutations or mutable aliases
         // going on when casting via as_ref(). This only happens via
         // Self::push(), which is intentionally unsafe and private.
-        let ptr = unsafe { self.areas.get().as_ref().unwrap() };
-        ptr.iter()
-            .find(|info| info.apic_id == apic_id)
-            .map(|info| info.cpu_shared)
+        self.iter()
+            .find(|shared| shared.apic_id() == apic_id)
+            .copied()
     }
 
     /// Callers are expected to specify a valid CPU index.
     pub fn get_by_cpu_index(&self, index: usize) -> &'static PerCpuShared {
-        let ptr = unsafe { self.areas.get().as_ref().unwrap() };
-        ptr[index].cpu_shared
+        // SAFETY: it is safe to obtain a shared reference to the areas
+        // vector because callers attempting to mutate the vector guarantee
+        // that they cannot race with iteration.
+        let areas = unsafe { self.get_areas() };
+        areas[index]
     }
 }
 
@@ -349,12 +358,12 @@ const _: () = assert!(size_of::<PerCpu>() <= PAGE_SIZE);
 /// `shared` field, a reference to which will be stored in [`PERCPU_AREAS`].
 #[derive(Debug)]
 pub struct PerCpu {
-    /// Per-CPU storage that might be accessed from other CPUs.
-    shared: PerCpuShared,
-
     /// Reference to the `PerCpuShared` that is valid in the global, shared
     /// address space.
-    shared_global: OnceCell<&'static PerCpuShared>,
+    shared: &'static PerCpuShared,
+
+    /// APIC access object
+    apic: X86Apic,
 
     /// PerCpu IRQ state tracking
     irq_state: IrqState,
@@ -375,7 +384,7 @@ pub struct PerCpu {
     /// WaitQueue for request processing
     request_waitqueue: RefCell<WaitQueue>,
     /// Local APIC state for APIC emulation if enabled
-    apic: RefCell<Option<LocalApic>>,
+    guest_apic: RefCell<Option<LocalApic>>,
 
     /// GHCB page for this CPU.
     ghcb: OnceCell<GhcbPage>,
@@ -396,9 +405,10 @@ pub struct PerCpu {
 
 impl PerCpu {
     /// Creates a new default [`PerCpu`] struct.
-    fn new(apic_id: u32, cpu_index: usize) -> Self {
+    fn new(shared: &'static PerCpuShared) -> Self {
         Self {
             pgtbl: RefCell::new(None),
+            apic: X86Apic::default(),
             irq_state: IrqState::new(),
             tss: X86Tss::new(),
             isst: Cell::new(Isst::default()),
@@ -414,10 +424,9 @@ impl PerCpu {
             vrange_2m: RefCell::new(VirtualRange::new()),
             runqueue: RWLockIrqSafe::new(RunQueue::new()),
             request_waitqueue: RefCell::new(WaitQueue::new()),
-            apic: RefCell::new(None),
+            guest_apic: RefCell::new(None),
 
-            shared: PerCpuShared::new(apic_id, cpu_index),
-            shared_global: OnceCell::new(),
+            shared,
             ghcb: OnceCell::new(),
             hypercall_pages: RefCell::new(None),
             hv_doorbell: Cell::new(None),
@@ -430,29 +439,27 @@ impl PerCpu {
 
     /// Creates a new default [`PerCpu`] struct, allocates it via the page
     /// allocator and adds it to the global per-cpu area list.
-    pub fn alloc(apic_id: u32) -> Result<&'static Self, SvsmError> {
-        // APIC IDs are expected to be unique.
-        assert!(PERCPU_AREAS.get_by_apic_id(apic_id).is_none());
-        let cpu_index = PERCPU_AREAS.next_cpu_index();
-        let page = PageBox::try_new(Self::new(apic_id, cpu_index))?;
+    pub fn alloc(shared: &'static PerCpuShared) -> Result<&'static Self, SvsmError> {
+        let page = PageBox::try_new(Self::new(shared))?;
         let percpu = PageBox::leak(page);
-        percpu.set_shared_global();
-        unsafe { PERCPU_AREAS.push(PerCpuInfo::new(apic_id, &percpu.shared)) };
         Ok(percpu)
     }
 
     pub fn shared(&self) -> &PerCpuShared {
-        &self.shared
+        self.shared
     }
 
-    fn set_shared_global(&'static self) {
-        self.shared_global
-            .set(&self.shared)
-            .expect("shared global set more than once");
+    pub fn initialize_apic(&self, accessor: &'static dyn ApicAccess) {
+        self.apic.set_accessor(accessor);
     }
 
-    pub fn shared_global(&self) -> &'static PerCpuShared {
-        self.shared_global.get().unwrap()
+    /// Get a reference to the [`X86Apic`] object for this cpu.
+    ///
+    /// # Returns
+    ///
+    /// Reference to the [`X86Apic`] object of the local CPU.
+    pub fn get_apic(&self) -> &X86Apic {
+        &self.apic
     }
 
     /// Disables IRQs on the current CPU. Keeps track of the nesting level and
@@ -543,7 +550,7 @@ impl PerCpu {
             target_set,
             self.shared.cpu_index,
             &mut ipi_helper,
-            &self.shared_global().ipi_board,
+            &self.shared.ipi_board,
         );
     }
 
@@ -559,7 +566,7 @@ impl PerCpu {
             IpiTarget::Single(cpu_index),
             self.shared.cpu_index,
             &mut ipi_helper,
-            &self.shared_global().ipi_board,
+            &self.shared.ipi_board,
         );
     }
 
@@ -584,6 +591,28 @@ impl PerCpu {
     /// Allocates hypercall input/output pages for this CPU.
     pub fn allocate_hypercall_pages(&self) -> Result<(), SvsmError> {
         let vaddr = allocate_pages(2)?;
+
+        // Attempt to make each page shared.  This must be done carefully so
+        // that state is correctly restored in the event of failure.
+        // SAFETY: the virtual addresses are correct because the pages were
+        // just allocated.  If conversion is successful, these pages will never
+        // be freed, and if conversion if unsuccessful, state will correctly be
+        // restored here before the pages are freed.
+        unsafe {
+            let mut r = make_page_shared(vaddr);
+            if r.is_ok() {
+                let r2 = make_page_shared(vaddr + PAGE_SIZE);
+                if r2.is_err() {
+                    make_page_private(vaddr).expect("Failed to restore private page");
+                    r = r2;
+                }
+            }
+            if r.is_err() {
+                free_page(vaddr);
+                return r;
+            }
+        }
+
         let pages = (
             VirtPhysPair::new(vaddr),
             VirtPhysPair::new(vaddr + PAGE_SIZE),
@@ -642,6 +671,10 @@ impl PerCpu {
 
     pub fn set_current_stack(&self, stack: MemoryRegion<VirtAddr>) {
         self.current_stack.set(stack);
+    }
+
+    pub fn get_cpu_index(&self) -> usize {
+        self.shared().cpu_index()
     }
 
     pub fn get_apic_id(&self) -> u32 {
@@ -738,28 +771,13 @@ impl PerCpu {
         self.ghcb().unwrap().register()
     }
 
-    fn setup_hv_doorbell(&self) -> Result<(), SvsmError> {
+    pub fn setup_hv_doorbell(&self) -> Result<(), SvsmError> {
         let doorbell = allocate_hv_doorbell_page(current_ghcb())?;
         assert!(
             self.hv_doorbell.get().is_none(),
             "Attempted to reinitialize the HV doorbell page"
         );
         self.hv_doorbell.set(Some(doorbell));
-        Ok(())
-    }
-
-    /// Configures the HV doorbell page if restricted injection is enabled.
-    ///
-    /// # Panics
-    ///
-    /// Panics if this function is called more than once for a given CPU and
-    /// restricted injection is enabled.
-    pub fn configure_hv_doorbell(&self) -> Result<(), SvsmError> {
-        // #HV doorbell configuration is only required if this system will make
-        // use of restricted injection.
-        if hypervisor_ghcb_features().contains(GHCBHvFeatures::SEV_SNP_RESTR_INJ) {
-            self.setup_hv_doorbell()?;
-        }
         Ok(())
     }
 
@@ -861,6 +879,12 @@ impl PerCpu {
 
         // Complete platform-specific initialization.
         platform.setup_percpu(self)?;
+
+        // Allocate hypercall pages if running on Hyper-V, unless this is the
+        // BSP (where they will be allocated later).
+        if self.shared.cpu_index() != 0 && *IS_HYPERV {
+            self.allocate_hypercall_pages()?;
+        }
 
         Ok(())
     }
@@ -991,7 +1015,7 @@ impl PerCpu {
         // Enable alternate injection if the hypervisor supports it.
         let use_alternate_injection = SVSM_PLATFORM.query_apic_registration_state();
         if use_alternate_injection {
-            self.apic.replace(Some(LocalApic::new()));
+            self.guest_apic.replace(Some(LocalApic::new()));
 
             // Configure the interrupt injection vector.
             let ghcb = self.ghcb().unwrap();
@@ -1011,15 +1035,15 @@ impl PerCpu {
 
     /// Returns a shared reference to the local APIC, or `None` if APIC
     /// emulation is not enabled.
-    fn apic(&self) -> Option<Ref<'_, LocalApic>> {
-        let apic = self.apic.borrow();
+    fn guest_apic(&self) -> Option<Ref<'_, LocalApic>> {
+        let apic = self.guest_apic.borrow();
         Ref::filter_map(apic, Option::as_ref).ok()
     }
 
     /// Returns a mutable reference to the local APIC, or `None` if APIC
     /// emulation is not enabled.
-    fn apic_mut(&self) -> Option<RefMut<'_, LocalApic>> {
-        let apic = self.apic.borrow_mut();
+    fn guest_apic_mut(&self) -> Option<RefMut<'_, LocalApic>> {
+        let apic = self.guest_apic.borrow_mut();
         RefMut::filter_map(apic, Option::as_mut).ok()
     }
 
@@ -1038,7 +1062,7 @@ impl PerCpu {
     }
 
     pub fn disable_apic_emulation(&self) {
-        if let Some(mut apic) = self.apic_mut() {
+        if let Some(mut apic) = self.guest_apic_mut() {
             let mut vmsa_ref = self.guest_vmsa_ref();
             let caa_addr = vmsa_ref.caa_addr();
             let vmsa = vmsa_ref.vmsa();
@@ -1047,7 +1071,7 @@ impl PerCpu {
     }
 
     pub fn clear_pending_interrupts(&self) {
-        if let Some(mut apic) = self.apic_mut() {
+        if let Some(mut apic) = self.guest_apic_mut() {
             let mut vmsa_ref = self.guest_vmsa_ref();
             let caa_addr = vmsa_ref.caa_addr();
             let vmsa = vmsa_ref.vmsa();
@@ -1056,20 +1080,20 @@ impl PerCpu {
     }
 
     pub fn update_apic_emulation(&self, vmsa: &mut VMSA, caa_addr: Option<VirtAddr>) {
-        if let Some(mut apic) = self.apic_mut() {
+        if let Some(mut apic) = self.guest_apic_mut() {
             apic.present_interrupts(self.shared(), vmsa, caa_addr);
         }
     }
 
     pub fn use_apic_emulation(&self) -> bool {
-        self.apic().is_some()
+        self.guest_apic().is_some()
     }
 
     pub fn read_apic_register(&self, register: u64) -> Result<u64, SvsmError> {
         let mut vmsa_ref = self.guest_vmsa_ref();
         let caa_addr = vmsa_ref.caa_addr();
         let vmsa = vmsa_ref.vmsa();
-        self.apic_mut()
+        self.guest_apic_mut()
             .ok_or(SvsmError::Apic(ApicError::Disabled))?
             .read_register(self.shared(), vmsa, caa_addr, register)
     }
@@ -1078,13 +1102,13 @@ impl PerCpu {
         let mut vmsa_ref = self.guest_vmsa_ref();
         let caa_addr = vmsa_ref.caa_addr();
         let vmsa = vmsa_ref.vmsa();
-        self.apic_mut()
+        self.guest_apic_mut()
             .ok_or(SvsmError::Apic(ApicError::Disabled))?
             .write_register(vmsa, caa_addr, register, value)
     }
 
     pub fn configure_apic_vector(&self, vector: u8, allowed: bool) -> Result<(), SvsmError> {
-        self.apic_mut()
+        self.guest_apic_mut()
             .ok_or(SvsmError::Apic(ApicError::Disabled))?
             .configure_vector(vector, allowed);
         Ok(())
@@ -1145,18 +1169,16 @@ impl PerCpu {
     }
 
     pub fn schedule_init(&self) -> TaskPointer {
-        // If the platform permits the use of interrupts, then ensure that
-        // interrupts will be enabled on the current CPU when leaving the
-        // scheduler environment.  This is done after disabling interrupts
-        // for scheduler initialization so that the first interrupt that can
-        // be received will always observe that there is a current task and
-        // not the boot thread.
-        if SVSM_PLATFORM.use_interrupts() {
-            self.irq_state.set_restore_state(true);
-        }
+        self.irq_state.set_restore_state(true);
         let task = self.runqueue.lock_write().schedule_init();
         self.set_current_stack(task.stack_bounds());
         task
+    }
+
+    pub fn disable_interrupt_use(&self) {
+        let guard = IrqGuard::new();
+        self.irq_state.set_restore_state(false);
+        drop(guard);
     }
 
     pub fn schedule_prepare(&self) -> Option<(TaskPointer, TaskPointer)> {
@@ -1189,6 +1211,34 @@ impl PerCpu {
 
 pub fn this_cpu() -> &'static PerCpu {
     unsafe { &*SVSM_PERCPU_BASE.as_ptr::<PerCpu>() }
+}
+
+pub fn try_this_cpu() -> Option<&'static PerCpu> {
+    let mut rcx: u64;
+
+    // SAFETY: Inline assembly to test the validity of the PerCpu page.
+    // Any #PF generated here is handled by the #PF handler and it will
+    // either return an error in %rcx or crash the system. This however
+    // does not impact any state related to memory safety.
+    unsafe {
+        asm!("1: movq ({0}), {1}",
+             "   xorq %rcx, %rcx",
+             "2:",
+             ".pushsection \"__early_exception_table\",\"a\"",
+             ".balign 16",
+             ".quad (1b)",
+             ".quad (2b)",
+             ".popsection",
+                in(reg) SVSM_PERCPU_BASE.bits(),
+                out(reg) _,
+                out("rcx") rcx,
+                options(att_syntax, nostack));
+    }
+    if rcx == 0 {
+        Some(this_cpu())
+    } else {
+        None
+    }
 }
 
 pub fn this_cpu_shared() -> &'static PerCpuShared {
@@ -1295,6 +1345,13 @@ impl PerCpuVmsas {
             .lock_read()
             .iter()
             .any(|vmsa| vmsa.paddr == paddr)
+    }
+
+    pub fn overlaps(&self, region: &MemoryRegion<PhysAddr>) -> bool {
+        self.vmsas
+            .lock_read()
+            .iter()
+            .any(|vmsa| region.overlap(&MemoryRegion::new(vmsa.paddr, PAGE_SIZE)))
     }
 
     pub fn register(
