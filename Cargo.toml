@@ -73,6 +73,7 @@ zerocopy = { version = "0.8.2", features = ["derive"] }
 # Verus repos
 builtin = { git = "https://github.com/verus-lang/verus", rev ="9a9a8b5", default-features = false }
 builtin_macros = { git = "https://github.com/verus-lang/verus", rev ="9a9a8b5", default-features = false }
+state_machines_macros = { git = "https://github.com/verus-lang/verus", rev ="9a9a8b5", default-features = false }
 vstd = { git = "https://github.com/verus-lang/verus", rev ="9a9a8b5", features = ["alloc"], default-features = false }
 
 # Verification libs
