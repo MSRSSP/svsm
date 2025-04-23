@@ -280,6 +280,10 @@ impl<T> FracTypedPerm<T> {
         &&& self.valid() ==> ((self.ptr() as int) == self.addr())
     }
 
+    pub open spec fn readable(&self) -> bool {
+        self.is_init()
+    }
+
     pub open spec fn writable(&self) -> bool {
         self.shares() == self.total()
     }

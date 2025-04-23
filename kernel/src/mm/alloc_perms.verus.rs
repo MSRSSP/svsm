@@ -16,11 +16,7 @@ spec fn spec_map_page_info_addr(map: LinearMap, pfn: usize) -> VirtAddr {
 spec fn spec_map_page_info_ptr(map: LinearMap, pfn: usize) -> *const PageStorageType {
     let addr = spec_map_page_info_addr(map, pfn)@;
     vstd::raw_ptr::ptr_from_data(
-        vstd::raw_ptr::PtrData {
-            addr,
-            provenance: allocator_provenance(),
-            metadata: vstd::raw_ptr::Metadata::Thin,
-        },
+        vstd::raw_ptr::PtrData { addr, provenance: allocator_provenance(), metadata: () },
     )
 }
 
@@ -32,7 +28,7 @@ tracked struct MemoryRegionPerms {
 }
 
 #[allow(missing_debug_implementations)]
-pub struct AllocatedPagesPerm {
+pub tracked struct AllocatedPagesPerm {
     perm: PgUnitPerm<DeallocUnit>,
     mr_map: MemRegionMapping,
 }
@@ -68,10 +64,10 @@ impl AllocatedPagesPerm {
 }
 
 #[allow(missing_debug_implementations)]
-pub struct AllocatorUnit {}
+pub ghost struct AllocatorUnit {}
 
 #[allow(missing_debug_implementations)]
-pub struct DeallocUnit {}
+pub ghost struct DeallocUnit {}
 
 pub trait UnitType {
     spec fn wf_share_total(shares: nat, total: nat) -> bool;
@@ -94,7 +90,7 @@ impl UnitType for AllocatorUnit {
 }
 
 #[allow(missing_debug_implementations)]
-pub struct PgUnitPerm<T: UnitType> {
+pub tracked struct PgUnitPerm<T: UnitType> {
     mem: RawPerm,
     info: PageInfoDb,
     ghost typ: T,
@@ -193,7 +189,7 @@ impl MemoryRegionPerms {
                     ptr_data: PtrData {
                         addr: 0,
                         provenance: info_ptr_exposed@,
-                        metadata: vstd::raw_ptr::Metadata::Thin,
+                        metadata: (),
                     },
                     shares: (MAX_PGINFO_SHARES - DEALLOC_PGINFO_SHARES) as nat,
                     total: MAX_PGINFO_SHARES,
@@ -222,7 +218,7 @@ impl MemoryRegionPerms {
     }
 
     spec fn page_info_ptr(&self, pfn: usize) -> *const PageStorageType {
-        spec_ptr_add(self.base_ptr(), pfn)
+        self.base_ptr().add(pfn)
     }
 
     #[verifier(inline)]
