@@ -9,6 +9,7 @@ use crate::utils::util::{
 };
 use verify_external::convert::{exists_into, forall_into, FromSpec};
 use verify_external::hw_spec::SpecVAddrImpl;
+use vstd::raw_ptr::{ptr_from_data, ptr_mut_from_data, Metadata, PtrData};
 use vstd::set_lib::set_int_range;
 use vstd::std_specs::ops::{SpecAddRequires, SpecSubRequires};
 
@@ -267,7 +268,6 @@ impl SpecVAddrImpl for VirtAddr {
 
     #[verus_verify(spinoff_prover)]
     proof fn lemma_unique(v1: &Self, v2: &Self) {
-        reveal(<VirtAddr as SpecVAddrImpl>::region_to_dom);
     }
 
     #[verus_verify(spinoff_prover)]
