@@ -153,7 +153,7 @@ impl SpecMemMapTr for LinearMap {
     open spec fn to_vaddrs(&self, paddr: int) -> Set<VirtAddr> {
         let s = self.to_vaddr(paddr);
         if s.is_some() {
-            set!{s.unwrap()}
+            Set::empty().insert(s.unwrap())
         } else {
             Set::empty()
         }
@@ -209,7 +209,9 @@ impl SpecMemMapTr for LinearMap {
         reveal(<LinearMap as SpecMemMapTr>::to_vaddr);
         reveal(<LinearMap as SpecMemMapTr>::to_vaddrs);
         reveal(<LinearMap as SpecMemMapTr>::to_paddr);
-        assert(set!{self.to_vaddr(paddr).unwrap()}.contains(self.to_vaddr(paddr).unwrap()));
+        assert(Set::empty().insert(self.to_vaddr(paddr).unwrap()).contains(
+            self.to_vaddr(paddr).unwrap(),
+        ));
         if self.to_vaddr(paddr).is_some() {
             assert(self.to_vaddrs(paddr).contains(self.to_vaddr(paddr).unwrap()));
         }
