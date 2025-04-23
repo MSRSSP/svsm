@@ -3,6 +3,5 @@
 // Copyright (c) Microsoft Corporation
 //
 // Author: Ziqiao Zhou <ziqiaozhou@microsoft.com>
-
 #[cfg(verus_keep_ghost)]
 include!("bits.verus.rs");
