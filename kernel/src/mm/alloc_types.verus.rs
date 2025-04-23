@@ -8,9 +8,8 @@
 use vstd::simple_pptr::MemContents;
 verus! {
 
+// prove the size of PageStorageType
 global size_of PageStorageType == 8;
-
-global size_of SlabPage<32> == 40;
 
 spec fn spec_page_storage_type(mem: MemContents<PageStorageType>) -> Option<PageStorageType> {
     if mem.is_init() {
@@ -218,39 +217,6 @@ impl PageStorageType {
     }
 }
 
-proof fn lemma_free_encode_decode(info: FreeInfoSpec)
-    requires
-        info.inv(),
-    ensures
-        FreeInfoSpec::spec_decode_impl(info.spec_encode_impl()) == info,
-{
-    let order = info.order as u64;
-    let next_page = info.next_page as u64;
-    let mem = PageType::Free as u64;
-    let masked_order = order & PageStorageType::ORDER_MASK;
-    assert(masked_order == order) by (bit_vector)
-        requires
-            order < 6,
-            masked_order == order & 0xff,
-    ;
-
-    let ret = mem | (masked_order << PageStorageType::TYPE_SHIFT) | (next_page
-        << PageStorageType::NEXT_SHIFT);
-    assert((ret >> 4) & 0xff == masked_order) by (bit_vector)
-        requires
-            ret == (mem | (masked_order << 4) | (next_page << 12)),
-            mem < 15,
-            masked_order < 6,
-    ;
-    assert((ret >> 12) == next_page as u64) by (bit_vector)
-        requires
-            ret == mem | (masked_order << 4) | (next_page << 12),
-            mem < 15,
-            masked_order < 6,
-            next_page < 1u64 << 52,
-    ;
-}
-
 impl SpecDecoderProof<PageStorageType> for FreeInfo {
     spec fn spec_decode(mem: PageStorageType) -> Option<Self> {
         Some(Self::spec_decode_impl(mem))
@@ -271,51 +237,15 @@ impl SpecDecoderProof<PageStorageType> for FreeInfo {
         let info = *self;
         let order = info.order as u64;
         let next_page = info.next_page as u64;
-        let tymem = PageType::Free as u64;
         let mem = PageType::Free as u64;
-        let masked_order = order & PageStorageType::ORDER_MASK;
-        assert(masked_order == order) by (bit_vector)
-            requires
-                order < 6,
-                masked_order == order & 0xff,
-        ;
-        let encode_order = masked_order << PageStorageType::TYPE_SHIFT;
-        let encode_next = next_page << PageStorageType::NEXT_SHIFT;
-
-        let ret = mem | (masked_order << PageStorageType::TYPE_SHIFT) | (next_page
-            << PageStorageType::NEXT_SHIFT);
-        assert((ret >> 4) & 0xff == masked_order) by (bit_vector)
-            requires
-                ret == (mem | (masked_order << 4) | (next_page << 12)),
-                mem < 15,
-                masked_order < 6,
-        ;
-        assert((ret >> 12) == next_page as u64) by (bit_vector)
-            requires
-                ret == mem | (masked_order << 4) | (next_page << 12),
-                mem < 15,
-                masked_order < 6,
-                next_page < (1u64 << 52),
-        ;
-        broadcast use lemma_bit_u64_or_mask, lemma_bit_u64_and_mask;
-
-        lemma_u64_and_bitmask_lower(tymem, PageStorageType::TYPE_SHIFT);
-        lemma_u64_and_bitmask_higher(
-            masked_order,
-            PageStorageType::TYPE_SHIFT,
-            PageStorageType::TYPE_SHIFT,
-        );
-        lemma_u64_and_bitmask_higher(
-            next_page,
-            PageStorageType::TYPE_SHIFT,
-            PageStorageType::NEXT_SHIFT,
-        );
-        lemma_u64_and_is_distributive_or(tymem, encode_order, PageStorageType::TYPE_MASK);
-        lemma_u64_and_is_distributive_or(
-            tymem | encode_order,
-            encode_next,
-            PageStorageType::TYPE_MASK,
-        );
+        let bit1 = PageStorageType::TYPE_SHIFT;
+        let bit2 = (PageStorageType::NEXT_SHIFT - PageStorageType::TYPE_SHIFT) as u64;
+        let bit3 = (u64::BITS - PageStorageType::NEXT_SHIFT) as u64;
+        lemma_u64_and_bitmask_lower(order, bit2);
+        let ret = mem | (order << bit1) | (next_page << (bit1 + bit2)) as u64;
+        lemma_bit_u64_extract_fields2(mem, order, bit1, bit2);
+        lemma_bit_u64_extract_fields2(mem | (order << bit1), next_page, PageStorageType::NEXT_SHIFT, (u64::BITS - PageStorageType::NEXT_SHIFT) as u64);
+        lemma_bit_u64_extract_mid_field(ret, bit1, bit2);
     }
 }
 
@@ -337,7 +267,7 @@ impl SpecDecoderProof<PageStorageType> for AllocatedInfo {
             PageType::spec_decode(self.spec_encode().unwrap()) === Some(PageType::Allocated),
     {
         PageType::Allocated.lemma_encode_decode();
-        lemma_bit_u64_extract_fields_from_packed_2(
+        lemma_bit_u64_extract_fields2(
             PageType::Allocated as u64,
             self.order as u64,
             PageStorageType::TYPE_SHIFT,
@@ -365,7 +295,7 @@ impl SpecDecoderProof<PageStorageType> for SlabPageInfo {
     {
         PageType::SlabPage.lemma_encode_decode();
         assert(self.item_size <= (1u64 << 16)) by (compute);
-        lemma_bit_u64_extract_fields_from_packed_2(
+        lemma_bit_u64_extract_fields2(
             PageType::SlabPage as u64,
             self.item_size as u64,
             PageStorageType::TYPE_SHIFT,
@@ -392,7 +322,7 @@ impl SpecDecoderProof<PageStorageType> for CompoundInfo {
             PageType::spec_decode(self.spec_encode().unwrap()) === Some(PageType::Compound),
     {
         PageType::Compound.lemma_encode_decode();
-        lemma_bit_u64_extract_fields_from_packed_2(
+        lemma_bit_u64_extract_fields2(
             PageType::Compound as u64,
             self.order as u64,
             PageStorageType::TYPE_SHIFT,
@@ -423,7 +353,7 @@ impl SpecDecoderProof<PageStorageType> for FileInfo {
         let tbits = PageStorageType::TYPE_SHIFT;
         let bits = (u64::BITS - PageStorageType::TYPE_SHIFT) as u64;
         let mem = self.spec_encode().unwrap().0;
-        lemma_bit_u64_extract_fields_from_packed_2(
+        lemma_bit_u64_extract_fields2(
             PageType::File as u64,
             ref_count,
             PageStorageType::TYPE_SHIFT,
@@ -543,13 +473,4 @@ impl SpecDecoderProof<PageStorageType> for PageInfo {
         }
     }
 }
-
-impl View for PageStorageType {
-    type V = u64;
-
-    closed spec fn view(&self) -> u64 {
-        self.0
-    }
-}
-
 } // verus!

@@ -8,6 +8,12 @@ use vstd::bits::low_bits_mask;
 use vstd::prelude::*;
 
 #[macro_export]
+macro_rules! BIT64_MASK {
+    ($n: expr) => {
+        (((1u64 << ($n)) - 1) as u64)
+    };
+}
+#[macro_export]
 macro_rules! POW2_VALUE {
     (0) => {
         0x1u64
@@ -288,6 +294,7 @@ macro_rules! bit_set_clear_mask {
                 (a | m) & (!m) == a & (!m),
                 a | m >= a,
                 a | m >= m,
+                a | m <= a + m,
                 a == (a|m) - m + (a|!m) - !m,
                 m == 0 ==> (a | m) == a,
                 a == 0 ==> (a | m) == m,
@@ -317,6 +324,17 @@ macro_rules! bit_set_clear_mask {
 }
 
 verus! {
+
+#[verifier(bit_vector)]
+pub proof fn lemma_bit_u64_bitmask_and_min_effect(x: u64, n: u64, m: u64)
+    requires
+        n < u64::BITS,
+        m < u64::BITS,
+    ensures
+        n <= m ==> x & BIT64_MASK!(m) & BIT64_MASK!(n) == x & BIT64_MASK!(n),
+        n >= m ==> x & BIT64_MASK!(n) & BIT64_MASK!(m) == x & BIT64_MASK!(m),
+{
+}
 
 pub broadcast proof fn lemma_bit_u64_and_mask_is_mod(x: u64, mask: u64)
     requires
@@ -429,7 +447,7 @@ pub broadcast proof fn lemma_bit_u64_shr_properties(v: u64, n: u64)
 pub broadcast proof fn lemma_bit_u64_shl_properties(v: u64, n: u64)
     requires
         n < u64::BITS,
-        n > 0 ==> v < 1usize << sub(64, n),
+        n > 0 ==> v < 1u64 << (u64::BITS - n) as u64,
     ensures
         #![trigger (v << n)]
         v > 0 ==> (v << n) >= 1u64 << n,
@@ -440,7 +458,7 @@ pub broadcast proof fn lemma_bit_u64_shl_properties(v: u64, n: u64)
 #[verifier(bit_vector)]
 pub proof fn lemma_u64_or_shl(x: u64, y: u64, n: u64)
     requires
-        n < 64,
+        n < u64::BITS,
     ensures
         (x | y) << n == (x << n) | (y << n),
 {
@@ -457,7 +475,7 @@ pub broadcast proof fn lemma_u64_or_is_associative(x: u64, y: u64, z: u64)
 #[verifier(bit_vector)]
 pub broadcast proof fn lemma_u64_shl_is_distributive_or(x: u64, y: u64, n: u64)
     requires
-        n < 64,
+        n < u64::BITS,
     ensures
         #![trigger (x | y) << n]
         #![trigger (x << n) | (y << n)]
@@ -468,7 +486,7 @@ pub broadcast proof fn lemma_u64_shl_is_distributive_or(x: u64, y: u64, n: u64)
 #[verifier(bit_vector)]
 pub broadcast proof fn lemma_u64_shr_is_distributive_or(x: u64, y: u64, n: u64)
     requires
-        n < 64,
+        n < u64::BITS,
     ensures
         #![trigger (x | y) >> n]
         (x | y) >> n == (x >> n) | (y >> n),
@@ -486,7 +504,7 @@ pub proof fn lemma_u64_and_is_distributive_or(x: u64, y: u64, z: u64)
 #[verifier(bit_vector)]
 pub proof fn lemma_u64_and_bitmask_lower(x: u64, n: u64)
     requires
-        n < 64,
+        n < u64::BITS,
         x < (1u64 << n),
     ensures
         x & ((1u64 << n) - 1) as u64 == x,
@@ -496,7 +514,7 @@ pub proof fn lemma_u64_and_bitmask_lower(x: u64, n: u64)
 #[verifier(bit_vector)]
 pub proof fn lemma_u64_and_bitmask_higher(x: u64, n: u64, m: u64)
     requires
-        n <= m < 64,
+        n <= m < u64::BITS,
     ensures
         (x << m) & ((1u64 << n) - 1) as u64 == 0,
 {
@@ -504,7 +522,7 @@ pub proof fn lemma_u64_and_bitmask_higher(x: u64, n: u64, m: u64)
 
 pub broadcast proof fn lemma_u64_or_low_high_bitmask_lower(x: u64, y: u64, n: u64, m: u64)
     requires
-        n <= m < 64,
+        n <= m < u64::BITS,
         x <= (1u64 << n) - 1,
     ensures
         #[trigger] ((x | y << m) & ((1u64 << n) - 1) as u64) == x,
@@ -523,7 +541,7 @@ pub broadcast proof fn lemma_u64_or_low_high_bitmask_lower(x: u64, y: u64, n: u6
 #[verifier(bit_vector)]
 pub proof fn lemma_u64_shl_add(x: u64, n: u64, m: u64)
     requires
-        n + m < 64,
+        n + m < u64::BITS,
     ensures
         (x << n) << m == (x << (n + m)),
         (x << m) << n == (x << (m + n)),
@@ -531,9 +549,9 @@ pub proof fn lemma_u64_shl_add(x: u64, n: u64, m: u64)
 }
 
 #[verifier(bit_vector)]
-pub proof fn lemma_u64_shr_add_one(x: u64, n: u64)
+proof fn lemma_u64_shr_add_one(x: u64, n: u64)
     requires
-        n < 63,
+        n + 1 < u64::BITS,
     ensures
         (x >> n) >> 1 == (x >> (n + 1)),
 {
@@ -541,7 +559,7 @@ pub proof fn lemma_u64_shr_add_one(x: u64, n: u64)
 
 pub proof fn lemma_u64_shr_add(x: u64, n: u64, m: u64)
     requires
-        n + m < 64,
+        n + m < u64::BITS,
     ensures
         (x >> n) >> m == (x >> (n + m)),
     decreases m,
@@ -557,10 +575,10 @@ pub proof fn lemma_u64_shr_add(x: u64, n: u64, m: u64)
 }
 
 #[verifier(bit_vector)]
-pub proof fn lemma_u64_shlr_same(x: u64, n: u64)
+proof fn lemma_u64_shlr_same(x: u64, n: u64)
     requires
-        n > 0 ==> x < 1usize << sub(64, n),
-        n < 64,
+        n > 0 ==> x < 1usize << (u64::BITS - n) as u64,
+        n < u64::BITS,
     ensures
         (x << n) >> n == x,
 {
@@ -568,9 +586,9 @@ pub proof fn lemma_u64_shlr_same(x: u64, n: u64)
 
 pub broadcast proof fn lemma_u64_shl_shr(x: u64, n: u64, m: u64)
     requires
-        n > 0 ==> x < 1usize << sub(64, n),
-        n < 64,
-        m < 64,
+        n > 0 ==> x < 1usize << (u64::BITS - n),
+        n < u64::BITS,
+        m < u64::BITS,
         n <= m,
     ensures
         n < m ==> #[trigger] ((x << n) >> m) == (x >> (m - n)),
@@ -594,17 +612,52 @@ pub broadcast proof fn lemma_u64_shl_shr(x: u64, n: u64, m: u64)
     }
 }
 
+proof fn lemma_bit_u64_shl_bit_bound(x: u64, n: u64, m: u64)
+    requires
+        x < (1u64 << m),
+        n + m < u64::BITS,
+    ensures
+        (x << n) <= (1usize << (m + n)) - (1u64 << n),
+        x == ((1u64 << m) - 1) ==> (x << n) == (1usize << (m + n)) - (1u64 << n),
+{
+    broadcast use lemma_bit_u64_shl_values;
+    broadcast use vstd::bits::lemma_u64_pow2_no_overflow;
+
+    let upper = ((1u64 << m) - 1) as u64;
+    vstd::bits::lemma_u64_shl_is_mul(1u64, m);
+    vstd::bits::lemma_u64_shl_is_mul(1u64, n);
+    vstd::bits::lemma_u64_shl_is_mul(1u64, (n + m) as u64);
+    vstd::arithmetic::mul::lemma_mul_strict_inequality(
+        x as int,
+        pow2(m as nat) as int,
+        pow2(n as nat) as int,
+    );
+    vstd::arithmetic::power2::lemma_pow2_adds(m as nat, n as nat);
+    vstd::bits::lemma_u64_shl_is_mul(x, n);
+    vstd::bits::lemma_u64_shl_is_mul(1u64, (m + n) as u64);
+    vstd::arithmetic::mul::lemma_mul_inequality(
+        x as int,
+        pow2(m as nat) - 1,
+        pow2(n as nat) as int,
+    );
+    vstd::arithmetic::mul::lemma_mul_is_distributive_sub_other_way(
+        pow2(n as nat) as int,
+        pow2(m as nat) as int,
+        1,
+    );
+}
+
 /// a is the low part, b is the high part
 /// n is the number of bits in a
 /// m is the number of bits in b
 /// a and b are both less than 2^n and 2^m respectively
 /// Proves that a and b can be extracted from a | (b << n) using bitwise operations
-pub proof fn lemma_bit_u64_extract_fields_from_packed_2(a: u64, b: u64, n: u64, m: u64)
+pub proof fn lemma_bit_u64_extract_fields2(a: u64, b: u64, n: u64, m: u64)
     requires
         a < (1u64 << n),
-        n < 64,
+        n < u64::BITS,
         b < 1u64 << m,
-        n + m <= 64,
+        n + m <= u64::BITS,
         n > 0,
         m > 0,
     ensures
@@ -614,10 +667,21 @@ pub proof fn lemma_bit_u64_extract_fields_from_packed_2(a: u64, b: u64, n: u64, 
         a & sub(1u64 << n, 1) == a,
         (a | (b << n)) >> n == b,
         a >> n == 0,
+        (n + m) < u64::BITS ==> (a | b << n) < (1u64 << (n + m)),
 {
     let mask1 = sub(1u64 << n, 1);
     let mask2 = sub(1u64 << m, 1);
     let field2 = (b & mask2);
+    assert((b << n) <= BIT64_MASK!(m) << n) by (bit_vector)
+        requires
+            b <= BIT64_MASK!(m),
+            n < u64::BITS,
+            m < u64::BITS,
+    ;
+    if (n + m) < u64::BITS {
+        lemma_bit_u64_or_mask(a, b << n);
+        lemma_bit_u64_shl_bit_bound(b, n, m);
+    }
     lemma_u64_and_bitmask_lower(b, m);
     lemma_u64_and_bitmask_lower(a, n);
     lemma_u64_and_bitmask_higher(b, n, n);
@@ -625,13 +689,34 @@ pub proof fn lemma_bit_u64_extract_fields_from_packed_2(a: u64, b: u64, n: u64, 
     lemma_u64_shr_is_distributive_or(a, b << n, n);
     lemma_u64_and_is_distributive_or(a, b << n, mask1);
     lemma_bit_u64_shr_properties(a, n);
-    assert(1u64 << m <= 1usize << sub(64, n)) by {
+    assert(1u64 << m <= 1usize << (u64::BITS - n)) by {
         broadcast use lemma_bit_u64_shl_values;
 
     };
     lemma_u64_shl_shr(b, n, n);
     lemma_bit_u64_or_mask(0, b);
     lemma_bit_u64_or_mask(a, 0);
+}
+
+pub proof fn lemma_bit_u64_extract_mid_field(x: u64, bits1: u64, bits2: u64)
+    requires
+        bits1 + bits2 < u64::BITS,
+    ensures
+        (((x & BIT64_MASK!(bits2 + bits1)) >> bits1) & BIT64_MASK!(bits2)) == ((x >> bits1)
+            & BIT64_MASK!(bits2)),
+        ((x & BIT64_MASK!(bits2 + bits1)) & BIT64_MASK!(bits1)) == (x & BIT64_MASK!(bits1)),
+{
+    let m = (bits1 + bits2) as u64;
+    let mask = BIT64_MASK!(m);
+    let mask2 = BIT64_MASK!(bits2);
+    assert((x & mask) >> bits1 == (x >> bits1) & (mask >> bits1)) by (bit_vector);
+    assert(BIT64_MASK!(m) >> bits1 == BIT64_MASK!(bits2)) by (bit_vector)
+        requires
+            bits2 <= m < u64::BITS,
+            bits1 == m - bits2,
+    ;
+    lemma_bit_u64_bitmask_and_min_effect(x >> bits1, bits2, bits2);
+    lemma_bit_u64_bitmask_and_min_effect(x, bits1, m);
 }
 
 } // verus!
