@@ -32,7 +32,7 @@ tracked struct MemoryRegionPerms {
 }
 
 #[allow(missing_debug_implementations)]
-pub struct AllocatedPagesPerm {
+pub tracked struct AllocatedPagesPerm {
     perm: PgUnitPerm<DeallocUnit>,
     mr_map: MemRegionMapping,
 }
@@ -68,10 +68,10 @@ impl AllocatedPagesPerm {
 }
 
 #[allow(missing_debug_implementations)]
-pub struct AllocatorUnit {}
+pub ghost struct AllocatorUnit {}
 
 #[allow(missing_debug_implementations)]
-pub struct DeallocUnit {}
+pub ghost struct DeallocUnit {}
 
 pub trait UnitType {
     spec fn wf_share_total(shares: nat, total: nat) -> bool;
@@ -94,7 +94,7 @@ impl UnitType for AllocatorUnit {
 }
 
 #[allow(missing_debug_implementations)]
-pub struct PgUnitPerm<T: UnitType> {
+pub tracked struct PgUnitPerm<T: UnitType> {
     mem: RawPerm,
     info: PageInfoDb,
     ghost typ: T,
@@ -222,7 +222,7 @@ impl MemoryRegionPerms {
     }
 
     spec fn page_info_ptr(&self, pfn: usize) -> *const PageStorageType {
-        spec_ptr_add(self.base_ptr(), pfn)
+        self.base_ptr().add(pfn)
     }
 
     #[verifier(inline)]

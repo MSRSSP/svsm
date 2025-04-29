@@ -165,7 +165,7 @@ pub proof fn lemma_order_disjoint_len(s: Seq<usize>, o: usize, max_count: usize)
 }
 
 #[allow(missing_debug_implementations)]
-pub struct PageCountParam<const N: usize> {
+pub ghost struct PageCountParam<const N: usize> {
     pub page_count: usize,
 }
 
@@ -271,13 +271,13 @@ impl MemPermWithPfnOrder for RawPerm {
 // obtain full ownership if the allocator does not free all memory before updating
 // the base_ptr.
 #[allow(missing_debug_implementations)]
-pub struct MemRegionMappingView {
+pub ghost struct MemRegionMappingView {
     pub map: LinearMap,
     pub provenance: Provenance,
 }
 
 #[allow(missing_debug_implementations)]
-pub struct MemRegionMapping(FracTypedPerm<Tracked<MemRegionMappingView>>);
+pub tracked struct MemRegionMapping(FracTypedPerm<Tracked<MemRegionMappingView>>);
 
 impl MemRegionMapping {
     pub uninterp spec fn const_ptr() -> *const Tracked<MemRegionMappingView>;
