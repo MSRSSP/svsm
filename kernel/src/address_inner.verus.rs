@@ -18,7 +18,7 @@ pub spec const VADDR_MAX_BITS: nat = 48;
 pub spec const VADDR_LOWER_MASK: InnerAddr = 0x7fff_ffff_ffff as InnerAddr;
 
 #[verifier(inline)]
-pub spec const VADDR_UPPER_MASK: InnerAddr = !VADDR_LOWER_MASK;
+pub spec const VADDR_UPPER_MASK: InnerAddr = 0xffff_8000_0000_0000u64 as InnerAddr;
 
 #[verifier(inline)]
 pub spec const VADDR_RANGE_SIZE: InnerAddr = 0x1_0000_0000_0000u64 as InnerAddr;
@@ -198,15 +198,6 @@ pub broadcast proof fn lemma_align_up_ens<A: AddressSpec>(addr: A, align: InnerA
             &&& A::from.ensures((iret,), ret)
         };
     crate::utils::util::proof_align_up(iaddr, align, iret);
-}
-
-// Incrementing a thin pointers.
-pub open spec fn spec_ptr_add<T>(base_ptr: *const T, idx: usize) -> *const T
-    recommends
-        base_ptr@.metadata == vstd::raw_ptr::Metadata::Thin,
-{
-    let addr = VirtAddr::from_spec((base_ptr@.addr + idx * size_of::<T>()) as usize)@;
-    vstd::raw_ptr::ptr_from_data(vstd::raw_ptr::PtrData { addr, ..base_ptr@ })
 }
 
 } // verus!

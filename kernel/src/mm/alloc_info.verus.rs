@@ -10,7 +10,6 @@
 // and guarantee that the page info is immutable once shared.
 // PageInfoDb is the main data structure to track the page info with the same
 // shared status.
-use crate::address::spec_ptr_add;
 use verify_proof::frac_ptr::tracked_map_merge_right_shares;
 use verify_proof::frac_ptr::tracked_map_shares;
 use verify_proof::set::{lemma_set_usize_range, set_usize_range};
@@ -21,7 +20,7 @@ verus! {
 type PInfoPerm = FracTypedPerm<PageStorageType>;
 
 #[allow(missing_debug_implementations)]
-pub struct PInfoGroupId {
+pub ghost struct PInfoGroupId {
     pub ptr_data: PtrData,
     pub shares: nat,
     pub total: nat,
@@ -38,7 +37,7 @@ impl PInfoGroupId {
 
     #[verifier(inline)]
     spec fn ptr(&self, idx: usize) -> *const PageStorageType {
-        spec_ptr_add(self.base_ptr(), idx)
+        self.base_ptr().add(idx)
     }
 }
 
@@ -105,7 +104,7 @@ impl ValidPageInfo for FracTypedPerm<PageStorageType> {
 // Those permissions should be grouped as (1usize<<order) continuous physical
 // pages with consistent page type and order information (see
 // new_unit_requires).
-struct PageInfoDb {
+tracked struct PageInfoDb {
     ghost unit_start: usize,  // only for unit
     ghost id: PInfoGroupId,
     reserved: Map<usize, FracTypedPerm<PageStorageType>>,
@@ -783,6 +782,12 @@ impl PageInfoDb {
         ret
     }
 
+    spec fn ens_unshare_for_write(&self, new: Self, unit: &PageInfoDb) -> bool {
+        &&& new@ == self@.remove_keys(unit@.dom())
+        &&& new.id() == self.id()
+        &&& self.ens_add_unit_nr_pages(new, unit.order())
+    }
+
     proof fn tracked_unshare_for_write(tracked &mut self, tracked unit: &mut PageInfoDb)
         requires
             old(self).dom().contains(old(unit).unit_start()),
@@ -796,9 +801,9 @@ impl PageInfoDb {
                 old(unit).id().shares + old(self).id().shares,
             ),
             unit.unit_head()@ == old(unit).unit_head()@.update_shares(unit.id().shares),
+            forall|order: usize| #[trigger] old(unit).nr_page(order) == unit.nr_page(order),
             self@ == old(self)@.remove_keys(unit@.dom()),
             self.id() == old(self).id(),
-            forall|order: usize| #[trigger] old(unit).nr_page(order) == unit.nr_page(order),
             old(self).ens_add_unit_nr_pages(*self, unit.order()),
     {
         let idx = unit.unit_start();
@@ -822,6 +827,8 @@ impl PageInfoDb {
         *unit = PageInfoDb::tracked_new_unit(order, unit_start, id, reserved);
     }
 
+    /// Insert a new unit with the same share into the `PageInfoDb` and
+    /// returns remaining shares.
     proof fn tracked_insert_unit(
         tracked &mut self,
         order: usize,
@@ -953,6 +960,19 @@ impl PageInfoDb {
         use_type_invariant(self);
         reveal(PageInfoDb::wf_basic_at);
         self.reserved.tracked_borrow(idx)
+    }
+
+    proof fn tracked_expose(tracked self) -> (tracked ret: Map<
+        usize,
+        FracTypedPerm<PageStorageType>,
+    >)
+        ensures
+            ret == self.reserved,
+            self.wf(),
+    {
+        use_type_invariant(&self);
+        let tracked PageInfoDb { id, reserved, .. } = self;
+        reserved
     }
 }
 

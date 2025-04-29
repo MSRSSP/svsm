@@ -41,14 +41,7 @@ spec fn spec_free_info(perm: MemContents<PageStorageType>) -> Option<FreeInfo> {
 
 impl PageType {
     spec fn spec_is_deallocatable(&self) -> bool {
-        match *self {
-            PageType::Free => false,
-            PageType::Allocated => true,
-            PageType::SlabPage => true,
-            PageType::Compound => true,
-            PageType::File => true,
-            PageType::Reserved => false,
-        }
+        matches!(self, PageType::Allocated | PageType::SlabPage | PageType::File)
     }
 }
 
@@ -81,6 +74,8 @@ impl PageInfo {
     }
 }
 
+// Prove the encode/decode functions.
+// The implementation must satisfying the proof.
 trait SpecDecoderProof<T>: core::marker::Sized {
     spec fn spec_decode(mem: T) -> Option<Self> {
         if exists|x: Self| #[trigger] x.spec_encode() === Some(mem) {
@@ -110,24 +105,6 @@ trait SpecDecoderProof<T>: core::marker::Sized {
     }
 }
 
-impl PageType {
-    spec fn spec_encode(&self) -> Option<PageStorageType> {
-        Some(PageStorageType(*self as u64))
-    }
-
-    spec fn spec_decode(mem: PageStorageType) -> Option<Self> {
-        let val = mem.0 & 0xf;
-        PageType::spec_try_from(val)
-    }
-
-    #[verifier::spinoff_prover]
-    proof fn lemma_encode_decode(&self) {
-    }
-}
-
-#[allow(private_interfaces)]
-pub type FreeInfoSpec = FreeInfo;
-
 impl AllocatedInfo {
     #[verifier::type_invariant]
     spec fn inv(&self) -> bool {
@@ -156,7 +133,7 @@ impl SlabPageInfo {
     }
 }
 
-impl FreeInfoSpec {
+impl FreeInfo {
     #[verifier::type_invariant]
     spec fn inv(&self) -> bool {
         &&& self.next_page < MAX_PAGE_COUNT
@@ -457,9 +434,7 @@ impl SpecDecoderProof<PageStorageType> for PageInfo {
 
     proof fn lemma_encode_decode(&self) {
         let info = *self;
-        let ty_mem = info.spec_type() as u64;
         let mem = info.spec_encode().unwrap();
-        info.spec_type().lemma_encode_decode();
         let memval = mem.0;
         match info {
             PageInfo::Free(finfo) => {
