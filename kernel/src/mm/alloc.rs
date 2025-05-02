@@ -828,9 +828,12 @@ impl MemoryRegion {
 
     /// Initializes a compound page with given page frame numbers and order.
     #[verus_spec(
-        with Tracked(perms): Tracked<&mut Map<usize, PInfoPerm>>
-        requires old(self).req_init_compound_page(pfn, order, next_pfn, *old(perms)),
-        ensures old(self).ens_init_compound_page(*self, pfn, order, next_pfn, *old(perms), *perms),
+        with
+            Tracked(perms): Tracked<&mut Map<usize, PInfoPerm>>
+        requires
+            old(self).req_init_compound_page(pfn, order, next_pfn, *old(perms)),
+        ensures
+            old(self).ens_init_compound_page(*self, pfn, order, next_pfn, *old(perms), *perms),
     )]
     fn init_compound_page(&mut self, pfn: usize, order: usize, next_pfn: usize) {
         let head = PageInfo::Free(FreeInfo {
@@ -872,53 +875,22 @@ impl MemoryRegion {
         let next_pfn = self.next_page[new_order];
 
         proof_decl! {
-            let tracked mut perm = perm;
-            let tracked (mut mem, mut info) = perm.tracked_take();
-            use_type_invariant(&info);
-
-            // To prove that nr_pages[new_order] < usize::MAX - 2.
-            self.perms.borrow().info.tracked_nr_page_pair(new_order, order);
-
-            // Grant write access to the page info.
-            self.perms.borrow_mut().info.tracked_unshare_for_write(&mut info);
-
-            // Extract all page info perms
-            let ghost id = info.id();
-            let tracked mut reserved2 = info.tracked_expose();
-            let tracked mut reserved = reserved2.tracked_remove_keys(Set::new(|i: usize| pfn1 <= i < pfn2));
-
-            // Prove the next page is valid.
-            self.perms.borrow().free.tracked_next(new_order);
-
-            // Split the memory permission to two.
-            let tracked mr_map = &self.perms.borrow().mr_map;
-            let tracked (mem, mem2) = mr_map.tracked_split_pages(mem, pfn, order);
+            let ghost x = seq![1u8, 2u8];
+            lemma_split_pre!(self, perm, pfn1, pfn2, order, new_order => mem, mem2, reserved, reserved2, info, id);
         }
         proof_with!(Tracked(&mut reserved));
         self.init_compound_page(pfn1, new_order, pfn2);
 
         proof_decl! {
-            // Insert the readonly share of info perm for the left pages into
-            // the tracked info perm to avoid future write outside.
-            let tracked info =  self.perms.borrow_mut().info.tracked_insert_unit(new_order, pfn1, info.id(), reserved);
-            let tracked p1 = PgUnitPerm {mem, info, typ: arbitrary()};
+            revoke_info_write!(self, pfn1, new_order, mem, reserved, id => p1);
         }
 
         proof_with!(Tracked(&mut reserved2));
         self.init_compound_page(pfn2, new_order, next_pfn);
         self.next_page[new_order] = pfn1;
 
-        proof! {
-            // Insert the readonly share of info perm for the right pages into
-            // the tracked info perm to avoid future write outside.
-            let tracked info2 = self.perms.borrow_mut().info.tracked_insert_unit(new_order, pfn2, id, reserved2);
-            let tracked p2 = PgUnitPerm {mem: mem2, info: info2, typ: arbitrary()};
-
-            // Add the new free perms into the free list.
-            use_type_invariant(&p2.info);
-            self.perms.borrow_mut().free.tracked_push(new_order, pfn2, p2);
-            use_type_invariant(&p1.info);
-            self.perms.borrow_mut().free.tracked_push(new_order, pfn1, p1);
+        proof_decl! {
+            lemma_split_post!(self, pfn1, pfn2, new_order, mem, mem2, reserved, reserved2, id, p1);
         }
 
         // Do the accounting
@@ -1167,31 +1139,7 @@ impl MemoryRegion {
         let new_order = order + 1;
 
         proof_decl! {
-            // Proves that nr_page[new_order] <= usize:MAX - 1.
-            self.perms.borrow().info.tracked_nr_page_pair(order, new_order);
-
-            let tracked (mut mem, mut info) = perm.tracked_take();
-
-            // Grant write access to the pfn1 page info.
-            // prove nr_page[order] >= 1.
-            self.perms.borrow_mut().info.tracked_unshare_for_write(&mut info);
-
-            let tracked mut p2 = p2;
-            let tracked (mut mem2, mut info2) = p2.tracked_take();
-
-            // Grant write access to the pfn1 page info.
-            // prove that nr_page[order] >= 2.
-            self.perms.borrow_mut().info.tracked_unshare_for_write(&mut info2);
-
-            // Merge mem2 permissions into mem to cover the merged pages.
-            self.perms.borrow().mr_map.tracked_merge_pages(&mut mem, mem2, pfn1, pfn2, order);
-
-            // Split info perms into two groups:
-            // one for the allocinfo and another for compound pages.
-            let tracked mut reserved = info.tracked_expose();
-            let tracked mut reserved2 = info2.tracked_expose();
-            reserved.tracked_union_prefer_right(reserved2);
-            let tracked mut head_info = reserved.tracked_remove(pfn);
+            lemma_merge_pre!(self, perm, p2, pfn1, pfn2, pfn, order, new_order => mem, reserved, head_info, id);
         }
 
         // Write new compound head
@@ -1204,19 +1152,8 @@ impl MemoryRegion {
         proof_with!(Tracked(&mut reserved));
         self.mark_compound_page(pfn, new_order);
 
-        proof! {
-            // Insert the readonly share of info perm for the merged memory
-            // back into the tracked info perm to avoid future write outside.
-            reserved.tracked_insert(pfn, head_info);
-            let tracked info = self.perms.borrow_mut().info.tracked_insert_unit(new_order, pfn, info.id(), reserved);
-
-            // Prove the nr_page counter is correct.
-            assert(2 * (1usize << order) == (1usize << new_order));
-            assert(self@.info.nr_page(order) == old(self)@.info.nr_page(order) - 2);
-            assert(self@.info.nr_page(new_order) == old(self)@.info.nr_page(new_order) + 1);
-
-            // Return the new merged perm
-            *perm = PgUnitPerm{mem, info, typ: DeallocUnit{}};
+        proof_decl! {
+            lemma_merge_post!(self, perm, pfn, order, new_order, mem, reserved, head_info, id);
         }
 
         // Do the accounting - none of the pages is free yet, so free_pages is
@@ -1339,22 +1276,8 @@ impl MemoryRegion {
             proof_with!(Tracked(current_perm));
             let next_pfn = self.next_free_pfn(current_pfn, order);
             proof_decl! {
-                // prove the next_pfn is disjont with current_pfn.
-                self.perms.borrow_mut().free.tracked_disjoint_pfn(order, idx_ + 1, order, idx_);
-
-                // Get prev mem and info perms and grant write to info perm.
-                let tracked mut prev_perm = self.perms.borrow_mut().free.tracked_remove(order, idx_ + 1);
-                let tracked (prev_mem, prev_info) = prev_perm.tracked_take();
-                self.perms.borrow_mut().info.tracked_unshare_for_write(&mut prev_info);
-                let tracked mut prev_reserved = prev_info.tracked_expose();
-                let tracked prev_head_info = prev_reserved.tracked_remove(old_pfn);
-
-                // Get current mem and info perms and grant write to info perm.
-                let tracked mut current_perm = self.perms.borrow_mut().free.tracked_remove(order, idx_);
-                let tracked (mut mem, mut info) = current_perm.tracked_take();
-                self.perms.borrow_mut().info.tracked_unshare_for_write(&mut info);
-                let tracked mut reserved = info.tracked_expose();
-                let tracked head_info = reserved.tracked_remove(current_pfn);
+                lemma_alloc_pfn_loop_pre!(self, perm, old_pfn, current_pfn, order, idx_
+                    => prev_mem, prev_id, prev_reserved, prev_head_info, mem, id, reserved, head_info);
             }
             let pg = PageInfo::Free(FreeInfo {
                 next_page: next_pfn,
@@ -1369,23 +1292,9 @@ impl MemoryRegion {
 
             self.free_pages[order] -= 1;
 
-            proof! {
-                // Insert the readonly share of info perm for prev free pages
-                prev_reserved.tracked_insert(old_pfn, prev_head_info);
-                let tracked info = self.perms.borrow_mut().info.tracked_insert_unit(order, old_pfn, prev_info.id(), prev_reserved);
-
-                // Insert the prev_mem back to free list.
-                let tracked mut prev_perm = PgUnitPerm {mem: prev_mem, info, typ: arbitrary()};
-                self.perms.borrow_mut().free.tracked_insert(order, idx_, old_pfn, prev_perm);
-
-                // Insert the readonly share of info perm for the allocated
-                // pages to avoid future change from inside and outside of MR.
-                reserved.tracked_insert(current_pfn, head_info);
-                let tracked info =  self.perms.borrow_mut().info.tracked_insert_unit(order, current_pfn, prev_info.id(), reserved);
-
-                *perm = PgUnitPerm {mem, info, typ: arbitrary()};
-                // Prove free list is still strictly wellformed.
-                old(self)@.free.lemma_wf_restrict_remove(&self.perms.borrow().free, order, idx_);
+            proof_decl! {
+                lemma_alloc_pfn_loop_post!(self, perm, old_pfn, current_pfn, order, idx_,
+                    prev_mem, prev_id, prev_reserved, prev_head_info, mem, id, reserved, head_info);
             }
 
             return Ok(());
@@ -1408,11 +1317,7 @@ impl MemoryRegion {
     fn free_page_raw(&mut self, pfn: usize, order: usize) {
         let old_next = self.next_page[order];
         proof_decl! {
-            let tracked mut perm = perm;
-            let tracked (mem, mut info) = perm.tracked_take();
-            self.perms.borrow_mut().info.tracked_unshare_for_write(&mut info);
-            let tracked mut reserved = info.tracked_expose();
-            let tracked mut head_info = reserved.tracked_remove(pfn);
+            lemma_free_page_pre!(self, perm, pfn => mem, other_info, head_info, id);
         }
         let pg = PageInfo::Free(FreeInfo {
             next_page: old_next,
@@ -1422,11 +1327,8 @@ impl MemoryRegion {
         proof_with!(Tracked(&mut head_info));
         self.write_page_info(pfn, pg);
 
-        proof! {
-            reserved.tracked_insert(pfn, head_info);
-            let tracked info = self.perms.borrow_mut().info.tracked_insert_unit(order, pfn, info.id(), reserved);
-            let tracked mut pfn_perm = PgUnitPerm {mem, info, typ: arbitrary()};
-            self.perms.borrow_mut().free.tracked_push(order, pfn, pfn_perm);
+        proof_decl! {
+            lemma_free_page_post!(self, pfn, order, mem, other_info, head_info, id);
         }
 
         self.next_page[order] = pfn;
@@ -1504,12 +1406,12 @@ impl MemoryRegion {
     /// Frees a page based on its virtual address, determining the page
     /// order and freeing accordingly.
     #[verus_spec(
-        with Tracked(perm): Tracked<AllocatedPagesPerm>
+        with Tracked(alloced_perm): Tracked<AllocatedPagesPerm>
         requires
             old(self).wf_next_pages(),
-            perm.with_vaddr(vaddr),
+            alloced_perm.with_vaddr(vaddr),
         ensures
-            old(self).ens_free_page(self, vaddr, perm),
+            old(self).ens_free_page(self, vaddr, alloced_perm),
     )]
     fn free_page(&mut self, vaddr: VirtAddr) {
         let Ok(pfn) = self.get_pfn(vaddr) else {
@@ -1519,18 +1421,7 @@ impl MemoryRegion {
         let res = self.read_page_info(pfn);
 
         proof_decl! {
-            use_type_invariant(&perm);
-            let tracked AllocatedPagesPerm{mut perm, mr_map} = perm;
-
-            // Prove the passed pages shares the same mapping and page info,
-            // tracked inside the MemoryRegion.
-            self.perms.borrow().mr_map.is_same(&mr_map);
-            self.perms.borrow().info.tracked_is_same_info(&perm, pfn);
-
-            // Prove the pfn is valid.
-            assert(self.valid_pfn_order(pfn, res.spec_order())) by {
-                mr_map.pg_params().lemma_reserved_pfn_count();
-            }
+            lemma_free_page!(self, alloced_perm, pfn, res => perm);
         }
 
         match res {
