@@ -11,7 +11,6 @@ use crate::fs::Buffer;
 use crate::locking::SpinLock;
 use crate::mm::virt_to_phys;
 use crate::types::{PAGE_SHIFT, PAGE_SIZE};
-use crate::utils::safe_ptr::{SafeMutPtrWithFracTypedPerm, SafePtrWithFracTypedPerm};
 use crate::utils::{align_down, align_up, zero_mem_region};
 use core::alloc::{GlobalAlloc, Layout};
 use core::mem::size_of;
@@ -20,7 +19,7 @@ use core::{cmp, ptr, slice};
 #[cfg(any(test, fuzzing))]
 use crate::locking::LockGuard;
 
-use vstd::prelude::*;
+use verus_stub::*;
 
 #[cfg(verus_keep_ghost)]
 include!("alloc.verus.rs");
@@ -606,8 +605,7 @@ impl MemoryRegion {
         unsafe {
             {
                 proof_with!(Tracked(self.perms.borrow().info_ptr_exposed));
-                self.start_virt
-                    .as_mut_ptr_with_provenance::<PageStorageType>()
+                self.start_virt.as_mut_ptr::<PageStorageType>()
             }
             .add(pfn)
         }
@@ -634,7 +632,7 @@ impl MemoryRegion {
         unsafe {
             {
                 proof_with!(Tracked(self.perms.borrow().info_ptr_exposed));
-                self.start_virt.as_ptr_with_provenance::<PageStorageType>()
+                self.start_virt.as_ptr::<PageStorageType>()
             }
             .add(pfn)
         }
@@ -677,7 +675,7 @@ impl MemoryRegion {
         // proved to be safe enough if passing valid tracked perm.
         unsafe {
             proof_with!(Tracked(perm));
-            self.page_info_mut_ptr(pfn).v_write(info);
+            crate::utils::safe_ptr::ptr_write(self.page_info_mut_ptr(pfn), info);
         }
     }
 
@@ -702,9 +700,9 @@ impl MemoryRegion {
         // We can drop unsafe keyword after completing verification of allocator.
         let info = unsafe {
             proof_with!(Tracked(perm));
-            self.page_info_ptr(pfn).v_borrow()
+            crate::utils::safe_ptr::ptr_read(self.page_info_ptr(pfn))
         };
-        PageInfo::from_mem(*info)
+        PageInfo::from_mem(info)
     }
 
     /// Gets the virtual offset of a virtual address within the memory region.
@@ -722,12 +720,13 @@ impl MemoryRegion {
             reveal(<LinearMap as SpecMemMapTr>::to_paddr);
         };
         (self.start_virt <= vaddr && (vaddr - self.start_virt) < self.page_count * PAGE_SIZE).then(
-            verus_exec_expr!(
-                || -> (ret: usize)
-                requires vaddr.offset() > self.start_virt.offset(),
-                ensures ret == vaddr.offset() - self.start_virt.offset()
-                {vaddr - self.start_virt}
-            ),
+            #[cfg_attr(verus_keep_ghost, verus_spec(ret: usize =>
+                requires
+                    vaddr.offset() > self.start_virt.offset()
+                ensures
+                    ret == vaddr.offset() - self.start_virt.offset()
+            ))]
+            || vaddr - self.start_virt,
         )
     }
 
@@ -744,12 +743,12 @@ impl MemoryRegion {
             lemma_get_pfn!(self, vaddr);
         }
         self.get_virt_offset(vaddr)
-            .map(verus_exec_expr! {
-                |off: usize|
-                -> (ret: usize)
-                ensures ret == off / PAGE_SIZE
-                {off / PAGE_SIZE}
-            })
+            .map(
+                #[cfg_attr(verus_keep_ghost, verus_spec(ret: usize =>
+                    ensures ret == off / PAGE_SIZE
+                ))]
+                |off: usize| off / PAGE_SIZE,
+            )
             .ok_or(AllocError::InvalidHeapAddress(vaddr))
     }
 
@@ -778,7 +777,7 @@ impl MemoryRegion {
 
         let pg = self.read_page_info(pfn);
         let PageInfo::Free(fi) = pg else {
-            proof! {assert(false); } // prove it is unreachable
+            proof! { assert(false); } // prove it is unreachable
             panic!(
                 "Unexpected page type in MemoryRegion::get_next_page() {:?}",
                 pg
@@ -876,7 +875,6 @@ impl MemoryRegion {
         let next_pfn = self.next_page[new_order];
 
         proof_decl! {
-            let ghost x = seq![1u8, 2u8];
             lemma_split_pre!(self, perm, pfn1, pfn2, order, new_order => mem, mem2, reserved, reserved2, info, id);
         }
         proof_with!(Tracked(&mut reserved));
