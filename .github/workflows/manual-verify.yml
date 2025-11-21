@@ -3,12 +3,15 @@ name: Verification
 # Only run this workflow when manually triggered
 on:
   workflow_dispatch:
+  pull_request:
+    branches: [ "verus-workflow", "main" ]
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
   check:
+    if: contains(github.head_ref, 'verus')
     name: Verification Check
     runs-on: ubuntu-latest
     steps:
